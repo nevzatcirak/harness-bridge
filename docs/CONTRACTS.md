@@ -63,4 +63,4 @@ failures are HTTP 401. No cursor/limit/reason arguments are advertised by this
 subset: supplying unknown fields fails parsing. History responses have an 8 MiB
 bound; pagination remains deferred. Interruption is explicit and acknowledgement
 does not itself mark an execution interrupted. See `H1_EVIDENCE.md` for lifecycle,
-idempotency, timeout and restart semantics and the outstanding live-test gate.
+idempotency, timeout and restart semantics and successful live-test evidence.

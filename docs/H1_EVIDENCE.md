@@ -1,12 +1,68 @@
 # H1 implementation and verification
 
-Status: implementation complete; **live two-turn acceptance pending**. Initial
-discovery found no sessions. After explicit credential access authorization,
-authenticated rediscovery still found no sessions (see latest observations below).
-Do not mark H1 accepted or claim this PR is ready
-for acceptance until the live smoke test succeeds.
+Status: **live two-turn smoke PASS; ready for architectural and code review**.
+The existing session had completed conversation history before testing. Both
+prompts completed on that exact native session, recalled context and preserved
+the original working directory. Reviewer acceptance remains pending; no merge.
 
-## Follow-up after checkpoint review
+## Successful live continuation (2026-10-23, verified 23:41:05 UTC)
+
+The latest checkpoint review `5635499460` was read before this run. Earlier empty
+discovery and credential blockers below are historical and now resolved.
+
+- Authenticated API discovery selected the operator-provided native session
+  `ses_e94de4…[redacted]`, external identity `opencode:ses_e94de4…[redacted]`.
+  Directory: `/opt/developer/harness-bridge` (public project checkout; no private
+  paths or message contents included). The full ID was compared internally.
+- Existing server: `http://127.0.0.1:4096`, PID `3489290`, started
+  `Fri Oct 23 23:31:25 2026`, command
+  `opencode serve --hostname 127.0.0.1 --port 4096`. Same PID before and after
+  smoke. This run did not create, replace or restart any server or session.
+- Authenticated health: `{"healthy":true,"version":"1.19.4"}`.
+- Before any submission, history contained **2 messages**, roles `user` and
+  `assistant`. The seed assistant had `time.completed`, `finish:"stop"` and no
+  error. Seed contents remain private.
+- `H1_SESSION_ID` was set to the full discovered/provided ID;
+  `H1_DIRECTORY=/opt/developer/harness-bridge` and
+  `OPENCODE_URL=http://127.0.0.1:4096`. The already-authorized server credential
+  was passed through the environment without printing or storing it.
+
+Exact `go run ./cmd/smoke` output (exit 0):
+
+```text
+existing session selected; native ID and directory redacted; history before prompts: 2 messages
+turn 1 completed; assistant parentID, completion marker, context marker and cwd verified (IDs/content redacted)
+turn 2 completed; assistant parentID, completion marker, context marker and cwd verified (IDs/content redacted)
+PASS: same existing native session; earlier history retained; both turns present; directory unchanged; final history: 6 messages
+```
+
+Post-run authenticated history independently confirmed the following. `prompt-1`
+and `prompt-2` are redacted aliases for distinct native user IDs, and each
+assistant's `parentID` exactly matched the corresponding full user ID.
+
+| Evidence | Turn 1 | Turn 2 |
+|---|---|---|
+| Native session equals selected session | true | true |
+| Assistant parent equals prompt ID | prompt-1: true | prompt-2: true |
+| User `time.created` (Unix ms) | 1792798837372 | 1792798839134 |
+| Assistant `time.completed` (Unix ms) | 1792798838616 | 1792798841632 |
+| Assistant finish | stop | stop |
+| Assistant error present | false | false |
+| Assistant cwd equals original directory | true | true |
+
+The second prompt did not contain the random marker; its reply exactly recalled
+the marker supplied in the first prompt. The smoke retained both original seed
+message IDs and found both new native user IDs in final history. Final metadata
+matched the same full native ID and directory; history grew from 2 to 6 messages.
+Each same-key retry returned its original execution ID; changed payload under
+that key was rejected. No duplicate native user messages appeared. HTTP 204 or
+idle alone was never used as completion evidence. No implementation failure or
+uncertain submission occurred, so no retry/restart workaround was needed.
+
+All four quality commands were rerun after the live test and exited 0; exact
+output appears below. Claude Chat integration was not tested.
+
+## Historical follow-up after checkpoint review
 
 Read review `5635499460`: preserve the same server and seeded session, verify
 history before submission, capture correlated terminal results and context/cwd
@@ -22,7 +78,7 @@ in the agent's environment. Explicit permission or a securely supplied environme
 variable was required. The operator subsequently granted explicit permission;
 the current authenticated observations below supersede that authorization blocker.
 
-## Authenticated rediscovery after explicit permission (23:36:06 UTC)
+## Historical authenticated rediscovery after explicit permission (23:36:06 UTC)
 
 - Base URL remains `http://127.0.0.1:4096`. The former PID `3444808` no longer
   exists. The already running server is now PID `3489290`, started
@@ -145,8 +201,8 @@ Exact final command output is recorded below after validation.
 
 ## Known limitations
 
-- **Live two-turn acceptance remains unmet: authenticated rediscovery still finds
-  no existing session/history to test.**
+- Live two-turn continuation passed; architectural/code acceptance remains a
+  reviewer decision. No Claude Chat integration claim follows from this test.
 - Claude Chat, remote MCP interoperability, OAuth and official MCP Go SDK
   integration are not tested or delivered in H1. The transport remains a local
   JSON-RPC bootstrap. Do not expose it publicly.
@@ -166,7 +222,7 @@ Exact final command output is recorded below after validation.
 - Unsupported finish values remain running/unknown until timeout. Question waits
   and v2 workspace APIs are not normalized; permissions use the verified v1 API.
 
-## Exact final validation output (2026-10-23 UTC)
+## Initial validation output (2026-10-23 UTC, before live test)
 
 All four commands exited 0. Build and vet produced no stdout/stderr.
 
@@ -184,6 +240,30 @@ $ go test -race ./...
 ?   	github.com/nevzatcirak/harness-bridge/cmd/bridge	[no test files]
 ?   	github.com/nevzatcirak/harness-bridge/cmd/smoke	[no test files]
 ok  	github.com/nevzatcirak/harness-bridge/internal/adapters/opencode	1.220s
+ok  	github.com/nevzatcirak/harness-bridge/internal/execution	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/mcp	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)
+```
+
+## Final quality checks after live smoke (2026-10-23 UTC)
+
+All commands exited 0. Build and vet were silent. Cached tests validate the
+unchanged Go source; this follow-up required documentation updates only.
+
+```text
+$ go build ./...
+$ go test ./...
+?   	github.com/nevzatcirak/harness-bridge/cmd/bridge	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/smoke	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/adapters/opencode	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/execution	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/mcp	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)
+$ go vet ./...
+$ go test -race ./...
+?   	github.com/nevzatcirak/harness-bridge/cmd/bridge	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/smoke	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/adapters/opencode	(cached)
 ok  	github.com/nevzatcirak/harness-bridge/internal/execution	(cached)
 ok  	github.com/nevzatcirak/harness-bridge/internal/mcp	(cached)
 ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)

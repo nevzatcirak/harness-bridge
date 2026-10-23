@@ -40,7 +40,7 @@ go test -race ./...
 ```
 
 See [H1 evidence and reproducible two-turn smoke test](docs/H1_EVIDENCE.md) for
-verified API details, current acceptance blocker, and operational limitations.
+verified API details, successful live two-turn evidence, and operational limitations.
 State and idempotency records are in memory; use one bridge instance with
 exclusive ownership of selected sessions. Do not expose this privileged service
 through a public listener or tunnel.
