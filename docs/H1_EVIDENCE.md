@@ -1,9 +1,9 @@
 # H1 implementation and verification
 
 Status: implementation complete; **live two-turn acceptance pending**. Initial
-discovery found no sessions. The operator subsequently reported creating a session
-on the same server; authenticated rediscovery and smoke execution are pending
-credential access authorization. Do not mark H1 accepted or claim this PR is ready
+discovery found no sessions. After explicit credential access authorization,
+authenticated rediscovery still found no sessions (see latest observations below).
+Do not mark H1 accepted or claim this PR is ready
 for acceptance until the live smoke test succeeds.
 
 ## Follow-up after checkpoint review
@@ -19,7 +19,29 @@ Authenticated rediscovery was not executed: automatic approval review rejected
 reading `OPENCODE_SERVER_PASSWORD` from the existing process environment because
 that credential source requires explicit authorization. No credential is available
 in the agent's environment. Explicit permission or a securely supplied environment
-variable is required; no native prompt has been sent during this follow-up.
+variable was required. The operator subsequently granted explicit permission;
+the current authenticated observations below supersede that authorization blocker.
+
+## Authenticated rediscovery after explicit permission (23:36:06 UTC)
+
+- Base URL remains `http://127.0.0.1:4096`. The former PID `3444808` no longer
+  exists. The already running server is now PID `3489290`, started
+  `Fri Oct 23 23:31:25 2026`, command
+  `opencode serve --hostname 127.0.0.1 --port 4096`.
+- An attached TUI exists as PID `3489462`, started at `23:31:35`, with command
+  `opencode attach http://127.0.0.1:4096 --dir /opt/developer/harness-bridge`.
+  This proves attachment, not that a conversation turn has been persisted.
+- Authorized use of the current server process credential succeeded;
+  authenticated `/global/health` returned
+  `{"healthy":true,"version":"1.19.4"}`. No credentials were printed or stored.
+- `/session`, `/session?directory=/opt/developer/harness-bridge`, and
+  `/experimental/session` each returned `[]`.
+- Rechecked at `2026-10-23 23:36:06 UTC`: directory-scoped session count `0`,
+  `/api/session` global `data` count `0`.
+- Consequently there is still no discoverable native session ID, directory or
+  prior history to verify. `go run ./cmd/smoke` was not run, and no bridge prompts,
+  sessions or servers were created. A completed seed turn on the attached TUI,
+  or the native ID of another existing session, is required to proceed.
 
 ## Initial verified server (2026-10-23 UTC, before operator seed)
 
@@ -123,8 +145,8 @@ Exact final command output is recorded below after validation.
 
 ## Known limitations
 
-- **Live two-turn acceptance remains unmet pending authenticated rediscovery and
-  execution against the operator-created session.**
+- **Live two-turn acceptance remains unmet: authenticated rediscovery still finds
+  no existing session/history to test.**
 - Claude Chat, remote MCP interoperability, OAuth and official MCP Go SDK
   integration are not tested or delivered in H1. The transport remains a local
   JSON-RPC bootstrap. Do not expose it publicly.
