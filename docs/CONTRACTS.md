@@ -46,3 +46,21 @@ Common rules: tool input objects have `additionalProperties:false`; all IDs are 
 ```
 
 Important: these are design contracts, not a claim that every field, pagination feature or schema is implemented by the bootstrap. Output errors and limits still require enforcement in production.
+## H1 implemented subset
+
+H1 keeps the seven bootstrap tools with strict argument parsing. List/history
+return `{sessions:[...]}` and `{messages:[...]}`. Session metadata contains
+`session_id`, `native_id`, `harness`, `directory`, `title`, and conservative
+`state:unknown` (execution state is separate). Execution IDs and message IDs are
+separate; execution `session_id` is always `opencode:<native-id>`. Status/result
+reads are snapshots of a background monitor. Result messages include only the
+submitted user message and assistant messages whose native session and parent ID
+match; they may include intermediate tool-call messages.
+
+Tool failures contain a JSON error envelope in the text content with `isError`.
+Native response bodies are not copied into generic errors. HTTP transport auth
+failures are HTTP 401. No cursor/limit/reason arguments are advertised by this
+subset: supplying unknown fields fails parsing. History responses have an 8 MiB
+bound; pagination remains deferred. Interruption is explicit and acknowledgement
+does not itself mark an execution interrupted. See `H1_EVIDENCE.md` for lifecycle,
+idempotency, timeout and restart semantics and the outstanding live-test gate.

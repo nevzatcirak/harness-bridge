@@ -28,7 +28,7 @@ Execution state: submitting -> running -> completed|failed|interrupted|unknown, 
 `unknown` means proof is insufficient. For POST timeouts it may mean submission happened. Avoid retries without reconciliation.
 
 ## Correlation and proof gaps
-OpenCode `/session/{id}/prompt_async` responds 204 without an execution ID. Bridge supplies an OpenCode messageID and local execution ID. Baseline history helps identify *new* replies, but if the session is altered independently or replies overlap, naive history correlation is insufficient. Before production, verify user messageID linkage to assistant parent message, terminal finish markers and SSE semantics from the running server's `/doc` OpenAPI and live traces. Bridge restart loses in-memory execution records. A two-turn mock test is not real model-context proof.
+OpenCode `/session/{id}/prompt_async` responds 204 without an execution ID. H1 supplies a native ascending `msg_` message ID and a local execution ID. Results require matching native session and assistant `parentID`; terminal proof requires `time.completed` plus a final finish or structured error. Idle/204 alone never proves success. Missing status without terminal proof is unknown. H1 verified these fields against the running 1.19.4 server's `/doc`; live model continuation remains blocked because discovery found no existing sessions. See `H1_EVIDENCE.md`. Bridge restart loses in-memory execution records. A two-turn mock test is not real model-context proof.
 
 ## Normal Claude Chat limitations
 Remote connector operates from Anthropic infrastructure. A local-only MCP port is unreachable without a secure network ingress. Tool-use iteration is possible within an active response but not guaranteed to continue after Claude's response stops. No universal documented normal-chat poll count/duration guarantee is assumed.
@@ -44,4 +44,4 @@ Remote connector operates from Anthropic infrastructure. A local-only MCP port i
 - Restart: in-memory executions become unknown/unrecoverable until explicit reconciliation is implemented.
 
 ## Security status of prototype
-The stdlib bootstrap is a **local development prototype**. It has a static bearer token and loopback binding, but does not implement OAuth, per-user/session ACL, workspace root policy, full MCP protocol compatibility or audit. Do not publish it via a tunnel or expose it to Claude Chat yet.
+The stdlib bootstrap is a **local development prototype**. H1 adds an explicit native-session ACL for the single token principal, canonical workspace root policy, directory routing, and metadata-only mutation audit logs. It retains a static bearer token and loopback binding. OAuth, multiple principals and full MCP protocol compatibility remain out of scope. Do not publish it via a tunnel or expose it to Claude Chat yet.
