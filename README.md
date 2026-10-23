@@ -1,14 +1,46 @@
 # Harness Bridge
-Go-based experimental bridge for **existing** OpenCode sessions. This is a **local bootstrap**, not a supported production remote MCP connector. Do not expose it to the public internet.
 
-## Start
-Set `BRIDGE_TOKEN` (at least 32 characters), `OPENCODE_URL` (loopback HTTP URL for an already-running OpenCode server), and optionally `OPENCODE_SERVER_PASSWORD`.
-Run `go run ./cmd/bridge`. Default listener is `127.0.0.1:8080`, endpoint `/mcp`.
+Go bridge for continuing **existing** OpenCode sessions. Local experimental
+JSON-RPC/MCP bootstrap; keep it on loopback. Remote Claude Chat integration is a
+later phase and has not been tested.
 
-## Quality gates
-`go build ./...`, `go test ./...`, `go vet ./...`, `go test -race ./...`.
+On Ubuntu 24.04 ARM64, install Go (verified here with Go 1.27.2 linux/arm64), clone
+this repository, and use an already running OpenCode HTTP server. The bridge
+never starts OpenCode or creates a native session.
 
-## Limitations
-Current execution state is in memory and may become unknown after restart or disconnection. Status and message correlation must be verified against a live OpenCode server before production use. Claude Custom Connector and official MCP Go SDK integration are pending. Local prototype uses a narrow HTTP/JSON-RPC transport shim and **must not** be publicly exposed.
+```sh
+export OPENCODE_URL=http://127.0.0.1:4096
+export BRIDGE_ALLOWED_ROOTS=/absolute/project/root
+export BRIDGE_ALLOWED_SESSIONS=ses_EXISTING_NATIVE_ID
+# Set BRIDGE_TOKEN securely (at least 32 characters).
+# Set OPENCODE_SERVER_PASSWORD securely if the native server requires Basic auth.
+go build -o /tmp/harness-bridge ./cmd/bridge
+/tmp/harness-bridge
+```
 
-See `docs/ARCHITECTURE.md` and `HARNESS_BRIDGE_SPEC.md`.
+`BRIDGE_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
+`BRIDGE_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
+required. The single bearer token represents the local principal with that ACL.
+`OPENCODE_SERVER_USERNAME` defaults to `opencode`. Listener defaults to
+`127.0.0.1:8080`, endpoint `/mcp`; `BRIDGE_LISTEN` must remain loopback.
+Keep tokens in the environment; do not commit them or enable shell tracing.
+
+Tools: `list_sessions`, `get_session`, `read_session_history`, `send_prompt`,
+`get_execution_status`, `get_execution_result`, `interrupt_execution`. Use
+`opencode:<native-id>` in `session_id` and a unique 8–128 byte idempotency key.
+Poll the returned execution ID. An unknown result must not be blindly retried.
+
+Validation:
+
+```sh
+go build ./...
+go test ./...
+go vet ./...
+go test -race ./...
+```
+
+See [H1 evidence and reproducible two-turn smoke test](docs/H1_EVIDENCE.md) for
+verified API details, successful live two-turn evidence, and operational limitations.
+State and idempotency records are in memory; use one bridge instance with
+exclusive ownership of selected sessions. Do not expose this privileged service
+through a public listener or tunnel.
