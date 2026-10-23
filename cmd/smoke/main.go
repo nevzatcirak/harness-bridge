@@ -64,6 +64,9 @@ func run() error {
 	if e != nil {
 		return e
 	}
+	if len(before) == 0 {
+		return fmt.Errorf("existing session has no conversation history; seed a turn before running smoke")
+	}
 	fmt.Printf("existing session selected; native ID and directory redacted; history before prompts: %d messages\n", len(before))
 	var nonce [8]byte
 	if _, e = rand.Read(nonce[:]); e != nil {

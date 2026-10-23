@@ -1,10 +1,27 @@
 # H1 implementation and verification
 
-Status: implementation complete; **live two-turn acceptance BLOCKED** because the
-already running server contains no existing sessions. Do not mark H1 accepted or
-claim this PR is ready for acceptance until the live smoke test succeeds.
+Status: implementation complete; **live two-turn acceptance pending**. Initial
+discovery found no sessions. The operator subsequently reported creating a session
+on the same server; authenticated rediscovery and smoke execution are pending
+credential access authorization. Do not mark H1 accepted or claim this PR is ready
+for acceptance until the live smoke test succeeds.
 
-## Verified server (2026-10-23 UTC)
+## Follow-up after checkpoint review
+
+Read review `5635499460`: preserve the same server and seeded session, verify
+history before submission, capture correlated terminal results and context/cwd
+continuity, keep the PR draft until live evidence exists. There are no inline
+review threads. The smoke command now rejects empty prior history before sending
+any prompt. Build, unit, vet and race checks passed again (all four commands exited
+0; build/vet silent and tested packages cached).
+
+Authenticated rediscovery was not executed: automatic approval review rejected
+reading `OPENCODE_SERVER_PASSWORD` from the existing process environment because
+that credential source requires explicit authorization. No credential is available
+in the agent's environment. Explicit permission or a securely supplied environment
+variable is required; no native prompt has been sent during this follow-up.
+
+## Initial verified server (2026-10-23 UTC, before operator seed)
 
 - Ubuntu host, linux/arm64; `go version go1.27.2 linux/arm64`.
 - `opencode --version`: `1.19.4`.
@@ -106,7 +123,8 @@ Exact final command output is recorded below after validation.
 
 ## Known limitations
 
-- **No existing session was available: live two-turn acceptance remains unmet.**
+- **Live two-turn acceptance remains unmet pending authenticated rediscovery and
+  execution against the operator-created session.**
 - Claude Chat, remote MCP interoperability, OAuth and official MCP Go SDK
   integration are not tested or delivered in H1. The transport remains a local
   JSON-RPC bootstrap. Do not expose it publicly.
