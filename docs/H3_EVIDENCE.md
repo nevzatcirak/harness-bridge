@@ -227,3 +227,13 @@ Deployment PR #1 contains only inactive templates, gated instructions and a
 PR-deployment workflow guard. Host INPUT policy does not isolate the backend;
 operator approvals and real private/public verification remain required. No new
 actual deployment, firewall/DNS/Swarm change, public route or merge performed.
+
+## Final connector preparation handoff (2026-10-24)
+
+The separately approved read-only private activation is documented in deployment
+PR #1; it does not establish public or Claude E2E success. ADR-010's writer code
+remains undeployed. Use [H3_CLAUDE_ACCEPTANCE.md](H3_CLAUDE_ACCEPTANCE.md) for the
+one actual-chat acceptance script and deployment `FINAL_CONNECTOR_RUNBOOK.md`
+for exact, separately gated migration/publication/rollback commands. This final
+preparation changes no application Go code or installed service. Current account
+Request headers availability and real two-turn Claude acceptance remain unverified.

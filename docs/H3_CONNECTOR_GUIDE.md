@@ -235,3 +235,11 @@ availability and shared-credential access restrictions are verified. Public TLS,
 effective Traefik backend CA/ServersTransport, external negative tests, single
 writer migration and a real Claude conversation remain separate acceptance gates.
 No Claude E2E success is inferred from SDK or unit tests.
+
+## Final activation handoff
+
+Use [H3_CLAUDE_ACCEPTANCE.md](H3_CLAUDE_ACCEPTANCE.md) for the single actual-chat
+acceptance script and account/auth-detection checks, and deployment PR #1's
+`harness-bridge/FINAL_CONNECTOR_RUNBOOK.md` for gated migration/publication
+commands. These are preparation only; do not execute historical first-install
+commands against the already running private service.
