@@ -80,3 +80,8 @@ verified API details, successful live two-turn evidence, and operational limitat
 State and idempotency records are in memory; use one bridge instance with
 exclusive ownership of selected sessions. Do not expose this privileged service
 through a public listener or tunnel.
+
+H3 authenticated HTTPS configuration, current Claude authentication availability,
+operator publication steps and the pending ordinary Claude Chat acceptance test
+are documented in [H3 connector guide](docs/H3_CONNECTOR_GUIDE.md) and
+[H3 evidence](docs/H3_EVIDENCE.md). No public endpoint was deployed.

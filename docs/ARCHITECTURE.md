@@ -53,3 +53,18 @@ Input/output structs yield strict object schemas. Raw native message parts/error
 The official SDK client integration tests traverse TCP HTTP -> authentication -> MCP -> policy -> execution manager -> OpenCode HTTP fixture. A separate `cmd/mcpsmoke` exercises the same path against an explicitly selected, real existing session. This distinction and actual live-test status are recorded in H2_EVIDENCE. Reproduce quality checks and tests using the README commands.
 
 Static bearer authentication, a single principal, in-memory execution state and exclusive native-session ownership remain limitations. Transport session expiry does not cancel accepted work. Before acceptance, official MCP cancellation propagates to upstream calls; after acceptance, only explicit authorized interruption requests native abort. No OAuth, tunnel, durable recovery or Claude Chat interoperability claim is made. Do not publish this service via a tunnel or expose it to Claude Chat yet.
+
+## H3 HTTPS boundary
+
+Optional remote mode uses native Go TLS on a loopback or explicitly configured
+RFC1918/ULA literal listener behind an
+operator-controlled HTTPS reverse proxy. It accepts only the configured public
+Host, same-origin/absent Origin, `/mcp` without query credentials, and the existing
+bearer credential before SDK dispatch. A named single operator and <=24-hour
+expiry are mandatory; forwarded identity/host/proto headers are ignored. The
+explicit Host allowlist replaces the SDK loopback Host rule only in remote mode.
+All session/root and native permission checks remain. Multi-user sharing and
+OAuth are unsupported. See [operator guide](H3_CONNECTOR_GUIDE.md).
+
+Private binds are forbidden in local/plaintext mode; public, wildcard, DNS,
+scoped and mapped addresses are rejected. See the [Traefik handoff](deploy/TRAEFIK_PRIVATE_BACKEND.md).

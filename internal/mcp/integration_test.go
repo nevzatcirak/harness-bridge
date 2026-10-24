@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,9 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
+	return integrationMode(t, finish, false)
+}
+func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
 	t.Helper()
 	f := &nativeFixture{root: t.TempDir(), finish: finish, block: make(chan struct{}), canceled: make(chan struct{}), messages: []opencode.Message{{Parts: []json.RawMessage{}}}}
 	f.messages[0].Info.ID = "msg_seed"
@@ -109,11 +113,26 @@ func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture,
 	runs := execution.NewWithTiming(c, time.Second*3, time.Millisecond*5)
 	t.Cleanup(runs.Close)
 	bridge := &Server{Client: c, Runs: runs, Policy: p, Token: strings.Repeat("t", 32)}
-	httpServer := httptest.NewServer(bridge)
+	httpServer := httptest.NewUnstartedServer(bridge)
+	if remote {
+		httpServer.StartTLS()
+		bridge.Remote, err = security.NewRemote("https://example.com", "test-operator", time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		httpServer.Start()
+	}
 	t.Cleanup(httpServer.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	client, err := mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	var client *sdk.ClientSession
+	if remote {
+		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: httpServer.Certificate().Raw})
+		client, err = mcpclient.ConnectPrivateTLS(ctx, httpServer.URL+"/mcp", "https://example.com", bridge.Token, caPEM)
+	} else {
+		client, err = mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +177,11 @@ func awaitExecution(t *testing.T, c *sdk.ClientSession, id, state string) execut
 	t.Fatalf("execution did not reach %s", state)
 	return execution.Execution{}
 }
-func TestSDKLocalIntegration(t *testing.T) {
-	client, f, bridge, _ := integration(t, true)
+
+func TestSDKLocalIntegration(t *testing.T) { testSDKContinuation(t, false) }
+func TestSDKHTTPSIntegration(t *testing.T) { testSDKContinuation(t, true) }
+func testSDKContinuation(t *testing.T, remote bool) {
+	client, f, bridge, _ := integrationMode(t, true, remote)
 	if v := client.InitializeResult(); v.ProtocolVersion != "2025-11-25" || v.ServerInfo.Name != "harness-bridge" {
 		t.Fatal(v)
 	}
@@ -398,4 +420,48 @@ func TestSDKExecutionAuthorization(t *testing.T) {
 	}
 	invoke(t, client, "interrupt_execution", ExecutionInput{x.ID}, false)
 	awaitExecution(t, client, x.ID, "interrupted")
+}
+
+func TestSDKReadOnlyStaging(t *testing.T) {
+	_, f, bridge, _ := integration(t, true)
+	policy, err := security.New([]string{f.root}, []string{"ses_existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := &Server{Client: bridge.Client, Runs: bridge.Runs, Token: bridge.Token, Policy: policy, ReadOnly: true}
+	ts := httptest.NewServer(staged)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := mcpclient.Connect(ctx, ts.URL, staged.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	tools, err := client.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 7 {
+		t.Fatal("tool surface changed", err)
+	}
+	for _, name := range []string{"get_session", "read_session_history"} {
+		invoke(t, client, name, SessionInput{"opencode:ses_existing"}, false)
+	}
+	invoke(t, client, "list_sessions", EmptyInput{}, false)
+	for _, tc := range []struct {
+		name  string
+		input any
+	}{
+		{"send_prompt", PromptInput{"opencode:ses_existing", "must not execute", "staged-denial"}},
+		{"interrupt_execution", ExecutionInput{"exe_staged_denial"}},
+	} {
+		failure := decode[execution.Error](t, invoke(t, client, tc.name, tc.input, true))
+		if failure.Code != "FORBIDDEN" {
+			t.Fatal("mutation was not forbidden", tc.name)
+		}
+	}
+	invoke(t, client, "get_session", SessionInput{"opencode:ses_unauthorized"}, true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 0 || f.aborts != 0 {
+		t.Fatal("read-only staging touched native execution")
+	}
 }
