@@ -1,10 +1,10 @@
 # Harness Bridge
 
-Go bridge for continuing **existing** OpenCode sessions. Local experimental
-JSON-RPC/MCP bootstrap; keep it on loopback. Remote Claude Chat integration is a
+Go bridge for continuing **existing** OpenCode sessions. Uses the official MCP Go SDK v1.8.0 with authenticated
+Streamable HTTP on loopback (MCP 2025-11-25). Remote Claude Chat integration is a
 later phase and has not been tested.
 
-On Ubuntu 24.04 ARM64, install Go (verified here with Go 1.27.2 linux/arm64), clone
+On Ubuntu 24.04 ARM64, install Go 1.25 or newer (verified with Go 1.27.2 linux/arm64), clone
 this repository, and use an already running OpenCode HTTP server. The bridge
 never starts OpenCode or creates a native session.
 
@@ -33,13 +33,36 @@ Poll the returned execution ID. An unknown result must not be blindly retried.
 Validation:
 
 ```sh
+gofmt -w cmd internal
 go build ./...
 go test ./...
 go vet ./...
 go test -race ./...
 ```
 
-See [H1 evidence and reproducible two-turn smoke test](docs/H1_EVIDENCE.md) for
+The deterministic local integration tests use the official SDK client over HTTP
+and a native OpenCode API fixture (no provider or credentials required):
+
+```sh
+go test ./internal/mcp -run TestSDK -count=1 -v
+```
+
+For an explicitly authorized live test, select the existing seeded session and
+supply its server credential securely. This command starts only an ephemeral
+loopback bridge, connects the official SDK client, and sends two harmless marker
+prompts to the existing OpenCode session. It never starts OpenCode or creates a
+native session. It validates schemas/discovery, continuity, correlation, cwd,
+retained history and duplicate suppression; it does not abort live work.
+
+```sh
+export OPENCODE_URL=http://127.0.0.1:4096
+export H2_SESSION_ID=ses_REPLACE_WITH_EXISTING_NATIVE_ID
+export H2_DIRECTORY=/absolute/existing/session/directory
+go run ./cmd/mcpsmoke
+```
+
+See [H2 evidence, exact commands and limits](docs/H2_EVIDENCE.md) and
+[H1 evidence and reproducible two-turn smoke test](docs/H1_EVIDENCE.md) for
 verified API details, successful live two-turn evidence, and operational limitations.
 State and idempotency records are in memory; use one bridge instance with
 exclusive ownership of selected sessions. Do not expose this privileged service
