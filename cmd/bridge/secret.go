@@ -3,7 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"strings"
 )
@@ -21,19 +21,25 @@ func readSecret(env func(string) string, name string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("%s_FILE must be an absolute path", name)
 	}
-	info, err := os.Lstat(path)
+	// O_NOFOLLOW and O_NONBLOCK reject symlinks and avoid blocking on FIFOs.
+	f, err := openSecret(path)
 	if err != nil {
-		return "", fmt.Errorf("%s_FILE inaccessible: %w", name, err)
+		return "", fmt.Errorf("%s_FILE inaccessible", name)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE inaccessible", name)
+	}
+	if !info.Mode().IsRegular() || (info.Mode().Perm()&0077 != 0 && !systemdCredential(env, path, f)) {
 		return "", fmt.Errorf("%s_FILE must be a private regular file", name)
 	}
 	if info.Size() < 1 || info.Size() > 16384 {
 		return "", fmt.Errorf("%s_FILE size invalid", name)
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("%s_FILE unreadable: %w", name, err)
+	b, err := io.ReadAll(io.LimitReader(f, 16385))
+	if err != nil || len(b) < 1 || len(b) > 16384 {
+		return "", fmt.Errorf("%s_FILE unreadable or size invalid", name)
 	}
 	value := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
 	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
