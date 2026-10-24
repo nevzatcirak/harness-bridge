@@ -80,13 +80,17 @@ go build -o /tmp/harness-bridge ./cmd/bridge
 /tmp/harness-bridge
 ```
 
-Remote mode requires TLS, the named principal and expiry. The backend remains
-loopback-only. Legacy local H1/H2 configuration is retained; never forward its
+Remote mode requires TLS, the named principal and expiry. The backend defaults
+to loopback; an explicitly configured RFC1918/ULA literal is allowed only in
+remote TLS mode. See the [Traefik private-backend handoff](deploy/TRAEFIK_PRIVATE_BACKEND.md)
+for the selected `172.18.0.1:8443` target and container connectivity procedure. Legacy local H1/H2 configuration is retained; never forward its
 plaintext listener publicly. Do not use a tunnel that skips the remote boundary.
 
 ## Security review, then operator-controlled publication
 
-Review [the example proxy configuration](deploy/Caddyfile.example) and the threat
+For the existing Swarm installation use the [Traefik handoff](deploy/TRAEFIK_PRIVATE_BACKEND.md).
+The Caddy configuration is an alternative example, not a deployment instruction
+for that installation. Review [the example proxy configuration](deploy/Caddyfile.example) and the threat
 model below before enabling it. The example has NOT been deployed/tested with
 Caddy. Install/configure Caddy separately; verify syntax against the installed
 version. Proxy only `/mcp` to the loopback TLS bridge, preserve the exact public

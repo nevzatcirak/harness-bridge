@@ -10,6 +10,35 @@ import (
 	"github.com/nevzatcirak/harness-bridge/internal/security"
 )
 
+func TestHTTPSListenerRejectsPlaintextAndUntrustedCertificate(t *testing.T) {
+	s := &Server{Token: strings.Repeat("t", 32)}
+	ts := httptest.NewTLSServer(s)
+	defer ts.Close()
+	var err error
+	s.Remote, err = security.NewRemote(ts.URL, "operator", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The real TLS listener rejects plaintext before authentication/SDK dispatch.
+	r, err := http.Get("http" + strings.TrimPrefix(ts.URL, "https") + "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatal("plaintext accepted", r.StatusCode)
+	}
+	// A normal client must not trust the fixture certificate without its CA.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	c := &http.Client{Transport: transport, Timeout: time.Second}
+	if response, err := c.Get(ts.URL + "/mcp"); err == nil {
+		response.Body.Close()
+		t.Fatal("untrusted certificate accepted")
+	}
+}
+
 func TestHTTPSAuthenticationDenial(t *testing.T) {
 	for _, kind := range []string{"missing", "invalid", "expired", "duplicate", "origin", "host", "oversized"} {
 		t.Run(kind, func(t *testing.T) {

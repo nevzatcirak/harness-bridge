@@ -56,7 +56,8 @@ Static bearer authentication, a single principal, in-memory execution state and 
 
 ## H3 HTTPS boundary
 
-Optional remote mode uses native Go TLS on a loopback listener behind an
+Optional remote mode uses native Go TLS on a loopback or explicitly configured
+RFC1918/ULA literal listener behind an
 operator-controlled HTTPS reverse proxy. It accepts only the configured public
 Host, same-origin/absent Origin, `/mcp` without query credentials, and the existing
 bearer credential before SDK dispatch. A named single operator and <=24-hour
@@ -64,3 +65,6 @@ expiry are mandatory; forwarded identity/host/proto headers are ignored. The
 explicit Host allowlist replaces the SDK loopback Host rule only in remote mode.
 All session/root and native permission checks remain. Multi-user sharing and
 OAuth are unsupported. See [operator guide](H3_CONNECTOR_GUIDE.md).
+
+Private binds are forbidden in local/plaintext mode; public, wildcard, DNS,
+scoped and mapped addresses are rejected. See the [Traefik handoff](deploy/TRAEFIK_PRIVATE_BACKEND.md).

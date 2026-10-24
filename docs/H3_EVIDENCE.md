@@ -120,3 +120,79 @@ ok  github.com/nevzatcirak/harness-bridge/internal/mcp 3.359s
 ?   github.com/nevzatcirak/harness-bridge/internal/mcpclient [no test files]
 ok  github.com/nevzatcirak/harness-bridge/internal/security (cached)
 ```
+
+## Private-interface binding follow-up — 2026-10-24 UTC
+
+Continued on `feat/h3-secure-claude-remote-connector` for the operator-supplied
+Traefik/Swarm topology. Read ix-deployment PR #1 and its deployment plan before
+implementation. [Coordinated private-backend procedure](deploy/TRAEFIK_PRIVATE_BACKEND.md)
+defines `172.18.0.1:8443`, public Host `bridge.nevzatcirak.com`, verified backend
+TLS and the pending dedicated Traefik transport requirement. The PR reports an
+insecure global transport; this must not be inherited by future bridge routing.
+No changes to either deployment runtime or infrastructure were made.
+
+`security.ValidateListen` preserves local mode's loopback names/addresses and
+permits an explicitly configured RFC1918 IPv4/ULA literal only with validated
+remote TLS mode. It rejects the supplied public `91.99.201.115`, other public
+IPs, wildcard IPv4/IPv6, DNS names, link-local, multicast, CGNAT, mapped/scoped
+IPv6 and invalid host/port forms. Configuration is resolved before listening;
+missing/partial TLS or remote identity settings never fall back to HTTP.
+Actual address ownership is checked by OS bind, not guessed from interface names.
+The implementation does not modify interfaces or claim private IPs are isolated
+from routed networks. OpenCode loopback restriction, exact public Host/Origin,
+bearer authentication, session ACL, roots and native permission controls remain.
+
+New tests: `TestListenPolicy`, `TestIngressConfiguration` (including incomplete
+TLS configuration and public binds in fully configured TLS mode), and
+`TestHTTPSListenerRejectsPlaintextAndUntrustedCertificate`. The latter uses a
+real TLS socket: plaintext gets 400 before dispatch and an untrusted client
+cannot connect. Existing `TestHTTPSAuthenticationDenial` checks wrong Host,
+unauthorized/expired/duplicate credentials and other boundary denials; the full
+suite also retains TLS SDK continuation and all H1/H2 tests.
+
+Checks rerun on Go 1.27.2 linux/arm64, SDK v1.8.0 unchanged:
+
+```sh
+gofmt -w cmd internal
+go build ./...
+go test ./...
+go vet ./...
+go test -race ./...
+git diff --check
+```
+
+All exited 0. Formatting, build, vet and whitespace checks were silent.
+Exact test output (tabs normalized):
+
+```text
+ok  github.com/nevzatcirak/harness-bridge/cmd/bridge 0.014s
+?   github.com/nevzatcirak/harness-bridge/cmd/mcpsmoke [no test files]
+?   github.com/nevzatcirak/harness-bridge/cmd/smoke [no test files]
+ok  github.com/nevzatcirak/harness-bridge/internal/adapters/opencode (cached)
+ok  github.com/nevzatcirak/harness-bridge/internal/execution (cached)
+ok  github.com/nevzatcirak/harness-bridge/internal/mcp 1.383s
+?   github.com/nevzatcirak/harness-bridge/internal/mcpclient [no test files]
+ok  github.com/nevzatcirak/harness-bridge/internal/security 0.011s
+```
+
+Exact race output (tabs normalized):
+
+```text
+ok  github.com/nevzatcirak/harness-bridge/cmd/bridge 1.029s
+?   github.com/nevzatcirak/harness-bridge/cmd/mcpsmoke [no test files]
+?   github.com/nevzatcirak/harness-bridge/cmd/smoke [no test files]
+ok  github.com/nevzatcirak/harness-bridge/internal/adapters/opencode (cached)
+ok  github.com/nevzatcirak/harness-bridge/internal/execution (cached)
+ok  github.com/nevzatcirak/harness-bridge/internal/mcp 3.405s
+?   github.com/nevzatcirak/harness-bridge/internal/mcpclient [no test files]
+ok  github.com/nevzatcirak/harness-bridge/internal/security 1.029s
+```
+
+Limitations: the real `172.18.0.1` bind, Traefik-container TCP/TLS probes,
+certificate provisioning/validation in Traefik, external isolation checks,
+public routing and ordinary Claude Chat live two-turn acceptance remain NOT RUN.
+The prepared procedure uses host tools inside the existing container's network
+namespace without creating containers or altering services; it is not evidence
+that the runtime route works. No firewall/DNS/Swarm/public routing changes, no
+OpenCode restart or permission bypass, and neither PR merged. Original pending
+Claude account auth availability and live E2E gates remain open.
