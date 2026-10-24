@@ -21,9 +21,11 @@ import (
 
 // Server configuration and its policy must remain immutable while serving.
 type Server struct {
-	Client  *opencode.Client
-	Runs    *execution.Manager
-	Token   string
+	Client *opencode.Client
+	Runs   *execution.Manager
+	Token  string
+	// Remote binds one expiring credential to this server instance and ACL.
+	Remote  *security.Remote
 	Policy  *security.Policy
 	once    sync.Once
 	handler http.Handler
@@ -94,7 +96,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 			return History{Messages: nonnil(msgs)}, e
 		}
 		x, e := s.Runs.SendWithRunner(ctx, c, id, a.Prompt, a.IdempotencyKey)
-		slog.Info("prompt submission", "session_id", a.SessionID, "execution_id", x.ID, "accepted", e == nil)
+		slog.Info("prompt submission", "accepted", e == nil)
 		return x, e
 	case "get_execution_status", "get_execution_result", "interrupt_execution":
 		x, e := s.Runs.Get(ctx, a.ExecutionID)
@@ -116,7 +118,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 			return Result{Execution: x, Messages: nonnil(msgs)}, e
 		}
 		x, e = s.Runs.Interrupt(ctx, a.ExecutionID)
-		slog.Info("explicit interrupt", "execution_id", x.ID, "accepted", e == nil)
+		slog.Info("explicit interrupt", "accepted", e == nil)
 		return x, e
 	default:
 		return nil, execution.Fail("INVALID_INPUT", "unknown tool")
@@ -143,15 +145,25 @@ func envelope(err error) *execution.Error {
 	return &execution.Error{Code: "UPSTREAM_FAILURE", Message: "upstream unavailable or request canceled"}
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.Remote != nil && !s.Remote.Check(w, r) {
+		return
+	}
 	if s.Token == "" {
 		http.Error(w, "server misconfigured", 500)
 		return
 	}
 	header := r.Header.Get("Authorization")
 	auth := strings.TrimPrefix(header, "Bearer ")
-	if !strings.HasPrefix(header, "Bearer ") || len(auth) != len(s.Token) || subtle.ConstantTimeCompare([]byte(auth), []byte(s.Token)) != 1 {
+	if len(r.Header.Values("Authorization")) != 1 || !strings.HasPrefix(header, "Bearer ") || len(auth) != len(s.Token) || subtle.ConstantTimeCompare([]byte(auth), []byte(s.Token)) != 1 {
+		if s.Remote != nil {
+			s.Remote.AuditAuth(false)
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="harness-bridge"`)
 		http.Error(w, "unauthorized", 401)
 		return
+	}
+	if s.Remote != nil {
+		s.Remote.AuditAuth(true)
 	}
 	// Keep H1's strict single-JSON and body-size boundary. Protocol decoding,
 	// dispatch, schemas and sessions are exclusively the official SDK's work.
@@ -184,7 +196,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			register[ExecutionInput, execution.Execution](server, s, name, name, func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
 		}
 		register[ExecutionInput, Result](server, s, "get_execution_result", "Read correlated execution output", func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
-		transport := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{JSONResponse: true, SessionTimeout: time.Minute, MaxRequestBodyBytes: 1 << 20})
+		// Remote.Check enforces the exact public Host before replacing the SDK
+		// loopback-only Host rule; proxy headers never grant an exception.
+		transport := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{DisableLocalhostProtection: s.Remote != nil, JSONResponse: true, SessionTimeout: time.Minute, MaxRequestBodyBytes: 1 << 20})
 		s.handler = http.NewCrossOriginProtection().Handler(transport)
 	})
 	s.handler.ServeHTTP(w, r)

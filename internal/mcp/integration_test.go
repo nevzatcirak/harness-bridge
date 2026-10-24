@@ -91,6 +91,9 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
+	return integrationMode(t, finish, false)
+}
+func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
 	t.Helper()
 	f := &nativeFixture{root: t.TempDir(), finish: finish, block: make(chan struct{}), canceled: make(chan struct{}), messages: []opencode.Message{{Parts: []json.RawMessage{}}}}
 	f.messages[0].Info.ID = "msg_seed"
@@ -109,11 +112,28 @@ func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture,
 	runs := execution.NewWithTiming(c, time.Second*3, time.Millisecond*5)
 	t.Cleanup(runs.Close)
 	bridge := &Server{Client: c, Runs: runs, Policy: p, Token: strings.Repeat("t", 32)}
-	httpServer := httptest.NewServer(bridge)
+	httpServer := httptest.NewUnstartedServer(bridge)
+	if remote {
+		httpServer.StartTLS()
+		bridge.Remote, err = security.NewRemote("https://bridge.example", "test-operator", time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		httpServer.Start()
+	}
 	t.Cleanup(httpServer.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	client, err := mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	var client *sdk.ClientSession
+	if remote {
+		hc := httpServer.Client()
+		hc.Transport = tlsBearer{base: hc.Transport, token: bridge.Token, host: "bridge.example"}
+		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client, err = sdk.NewClient(&sdk.Implementation{Name: "tls-test", Version: "1"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: httpServer.URL + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	} else {
+		client, err = mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +178,25 @@ func awaitExecution(t *testing.T, c *sdk.ClientSession, id, state string) execut
 	t.Fatalf("execution did not reach %s", state)
 	return execution.Execution{}
 }
-func TestSDKLocalIntegration(t *testing.T) {
-	client, f, bridge, _ := integration(t, true)
+
+type tlsBearer struct {
+	base  http.RoundTripper
+	token string
+	host  string
+}
+
+func (b tlsBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	if b.host != "" {
+		r.Host = b.host
+	}
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return b.base.RoundTrip(r)
+}
+func TestSDKLocalIntegration(t *testing.T) { testSDKContinuation(t, false) }
+func TestSDKHTTPSIntegration(t *testing.T) { testSDKContinuation(t, true) }
+func testSDKContinuation(t *testing.T, remote bool) {
+	client, f, bridge, _ := integrationMode(t, true, remote)
 	if v := client.InitializeResult(); v.ProtocolVersion != "2025-11-25" || v.ServerInfo.Name != "harness-bridge" {
 		t.Fatal(v)
 	}

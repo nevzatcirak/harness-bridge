@@ -124,3 +124,12 @@ Reproduction: `go test ./internal/mcp -run TestSDK -count=1 -v` for protocol and
 fixture integration, `go run ./cmd/mcpsmoke` with README's explicit existing-session
 configuration for a live test. Exact quality outcomes and live limits are in
 `H2_EVIDENCE.md`.
+
+## H3 remote HTTP contract
+
+The seven tool contracts and native lifecycle semantics are unchanged. Optional
+remote mode requires HTTPS, exact configured Host, matching or absent Origin,
+no query string, a single Authorization header and an unexpired credential.
+401 includes a Bearer challenge; boundary denials use 403, invalid query/path 400,
+and oversized POST 413. The principal is configured with its immutable ACL,
+never supplied by request headers. This is fixed-header auth, not OAuth.
