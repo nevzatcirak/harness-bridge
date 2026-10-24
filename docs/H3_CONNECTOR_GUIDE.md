@@ -1,6 +1,8 @@
 # H3 operator connection guide
 
-Status: implementation and local TLS feasibility only. Public ingress and ordinary
+Status: implementation and local TLS feasibility only. The newly prepared private
+HTTPS service is readonly staging; public write/two-turn E2E requires a separate
+concurrency and security review. See [preparation evidence](deploy/PRIVATE_HTTPS_PREPARATION.md). Public ingress and ordinary
 Claude Chat E2E have NOT been run. PR #3 must remain draft and unmerged.
 
 ## Verified official requirements (2026-10-24 UTC)

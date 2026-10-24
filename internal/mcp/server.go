@@ -24,6 +24,8 @@ type Server struct {
 	Client *opencode.Client
 	Runs   *execution.Manager
 	Token  string
+	// ReadOnly denies mutations while a staged ingress shares a native session.
+	ReadOnly bool
 	// Remote binds one expiring credential to this server instance and ACL.
 	Remote  *security.Remote
 	Policy  *security.Policy
@@ -61,6 +63,10 @@ func sessionView(v opencode.Session) Session {
 	return Session{SessionID: "opencode:" + v.ID, NativeID: v.ID, Harness: "opencode", Directory: v.Directory, Title: v.Title, State: "unknown"}
 }
 func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
+	if s.ReadOnly && (name == "send_prompt" || name == "interrupt_execution") {
+		slog.Info("read-only mutation denied")
+		return nil, execution.Fail("FORBIDDEN", "mutations disabled on this bridge")
+	}
 	switch name {
 	case "list_sessions":
 		list := []Session{}

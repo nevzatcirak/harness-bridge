@@ -215,3 +215,15 @@ workspace ACLs, deployment services, public routes, DNS or firewall altered.
 Filesystem read isolation remains unproven and explicitly false for readable
 workspace README.md; see detailed ACL evidence. Ordinary Claude Chat E2E and
 public/private deployment gates remain pending, and both PRs remain unmerged.
+
+
+## Private HTTPS deployment preparation — 2026-10-24 UTC
+
+[Detailed source and preservation evidence](deploy/PRIVATE_HTTPS_PREPARATION.md):
+readonly staging, verified private TLS SDK client/probe, full Go checks and actual
+Traefik File Provider synthetic transport/rollback validation passed. Existing
+local :8080/:4097 services and root :4096 remain unchanged, no :8443 listener.
+Deployment PR #1 contains only inactive templates, gated instructions and a
+PR-deployment workflow guard. Host INPUT policy does not isolate the backend;
+operator approvals and real private/public verification remain required. No new
+actual deployment, firewall/DNS/Swarm change, public route or merge performed.

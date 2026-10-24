@@ -47,7 +47,7 @@ func main() {
 	runs := execution.New(client)
 	defer runs.Close()
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote})
+	mux.Handle("/mcp", &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly})
 	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

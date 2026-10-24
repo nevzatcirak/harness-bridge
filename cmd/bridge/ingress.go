@@ -10,6 +10,7 @@ import (
 type ingress struct {
 	addr, cert, key string
 	remote          *security.Remote
+	readOnly        bool
 }
 
 // Resolve the complete ingress configuration before any listener is opened.
@@ -17,6 +18,13 @@ type ingress struct {
 // to plaintext, including when a private address is requested.
 func readIngress(env func(string) string) (ingress, error) {
 	c := ingress{addr: env("BRIDGE_LISTEN"), cert: env("BRIDGE_TLS_CERT"), key: env("BRIDGE_TLS_KEY")}
+	switch env("BRIDGE_READ_ONLY") {
+	case "", "0":
+	case "1":
+		c.readOnly = true
+	default:
+		return c, errors.New("BRIDGE_READ_ONLY must be 0 or 1")
+	}
 	if c.addr == "" {
 		c.addr = "127.0.0.1:8080"
 	}

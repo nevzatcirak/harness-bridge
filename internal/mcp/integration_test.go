@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -115,7 +116,7 @@ func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *na
 	httpServer := httptest.NewUnstartedServer(bridge)
 	if remote {
 		httpServer.StartTLS()
-		bridge.Remote, err = security.NewRemote("https://bridge.example", "test-operator", time.Now().Add(time.Hour))
+		bridge.Remote, err = security.NewRemote("https://example.com", "test-operator", time.Now().Add(time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,10 +128,8 @@ func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *na
 	t.Cleanup(cancel)
 	var client *sdk.ClientSession
 	if remote {
-		hc := httpServer.Client()
-		hc.Transport = tlsBearer{base: hc.Transport, token: bridge.Token, host: "bridge.example"}
-		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-		client, err = sdk.NewClient(&sdk.Implementation{Name: "tls-test", Version: "1"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: httpServer.URL + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: httpServer.Certificate().Raw})
+		client, err = mcpclient.ConnectPrivateTLS(ctx, httpServer.URL+"/mcp", "https://example.com", bridge.Token, caPEM)
 	} else {
 		client, err = mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
 	}
@@ -179,20 +178,6 @@ func awaitExecution(t *testing.T, c *sdk.ClientSession, id, state string) execut
 	return execution.Execution{}
 }
 
-type tlsBearer struct {
-	base  http.RoundTripper
-	token string
-	host  string
-}
-
-func (b tlsBearer) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	if b.host != "" {
-		r.Host = b.host
-	}
-	r.Header.Set("Authorization", "Bearer "+b.token)
-	return b.base.RoundTrip(r)
-}
 func TestSDKLocalIntegration(t *testing.T) { testSDKContinuation(t, false) }
 func TestSDKHTTPSIntegration(t *testing.T) { testSDKContinuation(t, true) }
 func testSDKContinuation(t *testing.T, remote bool) {
@@ -435,4 +420,48 @@ func TestSDKExecutionAuthorization(t *testing.T) {
 	}
 	invoke(t, client, "interrupt_execution", ExecutionInput{x.ID}, false)
 	awaitExecution(t, client, x.ID, "interrupted")
+}
+
+func TestSDKReadOnlyStaging(t *testing.T) {
+	_, f, bridge, _ := integration(t, true)
+	policy, err := security.New([]string{f.root}, []string{"ses_existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := &Server{Client: bridge.Client, Runs: bridge.Runs, Token: bridge.Token, Policy: policy, ReadOnly: true}
+	ts := httptest.NewServer(staged)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := mcpclient.Connect(ctx, ts.URL, staged.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	tools, err := client.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 7 {
+		t.Fatal("tool surface changed", err)
+	}
+	for _, name := range []string{"get_session", "read_session_history"} {
+		invoke(t, client, name, SessionInput{"opencode:ses_existing"}, false)
+	}
+	invoke(t, client, "list_sessions", EmptyInput{}, false)
+	for _, tc := range []struct {
+		name  string
+		input any
+	}{
+		{"send_prompt", PromptInput{"opencode:ses_existing", "must not execute", "staged-denial"}},
+		{"interrupt_execution", ExecutionInput{"exe_staged_denial"}},
+	} {
+		failure := decode[execution.Error](t, invoke(t, client, tc.name, tc.input, true))
+		if failure.Code != "FORBIDDEN" {
+			t.Fatal("mutation was not forbidden", tc.name)
+		}
+	}
+	invoke(t, client, "get_session", SessionInput{"opencode:ses_unauthorized"}, true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 0 || f.aborts != 0 {
+		t.Fatal("read-only staging touched native execution")
+	}
 }

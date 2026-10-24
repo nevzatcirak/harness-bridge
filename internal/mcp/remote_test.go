@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"context"
+	"encoding/pem"
+	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,6 +93,38 @@ func TestHTTPSAuthenticationDenial(t *testing.T) {
 			}
 			if want == 401 && response.Header.Get("WWW-Authenticate") == "" {
 				t.Fatal("missing challenge")
+			}
+		})
+	}
+}
+
+func TestPrivateSDKTLSFailures(t *testing.T) {
+	s := &Server{Token: strings.Repeat("t", 32)}
+	ts := httptest.NewTLSServer(s)
+	defer ts.Close()
+	var err error
+	s.Remote, err = security.NewRemote("https://example.com", "operator", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ts.Certificate().Raw})
+	for _, tc := range []struct {
+		name, endpoint, origin, token string
+		ca                            []byte
+	}{
+		{"wrong-name", ts.URL + "/mcp", "https://incorrect.invalid", s.Token, ca},
+		{"invalid-token", ts.URL + "/mcp", "https://example.com", "wrong", ca},
+		{"invalid-ca", ts.URL + "/mcp", "https://example.com", s.Token, []byte("not a certificate")},
+		{"plaintext", strings.Replace(ts.URL, "https://", "http://", 1) + "/mcp", "https://example.com", s.Token, ca},
+		{"public-backend", "https://91.99.201.115:8443/mcp", "https://example.com", s.Token, ca},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			client, err := mcpclient.ConnectPrivateTLS(ctx, tc.endpoint, tc.origin, tc.token, tc.ca)
+			if err == nil {
+				client.Close()
+				t.Fatal("unsafe connection accepted")
 			}
 		})
 	}

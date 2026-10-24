@@ -55,3 +55,23 @@ func TestIngressConfiguration(t *testing.T) {
 		t.Fatal("local default changed", cfg, err)
 	}
 }
+
+func TestReadOnlyConfiguration(t *testing.T) {
+	for _, value := range []string{"", "0", "1", "true", "typo"} {
+		cfg, err := readIngress(func(k string) string {
+			if k == "BRIDGE_READ_ONLY" {
+				return value
+			}
+			return ""
+		})
+		if value == "true" || value == "typo" {
+			if err == nil {
+				t.Fatal("invalid read-only setting accepted")
+			}
+			continue
+		}
+		if err != nil || cfg.readOnly != (value == "1") {
+			t.Fatal("incorrect read-only setting", err)
+		}
+	}
+}

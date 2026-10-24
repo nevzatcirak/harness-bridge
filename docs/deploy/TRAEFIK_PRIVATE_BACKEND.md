@@ -155,3 +155,15 @@ chosen deployment; do not deploy it alongside the existing Traefik.
 After operator-reviewed private connectivity evidence, coordinate routing changes
 in ix-deployment PR #1. Public TLS/external isolation checks and the ordinary
 Claude Chat same-existing-session two-turn proof remain separate pending gates.
+
+
+## Prepared implementation follow-up
+
+The dedicated transport template and independent readonly private systemd unit
+are now prepared in deployment PR #1. Follow the
+[authoritative gated rollout/rollback](https://github.com/nevzatcirak/ix-deployment/blob/feat/harness-bridge-traefik-plan/harness-bridge/PRIVATE_HTTPS_RUNBOOK.md)
+and [source preparation evidence](PRIVATE_HTTPS_PREPARATION.md).
+Actual INPUT ACCEPT/no 8443 source restriction blocks any real new listener;
+no private/public activation has been performed. `cmd/privatecheck` provides
+verified-TLS official-SDK reads with token stdin after approval, from the existing
+Traefik network namespace. No direct valid token arguments or TLS bypass.
