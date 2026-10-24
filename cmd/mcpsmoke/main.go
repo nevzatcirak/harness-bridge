@@ -78,29 +78,56 @@ func run() error {
 	if len(before) == 0 {
 		return fmt.Errorf("existing session has no conversation history; seed a turn before running smoke")
 	}
+	statuses, e := c.Status(ctx)
+	if e != nil {
+		return e
+	}
+	if status, ok := statuses[id]; ok && status.Type != "idle" {
+		return fmt.Errorf("existing session is busy")
+	}
+	permissions, e := c.Permissions(ctx)
+	if e != nil {
+		return e
+	}
+	for _, permission := range permissions {
+		if permission.SessionID == id {
+			return fmt.Errorf("existing session awaits permission")
+		}
+	}
+	for _, msg := range before {
+		if msg.Info.Role == "assistant" && msg.Info.Time.Completed == 0 {
+			return fmt.Errorf("unfinished native assistant")
+		}
+	}
+	fmt.Println("native idle preflight verified; no pending permissions or unfinished assistant")
 	fmt.Printf("existing session selected; native ID and directory redacted; history before prompts: %d messages\n", len(before))
 	var nonce [8]byte
 	if _, e = rand.Read(nonce[:]); e != nil {
 		return e
 	}
 	marker := "H2-" + hex.EncodeToString(nonce[:])
-	// Serve the real bridge over a kernel-assigned loopback TCP port.
-	m := execution.New(c)
-	defer m.Close()
-	listener, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		return e
+	endpoint := os.Getenv("H2_MCP_URL")
+	token := os.Getenv("BRIDGE_TOKEN")
+	if endpoint == "" {
+		// Default: an ephemeral loopback bridge; never an OpenCode server.
+		m := execution.New(c)
+		defer m.Close()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		var secret [32]byte
+		if _, err = rand.Read(secret[:]); err != nil {
+			return err
+		}
+		token = hex.EncodeToString(secret[:])
+		server := &http.Server{Handler: &mcp.Server{Client: c, Runs: m, Policy: p, Token: token}, ReadHeaderTimeout: 5 * time.Second}
+		defer server.Close()
+		go func() { _ = server.Serve(listener) }()
+		endpoint = "http://" + listener.Addr().String() + "/mcp"
 	}
-	defer listener.Close()
-	var secret [32]byte
-	if _, e = rand.Read(secret[:]); e != nil {
-		return e
-	}
-	token := hex.EncodeToString(secret[:])
-	server := &http.Server{Handler: &mcp.Server{Client: c, Runs: m, Policy: p, Token: token}, ReadHeaderTimeout: 5 * time.Second}
-	defer server.Close()
-	go func() { _ = server.Serve(listener) }()
-	client, e := mcpclient.Connect(ctx, "http://"+listener.Addr().String()+"/mcp", token)
+	client, e := mcpclient.Connect(ctx, endpoint, token)
 	if e != nil {
 		return e
 	}
@@ -218,6 +245,41 @@ func run() error {
 	}
 	if final.ID != id || final.Directory != directory {
 		return fmt.Errorf("session identity or directory changed")
+	}
+	if os.Getenv("H2_TEST_IDLE_EXPIRY") == "1" {
+		fmt.Println("waiting 65 seconds without MCP requests to verify configured idle session expiry")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(65 * time.Second):
+		}
+		if _, err := client.ListTools(ctx, nil); err == nil {
+			return fmt.Errorf("idle MCP session unexpectedly survived")
+		}
+		reconnected, err := mcpclient.Connect(ctx, endpoint, token)
+		if err != nil {
+			return err
+		}
+		defer reconnected.Close()
+		history, err := mcpclient.Call[mcp.History](ctx, reconnected, "read_session_history", mcp.SessionInput{SessionID: "opencode:" + id})
+		if err != nil {
+			return err
+		}
+		if len(history.Messages) != len(after) {
+			return fmt.Errorf("history changed during idle verification")
+		}
+		for i, msg := range after {
+			if history.Messages[i].Info.ID != msg.Info.ID {
+				return fmt.Errorf("history identity changed during idle verification")
+			}
+		}
+		for _, x := range executions {
+			snapshot, err := mcpclient.Call[execution.Execution](ctx, reconnected, "get_execution_status", mcp.ExecutionInput{ExecutionID: x.ID})
+			if err != nil || snapshot.State != "completed" {
+				return fmt.Errorf("execution lost after MCP idle expiry")
+			}
+		}
+		fmt.Println("idle MCP session expired; official SDK reconnected; native history and completed executions retained; no prompt resubmission")
 	}
 	fmt.Printf("PASS: same existing native session; earlier history retained; both turns present; directory unchanged; final history: %d messages\n", len(after))
 	return nil

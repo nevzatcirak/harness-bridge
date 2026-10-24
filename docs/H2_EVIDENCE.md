@@ -1,9 +1,9 @@
 # H2 implementation and verification
 
-Status: official SDK implementation and deterministic local integration **PASS**.
-Real existing-session MCP continuation is **not tested in this H2 run**; its live
-acceptance gate remains open. PR #2 remains draft for architectural review. No
-merge and no Claude Chat/remote interoperability claim.
+Status: official SDK implementation, deterministic integration and real existing-session
+MCP continuation **PASS**. The configured bridge listener and one-minute idle
+transport-session expiry were also exercised. Human acceptance/review remains
+pending; no merge and no Claude Chat/remote interoperability claim.
 
 ## Implementation and official sources
 
@@ -30,8 +30,9 @@ merge and no Claude Chat/remote interoperability claim.
 - H1 adapter, execution manager and security policy source are unchanged. Native
   identity, stored directory routing, ACL/root checks, permission handling,
   detached worker, correlation, idempotency and uncertain-outcome guards remain.
-- `cmd/mcpsmoke` uses an official SDK client against an ephemeral authenticated
-  loopback bridge and an explicitly selected existing OpenCode server/session.
+- `cmd/mcpsmoke` uses an official SDK client against an authenticated loopback
+  bridge and an explicitly selected existing OpenCode server/session. It supports
+  the embedded bridge or a separately configured listener via `H2_MCP_URL`.
   It checks metadata/history, sends two harmless prompts, verifies marker recall,
   parent/session/cwd continuity, retained prior history and idempotency. It does
   not create native sessions/servers or interrupt live work. Its random bearer
@@ -120,7 +121,7 @@ ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)
 $ git diff --check
 ```
 
-## Live test status and reproduction
+## Historical live-test blocker (superseded by authorized run below)
 
 H1 recorded successful real two-turn continuation in H1_EVIDENCE. That evidence
 is preserved; it does not establish H2 MCP live success. This run's environment
@@ -144,8 +145,136 @@ go run ./cmd/mcpsmoke
 The command exits on identity/directory mismatch, missing prior history, busy or
 permission-pending preflight. A failed/unknown mutation must be reconciled rather
 than rerun blindly. Do not create a replacement session to manufacture evidence.
-The real-session MCP acceptance item remains unchecked until actual terminal,
-parent-correlation, history and cwd evidence is captured.
+This was the initial checkpoint status; the authorized follow-up below supplies
+the previously missing real-session MCP evidence.
+
+## Authorized live follow-up (2026-10-24 UTC)
+
+Read the latest review, submitted 2026-10-24 04:40:00 UTC (review node
+`PRR_kwDOVVR6Bc8AAAABT_u47Q`). It required real MCP continuation, the configured
+HTTP startup/listener and documented idle-session behavior, then fresh quality
+checks. The operator explicitly authorized the exact H1 session and secure use
+of the current local server credential for this smoke. That supersedes the
+historical missing-authorization checkpoint above.
+
+- Existing OpenCode server: PID `3489290`, started 2026-10-23 23:31:25 UTC,
+  `opencode serve --hostname 127.0.0.1 --port 4096`. Authenticated health was
+  `{"healthy":true,"version":"1.19.4"}`. PID and command were unchanged afterward.
+- Selected session `ses_e94de4…[redacted]`, same full ID as operator authorization
+  and H1. Metadata directory exactly `/opt/developer/harness-bridge`. Full IDs
+  were compared in memory; private history and prompt marker are omitted here.
+- Before submission: **6 prior messages**, no incomplete assistant messages, no
+  pending session permissions. `/session/status` had no active session entry
+  (OpenCode's idle convention); the bridge preserves conservative metadata
+  `state:unknown`. No idle/204 response was used as completion evidence.
+- Credential was read from the authorized running process environment into
+  memory and passed only through child environments for this smoke. Neither the
+  credential nor generated bridge token was printed, logged or committed.
+- Only a bridge process was started, never a new OpenCode server/session. The
+  two prompts explicitly forbade tools and file changes. No live abort, provider
+  override, permission response, unknown-outcome retry or replacement session.
+
+Reproducible configuration (credential/token values intentionally omitted):
+
+```sh
+go build -o /tmp/h2-bridge ./cmd/bridge
+export OPENCODE_URL=http://127.0.0.1:4096
+export H2_SESSION_ID=ses_REPLACE_WITH_OPERATOR_AUTHORIZED_EXISTING_ID
+export H2_DIRECTORY=/opt/developer/harness-bridge
+export BRIDGE_ALLOWED_SESSIONS="$H2_SESSION_ID"
+export BRIDGE_ALLOWED_ROOTS="$H2_DIRECTORY"
+export BRIDGE_LISTEN=127.0.0.1:18080
+# Securely set OPENCODE_SERVER_PASSWORD and a fresh BRIDGE_TOKEN; no shell tracing.
+/tmp/h2-bridge
+# In another shell with the same secure environment:
+export H2_MCP_URL=http://127.0.0.1:18080/mcp
+export H2_TEST_IDLE_EXPIRY=1
+go run ./cmd/mcpsmoke
+```
+
+The run used subprocesses with that environment. The configured executable
+reported `Bridge listening on 127.0.0.1:18080`; unauthenticated GET `/mcp` returned
+401 before the SDK client connected. Started at **04:41:49 UTC**, finished at
+**04:43:04 UTC**, smoke exit **0**. The bridge was then stopped by SIGTERM and
+exited **0**; the existing OpenCode server remained running.
+
+Exact smoke output:
+
+```text
+native idle preflight verified; no pending permissions or unfinished assistant
+existing session selected; native ID and directory redacted; history before prompts: 6 messages
+official SDK initialize, tools/list, discovery, metadata and history verified
+turn 1 completed; assistant parentID, completion marker, context marker and cwd verified (IDs/content redacted)
+turn 2 completed; assistant parentID, completion marker, context marker and cwd verified (IDs/content redacted)
+waiting 65 seconds without MCP requests to verify configured idle session expiry
+idle MCP session expired; official SDK reconnected; native history and completed executions retained; no prompt resubmission
+PASS: same existing native session; earlier history retained; both turns present; directory unchanged; final history: 10 messages
+```
+
+The official SDK client negotiated MCP 2025-11-25, listed all seven tools with
+schemas, discovered the exact authorized session, read metadata/history,
+submitted both prompts, polled status and fetched correlated results. The second
+prompt did **not** include the random marker; both assistant outputs exactly
+matched it. Same-key retries returned their original execution IDs; changed
+payloads were rejected and generated no extra native user message.
+
+Independent authenticated native history inspection after the smoke confirmed:
+
+| Evidence | Turn 1 | Turn 2 |
+|---|---|---|
+| Native session equals authorized full ID | true | true |
+| Assistant parentID equals that turn's user ID | true | true |
+| Assistant cwd equals original directory | true | true |
+| User time.created (Unix ms) | 1792816910499 | 1792816917145 |
+| Assistant time.completed (Unix ms) | 1792816916756 | 1792816918918 |
+| Assistant finish | stop | stop |
+| Assistant error present | false | false |
+
+History grew **6 → 10**, with all prior message IDs retained and exactly **2** new
+user messages. Final session identity/directory matched; no active native status
+entry remained. Both completions required correlated terminal assistant proof.
+
+For idle behavior, the client disabled standalone SSE and made no MCP requests
+for 65 seconds. The original transport session's tools/list then failed. A new
+official SDK connection to the same running listener succeeded, read the same
+10 history message IDs and retrieved both original executions as `completed`.
+Thus expiry did not destroy native history or execution records and required no
+prompt resubmission. This test covers already completed executions across idle
+expiry; it does not claim live proof of a running model surviving expiry (detached
+worker behavior remains covered by the regression tests).
+
+## Quality gates after authorized live test
+
+All commands below exited **0** after the live run on 2026-10-24 UTC. Build and vet
+were silent. Existing test-package results were cached because their source and
+dependencies were unchanged; the updated smoke command compiled in both normal
+and race builds and was directly exercised live above. No test failure or race
+report occurred.
+
+```text
+$ gofmt -w cmd internal
+$ go build ./...
+$ go test ./...
+?   	github.com/nevzatcirak/harness-bridge/cmd/bridge	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/mcpsmoke	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/smoke	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/adapters/opencode	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/execution	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/mcp	(cached)
+?   	github.com/nevzatcirak/harness-bridge/internal/mcpclient	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)
+$ go vet ./...
+$ go test -race ./...
+?   	github.com/nevzatcirak/harness-bridge/cmd/bridge	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/mcpsmoke	[no test files]
+?   	github.com/nevzatcirak/harness-bridge/cmd/smoke	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/adapters/opencode	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/execution	(cached)
+ok  	github.com/nevzatcirak/harness-bridge/internal/mcp	(cached)
+?   	github.com/nevzatcirak/harness-bridge/internal/mcpclient	[no test files]
+ok  	github.com/nevzatcirak/harness-bridge/internal/security	(cached)
+$ git diff --check
+```
 
 ## Remaining limitations
 

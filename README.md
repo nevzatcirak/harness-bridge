@@ -61,6 +61,19 @@ export H2_DIRECTORY=/absolute/existing/session/directory
 go run ./cmd/mcpsmoke
 ```
 
+To exercise the separately running bridge started above, pass its loopback URL
+and the same securely supplied `BRIDGE_TOKEN`. Omit `H2_MCP_URL` to use the
+embedded ephemeral bridge. Optional idle verification waits 65 seconds without
+MCP requests, checks expiration of the one-minute transport session, reconnects
+with the official SDK, and verifies history and completed executions remain.
+It submits no additional prompts after reconnecting.
+
+```sh
+export H2_MCP_URL=http://127.0.0.1:8080/mcp
+export H2_TEST_IDLE_EXPIRY=1
+go run ./cmd/mcpsmoke
+```
+
 See [H2 evidence, exact commands and limits](docs/H2_EVIDENCE.md) and
 [H1 evidence and reproducible two-turn smoke test](docs/H1_EVIDENCE.md) for
 verified API details, successful live two-turn evidence, and operational limitations.
