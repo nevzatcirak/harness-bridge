@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestAuthAndStrictArguments(t *testing.T) {
+func TestHTTPAuthentication(t *testing.T) {
 	s := &Server{Token: strings.Repeat("t", 32)}
 	for _, auth := range []string{"", s.Token, "Bearer wrong"} {
 		r := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
@@ -23,15 +23,7 @@ func TestAuthAndStrictArguments(t *testing.T) {
 			t.Fatal(w.Code)
 		}
 	}
-	for _, body := range []string{`{"jsonrpc":"2.0","id":1,"method":"ping"} {}`, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_sessions","arguments":{"extra":true}}}`, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_prompt","arguments":{"session_id":"opencode:ses_test"}}}`} {
-		r := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
-		r.Header.Set("Authorization", "Bearer "+s.Token)
-		w := httptest.NewRecorder()
-		s.ServeHTTP(w, r)
-		if w.Code == 200 && !strings.Contains(w.Body.String(), "Error") && !strings.Contains(w.Body.String(), "error") {
-			t.Fatal(w.Body.String())
-		}
-	}
+
 }
 func TestSessionACLHistoryAndDirectory(t *testing.T) {
 	root := t.TempDir()

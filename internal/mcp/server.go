@@ -6,32 +6,27 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/harness-bridge/internal/security"
 )
 
+// Server configuration and its policy must remain immutable while serving.
 type Server struct {
-	Client *opencode.Client
-	Runs   *execution.Manager
-	Token  string
-	Policy *security.Policy
-}
-type request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params"`
-}
-type response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
-	Error   any             `json:"error,omitempty"`
+	Client  *opencode.Client
+	Runs    *execution.Manager
+	Token   string
+	Policy  *security.Policy
+	once    sync.Once
+	handler http.Handler
 }
 type args struct {
 	SessionID      string `json:"session_id"`
@@ -40,21 +35,6 @@ type args struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-func prop() map[string]any { return map[string]any{"type": "string"} }
-func tool(name, desc string, required []string, properties map[string]any) map[string]any {
-	return map[string]any{"name": name, "description": desc, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
-}
-func tools() []map[string]any {
-	return []map[string]any{
-		tool("list_sessions", "List existing sessions", nil, map[string]any{}),
-		tool("get_session", "Inspect session", []string{"session_id"}, map[string]any{"session_id": prop()}),
-		tool("read_session_history", "Read existing session messages", []string{"session_id"}, map[string]any{"session_id": prop()}),
-		tool("send_prompt", "Submit prompt to the same existing session", []string{"session_id", "prompt", "idempotency_key"}, map[string]any{"session_id": prop(), "prompt": prop(), "idempotency_key": prop()}),
-		tool("get_execution_status", "Read execution state", []string{"execution_id"}, map[string]any{"execution_id": prop()}),
-		tool("get_execution_result", "Read execution output", []string{"execution_id"}, map[string]any{"execution_id": prop()}),
-		tool("interrupt_execution", "Request interruption", []string{"execution_id"}, map[string]any{"execution_id": prop()}),
-	}
-}
 func native(s string) (string, error) {
 	id := strings.TrimPrefix(s, "opencode:")
 	if !strings.HasPrefix(s, "opencode:") || !opencode.ValidID(id, "ses") {
@@ -75,13 +55,13 @@ func (s *Server) authorized(ctx context.Context, id string) (opencode.Session, *
 	}
 	return v, s.Client.WithDirectory(v.Directory), nil
 }
-func sessionView(v opencode.Session) any {
-	return map[string]any{"session_id": "opencode:" + v.ID, "native_id": v.ID, "harness": "opencode", "directory": v.Directory, "title": v.Title, "state": "unknown"}
+func sessionView(v opencode.Session) Session {
+	return Session{SessionID: "opencode:" + v.ID, NativeID: v.ID, Harness: "opencode", Directory: v.Directory, Title: v.Title, State: "unknown"}
 }
 func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 	switch name {
 	case "list_sessions":
-		list := []any{}
+		list := []Session{}
 		// Explicit ACL lookup also discovers sessions outside the server process cwd.
 		if s.Policy != nil {
 			for id := range s.Policy.Sessions {
@@ -96,7 +76,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 				list = append(list, sessionView(v))
 			}
 		}
-		return map[string]any{"sessions": list}, nil
+		return Sessions{Sessions: list}, nil
 	case "get_session", "read_session_history", "send_prompt":
 		id, e := native(a.SessionID)
 		if e != nil {
@@ -111,7 +91,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 		}
 		if name == "read_session_history" {
 			msgs, e := c.History(ctx, id)
-			return map[string]any{"messages": msgs}, e
+			return History{Messages: nonnil(msgs)}, e
 		}
 		x, e := s.Runs.SendWithRunner(ctx, c, id, a.Prompt, a.IdempotencyKey)
 		slog.Info("prompt submission", "session_id", a.SessionID, "execution_id", x.ID, "accepted", e == nil)
@@ -133,7 +113,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 		}
 		if name == "get_execution_result" {
 			x, msgs, e := s.Runs.Result(ctx, a.ExecutionID)
-			return map[string]any{"execution": x, "messages": msgs}, e
+			return Result{Execution: x, Messages: nonnil(msgs)}, e
 		}
 		x, e = s.Runs.Interrupt(ctx, a.ExecutionID)
 		slog.Info("explicit interrupt", "execution_id", x.ID, "accepted", e == nil)
@@ -173,65 +153,41 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var q request
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&q); err != nil {
-		http.Error(w, "invalid json", 400)
-		return
-	}
-	if q.JSONRPC != "2.0" {
-		http.Error(w, "invalid jsonrpc", 400)
-		return
-	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
-		http.Error(w, "trailing JSON", 400)
-		return
-	}
-	out := response{JSONRPC: "2.0", ID: q.ID}
-	switch q.Method {
-	case "initialize":
-		out.Result = map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "harness-bridge", "version": "0.1.0"}}
-	case "notifications/initialized":
-		w.WriteHeader(http.StatusAccepted)
-		return
-	case "ping":
-		out.Result = map[string]any{}
-	case "tools/list":
-		out.Result = map[string]any{"tools": tools()}
-	case "tools/call":
-		var p struct {
-			Name      string `json:"name"`
-			Arguments args   `json:"arguments"`
-		}
-		decoder := json.NewDecoder(bytes.NewReader(q.Params))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&p); err != nil {
-			out.Error = map[string]any{"code": -32602, "message": "invalid arguments"}
-			break
-		}
-		if err := validateArgs(p.Name, p.Arguments); err != nil {
-			out.Result = map[string]any{"isError": true, "content": []any{map[string]string{"type": "text", "text": errorJSON(err)}}}
-			break
-		}
-		result, err := s.call(r.Context(), p.Name, p.Arguments)
+	// Keep H1's strict single-JSON and body-size boundary. Protocol decoding,
+	// dispatch, schemas and sessions are exclusively the official SDK's work.
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err != nil {
-			out.Result = map[string]any{"isError": true, "content": []any{map[string]string{"type": "text", "text": errorJSON(err)}}}
-		} else {
-			b, _ := json.Marshal(result)
-			out.Result = map[string]any{"content": []any{map[string]string{"type": "text", "text": string(b)}}}
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "invalid body", http.StatusBadRequest)
+			}
+			return
 		}
-	default:
-		out.Error = map[string]any{"code": -32601, "message": "method not found"}
+		if !json.Valid(body) {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	s.once.Do(func() {
+		server := sdk.NewServer(&sdk.Implementation{Name: "harness-bridge", Version: "0.2.0"}, &sdk.ServerOptions{SupportedProtocolVersions: []string{"2025-11-25"}})
+		register[EmptyInput, Sessions](server, s, "list_sessions", "List authorized existing sessions", func(EmptyInput) args { return args{} })
+		register[SessionInput, Session](server, s, "get_session", "Inspect an authorized session", func(a SessionInput) args { return args{SessionID: a.SessionID} })
+		register[SessionInput, History](server, s, "read_session_history", "Read existing session history", func(a SessionInput) args { return args{SessionID: a.SessionID} })
+		register[PromptInput, execution.Execution](server, s, "send_prompt", "Submit once to the same existing session", func(a PromptInput) args {
+			return args{SessionID: a.SessionID, Prompt: a.Prompt, IdempotencyKey: a.IdempotencyKey}
+		})
+		for _, name := range []string{"get_execution_status", "interrupt_execution"} {
+			register[ExecutionInput, execution.Execution](server, s, name, name, func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
+		}
+		register[ExecutionInput, Result](server, s, "get_execution_result", "Read correlated execution output", func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
+		transport := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{JSONResponse: true, SessionTimeout: time.Minute, MaxRequestBodyBytes: 1 << 20})
+		s.handler = http.NewCrossOriginProtection().Handler(transport)
+	})
+	s.handler.ServeHTTP(w, r)
 }
 
 func validateArgs(name string, a args) error {
@@ -257,5 +213,3 @@ func validateArgs(name string, a args) error {
 	}
 	return nil
 }
-
-func errorJSON(err error) string { b, _ := json.Marshal(envelope(err)); return string(b) }
