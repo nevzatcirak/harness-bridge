@@ -26,6 +26,7 @@ type nativeFixture struct {
 	messages        []opencode.Message
 	posts, aborts   int
 	finish          bool
+	loseReply       bool
 	block, canceled chan struct{}
 }
 
@@ -79,6 +80,13 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			assistant.Info.Finish = "stop"
 		}
 		f.messages = append(f.messages, user, assistant)
+		if f.loseReply {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		w.WriteHeader(204)
 	case "/session/ses_existing/abort":
 		f.aborts++
@@ -240,7 +248,10 @@ func testSDKContinuation(t *testing.T, remote bool) {
 			t.Fatal("duplicate")
 		}
 		input.Prompt = "changed"
-		invoke(t, client, "send_prompt", input, true)
+		conflict := decode[execution.Error](t, invoke(t, client, "send_prompt", input, true))
+		if conflict.Code != "IDEMPOTENCY_CONFLICT" {
+			t.Fatal(conflict)
+		}
 		awaitExecution(t, client, x.ID, "completed")
 		result := decode[Result](t, check("get_execution_result", ExecutionInput{x.ID}))
 		if len(result.Messages) != 2 || result.Messages[1].Info.ParentID != x.MessageID || result.Messages[1].Info.Path.Cwd != f.root {
@@ -463,5 +474,77 @@ func TestSDKReadOnlyStaging(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.posts != 0 || f.aborts != 0 {
 		t.Fatal("read-only staging touched native execution")
+	}
+}
+
+func TestSDKConcurrentSingleWriter(t *testing.T) {
+	client, f, _, _ := integration(t, false)
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "concurrent-key"}
+	start := make(chan struct{})
+	results := make(chan *sdk.CallToolResult, 12)
+	errs := make(chan error, 12)
+	for i := 0; i < 12; i++ {
+		go func() {
+			<-start
+			r, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "send_prompt", Arguments: input})
+			results <- r
+			errs <- err
+		}()
+	}
+	close(start)
+	id := ""
+	for i := 0; i < 12; i++ {
+		r := <-results
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if r.IsError {
+			t.Fatal(r)
+		}
+		x := decode[execution.Execution](t, r)
+		if id != "" && x.ID != id {
+			t.Fatal("duplicate execution")
+		}
+		id = x.ID
+	}
+	different := input
+	different.IdempotencyKey = "another-key"
+	if failure := decode[execution.Error](t, invoke(t, client, "send_prompt", different, true)); failure.Code != "SESSION_BUSY" {
+		t.Fatal(failure)
+	}
+	different = input
+	different.Prompt = "changed"
+	if failure := decode[execution.Error](t, invoke(t, client, "send_prompt", different, true)); failure.Code != "IDEMPOTENCY_CONFLICT" {
+		t.Fatal(failure)
+	}
+	awaitExecution(t, client, id, "running")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 {
+		t.Fatal(f.posts)
+	}
+}
+
+func TestSDKLostNativeReplyNeverResubmits(t *testing.T) {
+	client, f, _, _ := integration(t, true)
+	f.mu.Lock()
+	f.loseReply = true
+	f.mu.Unlock()
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "lost-reply-key"}
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	awaitExecution(t, client, x.ID, "unknown")
+	replay := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	if replay.ID != x.ID || replay.State != "unknown" {
+		t.Fatal(replay)
+	}
+	input.IdempotencyKey = "unsafe-new-key"
+	failure := decode[execution.Error](t, invoke(t, client, "send_prompt", input, true))
+	if failure.Code != "SESSION_BUSY" {
+		t.Fatal(failure)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 {
+		t.Fatal("native POST replayed", f.posts)
 	}
 }

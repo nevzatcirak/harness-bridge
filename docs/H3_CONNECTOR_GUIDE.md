@@ -1,8 +1,9 @@
 # H3 operator connection guide
 
-Status: implementation and local TLS feasibility only. The newly prepared private
-HTTPS service is readonly staging; public write/two-turn E2E requires a separate
-concurrency and security review. See [preparation evidence](deploy/PRIVATE_HTTPS_PREPARATION.md). Public ingress and ordinary
+Status: independent read-only private HTTPS was activated and verified in deployment
+PR #1 commit 58ecd5a. Single-writer source changes and migration requirements are
+recorded in [ADR-010](adr/ADR-010-single-writer.md); no new binary was deployed.
+Public write/two-turn E2E requires separate migration and public-routing approval. See [preparation evidence](deploy/PRIVATE_HTTPS_PREPARATION.md). Public ingress and ordinary
 Claude Chat E2E have NOT been run. PR #3 must remain draft and unmerged.
 
 ## Verified official requirements (2026-10-24 UTC)
@@ -63,6 +64,7 @@ reviewed by the operator. No public listener or tunnel was started by this task.
    marked operator values; do not copy a historical redacted session identifier.
 
 ```sh
+BRIDGE_READ_ONLY=1
 BRIDGE_LISTEN=127.0.0.1:8443
 BRIDGE_PUBLIC_ORIGIN=https://bridge.example.com
 BRIDGE_TLS_CERT=/operator/secure/backend-fullchain.pem
@@ -162,3 +164,74 @@ records contain configured identity and outcomes, not payloads or native IDs.
 No global rate limiter or durable execution store is added; deployment firewall
 rate controls and operator reconciliation remain necessary. Expiry blocks new
 requests; it does not interrupt a prompt already accepted by the native agent.
+
+## Current account feasibility and exact selected-host setup (2026-10-24)
+
+Rechecked the [official support article](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp):
+custom connectors are listed for Free/Pro/Max/Team/Enterprise (Free: one).
+Organization creation rights differ from member connection rights. This does
+not establish this operator's actual account/organization entitlement. Connections
+come from Anthropic infrastructure, not the user's browser or desktop network;
+the current private backend alone is unreachable to ordinary Claude Chat.
+
+The [current add-connector instructions](https://claude.com/docs/connectors/custom/add-unlisted)
+explicitly limit Request headers to a beta subset of organizations. Inspect the
+actual account dialog before making public infrastructure changes. Layouts vary.
+For an entitled account, after public-routing approval and external verification:
+
+1. Individual account: Customize > Connectors > Add custom connector. For an
+   organization, an authorized Owner creates it in Organization settings >
+   Connectors; do not expose this privileged shared credential to other members.
+2. Name: Harness Bridge. URL: `https://bridge.nevzatcirak.com/mcp`. Transport:
+   Streamable HTTP, not an invented `/sse` endpoint.
+3. Authentication: No sign-in. Request headers: standard `Authorization`,
+   Required, value `Bearer <fresh operator-provided secret>` including the space.
+   Enter only in the credential UI; never paste the actual secret in chat,
+   URLs, screenshots, Git or process arguments. Leave OAuth client fields unset.
+4. If Request headers are absent, STOP; changing the server to unauthenticated
+   is forbidden. Record plan/role and visible options without credentials and
+   request beta access or decide the OAuth alternative below.
+5. Save and connect; enable in a normal chat with + > Connectors. First verify
+   discovery/metadata/history on the approved session while still read-only.
+   Keep write tools blocked in Claude until the single-writer migration is
+   separately approved. Read-only policy remains enforced server-side.
+6. After approved migration, perform the earlier two-turn procedure on native
+   session `ses_e9329c0b4ffebOlm7GRyKxbMQ5`, unchanged workspace
+   `/opt/harness-bridge-test/workspace`. Use a new key for each intended turn;
+   replay only the identical key/payload after transport loss in the SAME writer
+   lifetime. Preserve execution/message IDs and inspect correlated terminal proof.
+   Do not blindly resubmit after restart. Permission approval stays native.
+
+Fixed header values are sent verbatim on every request; they are not exchanged
+or refreshed via OAuth. Connector authentication settings require removal and
+re-addition to change, followed by reconnecting members. Coordinate Bridge token
+rotation/expiry with that UI operation and native-state reconciliation; no
+uninterrupted write-token rotation is implemented. Current staging token expires
+2026-10-25T16:25:33Z; never reuse it for a future write activation. No setting or
+conversation in the operator's actual account was inspected in this task.
+
+## Minimum OAuth alternative — proposed, NOT approved or implemented
+
+[Anthropic authentication requirements](https://claude.com/docs/connectors/building/authentication)
+cover discovery, PKCE S256, DCR/CIMD or a preregistered client, hosted callback
+`https://claude.ai/api/mcp/auth_callback`, token refresh and form-encoded exchange.
+Machine-to-machine client_credentials is unsupported. Request-header beta remains
+organization-scoped; a shared token does not establish per-user identity.
+
+If the operator lacks header access, obtain approval for an OAuth resource-server
+boundary using an existing standards-compliant authorization server, rather than
+writing an authorization server in Bridge. The design must specify protected
+resource metadata, 401 discovery challenge, authorization-server metadata,
+exact resource URL, audience/issuer/expiry/scope validation and per-user ACL,
+authorization-code + S256, chosen client registration and consent, callback,
+refresh/revocation/rotation and credential storage. No existing identity service
+or provider is assumed usable, and none is modified. OAuth access tokens must not
+be passed through as OpenCode Basic Auth credentials. The native credential
+remains private and independently authorized. See the
+[MCP authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
+
+The existing fixed Bearer path is the preferred one-operator MVP only if account
+availability and shared-credential access restrictions are verified. Public TLS,
+effective Traefik backend CA/ServersTransport, external negative tests, single
+writer migration and a real Claude conversation remain separate acceptance gates.
+No Claude E2E success is inferred from SDK or unit tests.

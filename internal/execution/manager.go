@@ -61,6 +61,7 @@ type Manager struct {
 	busy              map[string]string
 	keys              map[string]string
 	fingerprints      map[string][32]byte
+	pending           map[string]chan struct{}
 	ctx               context.Context
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
@@ -71,7 +72,7 @@ type Manager struct {
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval}
 }
 func (m *Manager) Close() { m.mu.Lock(); m.closed = true; m.cancel(); m.mu.Unlock(); m.wg.Wait() }
 func token() string {
@@ -112,6 +113,7 @@ func (m *Manager) SendWithRunner(ctx context.Context, r Runner, session, prompt,
 	}
 	k := session + "\x00" + key
 	hash := sha256.Sum256([]byte(prompt))
+retry:
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -120,13 +122,26 @@ func (m *Manager) SendWithRunner(ctx context.Context, r Runner, session, prompt,
 	if id, ok := m.keys[k]; ok {
 		if m.fingerprints[k] != hash {
 			m.mu.Unlock()
-			return Execution{}, Fail("INVALID_INPUT", "idempotency key conflict")
+			return Execution{}, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
 		}
 		x := m.runs[id]
 		m.mu.Unlock()
 		x.mu.Lock()
 		defer x.mu.Unlock()
 		return x.view, nil
+	}
+	if pending, ok := m.pending[k]; ok {
+		if m.fingerprints[k] != hash {
+			m.mu.Unlock()
+			return Execution{}, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
+		}
+		m.mu.Unlock()
+		select {
+		case <-pending:
+			goto retry
+		case <-ctx.Done():
+			return Execution{}, ctx.Err()
+		}
 	}
 	if m.busy[session] != "" {
 		m.mu.Unlock()
@@ -135,7 +150,19 @@ func (m *Manager) SendWithRunner(ctx context.Context, r Runner, session, prompt,
 	// Reserve before any network IO, without blocking unrelated sessions.
 	id := token()
 	m.busy[session] = id
+	m.pending[k] = make(chan struct{})
+	m.fingerprints[k] = hash
 	m.mu.Unlock()
+	// Wake same-key callers only after preflight has accepted or rejected.
+	defer func() {
+		m.mu.Lock()
+		close(m.pending[k])
+		delete(m.pending, k)
+		if _, accepted := m.keys[k]; !accepted {
+			delete(m.fingerprints, k)
+		}
+		m.mu.Unlock()
+	}()
 	release := func() {
 		m.mu.Lock()
 		if m.busy[session] == id {

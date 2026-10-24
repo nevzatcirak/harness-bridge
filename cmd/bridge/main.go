@@ -44,6 +44,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Read-only ingress cannot mutate and does not acquire writer ownership.
+	// Every cooperating writer on this host must share this protected directory.
+	if !cfg.readOnly {
+		sessions := make([]string, 0, len(policy.Sessions))
+		for id := range policy.Sessions {
+			sessions = append(sessions, id)
+		}
+		owner, err := execution.AcquireOwnership(os.Getenv("BRIDGE_WRITER_LOCK_DIR"), sessions)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer owner.Close()
+	}
 	runs := execution.New(client)
 	defer runs.Close()
 	mux := http.NewServeMux()

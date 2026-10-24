@@ -68,3 +68,11 @@ OAuth are unsupported. See [operator guide](H3_CONNECTOR_GUIDE.md).
 
 Private binds are forbidden in local/plaintext mode; public, wildcard, DNS,
 scoped and mapped addresses are rejected. See the [Traefik handoff](deploy/TRAEFIK_PRIVATE_BACKEND.md).
+
+## ADR-010 — one MCP writer per native session (H3)
+
+[Decision and audited scope](adr/ADR-010-single-writer.md): one writer process for
+local/remote mutations; other ingress remains read-only. Linux advisory session
+locks exclude cooperating updated writers on the same host/shared directory.
+Idempotency, uncertainty guards and execution mappings remain process-local;
+restart requires operator reconciliation. No deployment changes are implied.

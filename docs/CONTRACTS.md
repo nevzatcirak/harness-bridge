@@ -31,7 +31,7 @@ Common rules: tool input objects have `additionalProperties:false`; all IDs are 
     "session": {"type":"object","required":["session_id","native_id","harness","directory","state"],"properties":{"session_id":{"type":"string"},"native_id":{"type":"string"},"harness":{"const":"opencode"},"directory":{"type":"string"},"title":{"type":"string"},"state":{"enum":["idle","running","waiting_for_permission","unknown"]}},"additionalProperties":true},
     "execution": {"type":"object","required":["execution_id","session_id","state","started_at","updated_at"],"properties":{"execution_id":{"type":"string"},"session_id":{"type":"string"},"message_id":{"type":"string"},"state":{"enum":["submitting","running","waiting_for_permission","completed","failed","interrupted","unknown"]},"started_at":{"type":"string","format":"date-time"},"updated_at":{"type":"string","format":"date-time"},"error":{"type":"string"}},"additionalProperties":true},
     "message": {"type":"object","required":["message_id","role","parts"],"properties":{"message_id":{"type":"string"},"role":{"type":"string"},"parts":{"type":"array","items":{}}}},
-    "error": {"type":"object","required":["code","message","retryable"],"properties":{"code":{"enum":["UNAUTHORIZED","FORBIDDEN","NOT_FOUND","SESSION_BUSY","INVALID_INPUT","UPSTREAM_TIMEOUT","UNKNOWN_OUTCOME","UPSTREAM_FAILURE"]},"message":{"type":"string"},"retryable":{"type":"boolean"},"execution_id":{"type":"string"}}}
+    "error": {"type":"object","required":["code","message","retryable"],"properties":{"code":{"enum":["UNAUTHORIZED","FORBIDDEN","NOT_FOUND","SESSION_BUSY","IDEMPOTENCY_CONFLICT","INVALID_INPUT","UPSTREAM_TIMEOUT","UNKNOWN_OUTCOME","UPSTREAM_FAILURE"]},"message":{"type":"string"},"retryable":{"type":"boolean"},"execution_id":{"type":"string"}}}
   },
   "outputs": {
     "list_sessions": {"type":"object","required":["sessions"],"properties":{"sessions":{"type":"array","items":{"$ref":"#/$defs/session"}},"next_cursor":{"type":"string"}}},
@@ -140,3 +140,17 @@ send_prompt and interrupt_execution before native mutation. Default/0 preserves
 existing write behavior; invalid values fail startup. It is required for the
 separate staged private listener while the local Bridge remains a possible
 writer; independent processes do not share execution/idempotency state.
+
+## H3 single-writer admission and replay
+
+Same session/key with a different prompt returns `IDEMPOTENCY_CONFLICT`,
+`retryable:false` (previously INVALID_INPUT). Identical concurrent requests wait
+through admission and return the same execution/message IDs once accepted.
+Different keys on an active/uncertain session return SESSION_BUSY. Preflight
+rejection is not acceptance; it may be retried after resolving native state.
+All seven tool shapes remain unchanged. Caller cancellation while waiting for
+admission does not cancel an independently accepted execution. Explicit
+interrupt_execution remains authenticated/session-authorized and is forbidden
+on read-only instances. See ADR-010 for required host ownership configuration,
+nonparticipating native clients and lost restart state. Never interpret a fresh
+process's NOT_FOUND as proof that an earlier prompt was not submitted.
