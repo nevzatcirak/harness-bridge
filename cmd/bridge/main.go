@@ -17,7 +17,10 @@ import (
 )
 
 func main() {
-	token := os.Getenv("BRIDGE_TOKEN")
+	token, err := readSecret(os.Getenv, "BRIDGE_TOKEN")
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(token) < 32 {
 		log.Fatal("BRIDGE_TOKEN must be at least 32 characters")
 	}
@@ -25,7 +28,11 @@ func main() {
 	if base == "" {
 		base = "http://127.0.0.1:4096"
 	}
-	client, err := opencode.New(base, os.Getenv("OPENCODE_SERVER_USERNAME"), os.Getenv("OPENCODE_SERVER_PASSWORD"))
+	password, err := readSecret(os.Getenv, "OPENCODE_SERVER_PASSWORD")
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := opencode.New(base, os.Getenv("OPENCODE_SERVER_USERNAME"), password)
 	if err != nil {
 		log.Fatal(err)
 	}
