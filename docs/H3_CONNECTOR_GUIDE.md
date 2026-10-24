@@ -44,8 +44,12 @@ reviewed by the operator. No public listener or tunnel was started by this task.
 1. In ordinary claude.ai, Customize > Connectors > Add custom connector, confirm
    that No sign-in and Request headers are available. Team/Enterprise may require
    an owner. Do not save a public URL yet. If unavailable, stop as above.
-2. Select the EXISTING OpenCode native session, read its seed history, and verify
-   its real project directory. Keep OpenCode on `127.0.0.1:4096`; preserve its
+2. For the current approved test deployment use only the existing non-root
+   OpenCode on `127.0.0.1:4097`, workspace `/opt/harness-bridge-test/workspace`.
+   The original root server on :4096 is not an approved remote target.
+   See [local systemd evidence](deploy/SYSTEMD_LOCAL_VALIDATION.md).
+   Select the EXISTING OpenCode native session, read its history, and verify
+   its real project directory. Keep test OpenCode on `127.0.0.1:4097`; preserve its
    existing credentials, process, TUI and permission settings. Do not create a
    substitute session. The bridge cannot grant native permission requests.
 3. Choose an operator-owned DNS name (example `bridge.example.com`), a publicly
@@ -62,9 +66,9 @@ BRIDGE_PUBLIC_ORIGIN=https://bridge.example.com
 BRIDGE_TLS_CERT=/operator/secure/backend-fullchain.pem
 BRIDGE_TLS_KEY=/operator/secure/backend-key.pem
 BRIDGE_PRINCIPAL=operator
-BRIDGE_ALLOWED_ROOTS=/opt/developer/harness-bridge
+BRIDGE_ALLOWED_ROOTS=/opt/harness-bridge-test/workspace
 BRIDGE_ALLOWED_SESSIONS=<EXACT_EXISTING_NATIVE_SESSION_ID>
-OPENCODE_URL=http://127.0.0.1:4096
+OPENCODE_URL=http://127.0.0.1:4097
 ```
 
 Set `BRIDGE_TOKEN` to a fresh cryptographically random secret (e.g. 32 random

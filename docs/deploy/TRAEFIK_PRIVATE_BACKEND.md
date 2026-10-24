@@ -22,8 +22,11 @@ BRIDGE_PUBLIC_ORIGIN=https://bridge.nevzatcirak.com
 
 Use the existing remote configuration contract for certificate/key, named
 principal, <=24-hour token expiry, secret token and exact existing session/root
-ACL. Backend certificate SAN must contain `bridge.nevzatcirak.com`. OpenCode
-stays `127.0.0.1:4096`. Neither listener is started by this document.
+ACL. Backend certificate SAN must contain `bridge.nevzatcirak.com`. The current
+approved target is the non-root test OpenCode at `127.0.0.1:4097`, workspace
+`/opt/harness-bridge-test/workspace`; the original root :4096 instance is not an
+approved remote target. See [local validation evidence](SYSTEMD_LOCAL_VALIDATION.md).
+Neither private/public listener is started by this document.
 
 Local mode still defaults to `127.0.0.1:8080` and permits only the previous
 loopback names/addresses. Private binding is an explicit BRIDGE_LISTEN opt-in in

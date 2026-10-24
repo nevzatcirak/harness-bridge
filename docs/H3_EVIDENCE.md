@@ -196,3 +196,22 @@ namespace without creating containers or altering services; it is not evidence
 that the runtime route works. No firewall/DNS/Swarm/public routing changes, no
 OpenCode restart or permission bypass, and neither PR merged. Original pending
 Claude account auth availability and live E2E gates remain open.
+
+
+## Non-root local systemd integration — 2026-10-24 UTC
+
+[Detailed actual evidence](deploy/SYSTEMD_LOCAL_VALIDATION.md): fixed systemd
+255's ACL-mask 0440 credential rejection without accepting arbitrary readable
+files (implementation `2c97334`); full required checks and genuine systemd fixture
+test passed before installing the tested binary. Bridge test service is healthy
+on loopback :8080, targets only non-root test OpenCode :4097, and enforces the
+single supplied test-session ACL/root. Missing/wrong token denial and SDK
+initialize/discovery/metadata/history plus unauthorized-session denials passed.
+Two real prompts on the same existing test session completed with marker recall,
+parent/cwd correlation and history growth 0→4; no tools used. Empty initial
+history means pre-existing nonempty-history retention was not exercised.
+Original root OpenCode :4096 PID/start-time unchanged; no native permissions,
+workspace ACLs, deployment services, public routes, DNS or firewall altered.
+Filesystem read isolation remains unproven and explicitly false for readable
+workspace README.md; see detailed ACL evidence. Ordinary Claude Chat E2E and
+public/private deployment gates remain pending, and both PRs remain unmerged.
