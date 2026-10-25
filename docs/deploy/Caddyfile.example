@@ -1,0 +1,19 @@
+# REVIEW BEFORE STARTING: this configuration opens public HTTPS.
+# Replace bridge.example.com with an operator-controlled DNS name.
+bridge.example.com {
+    @mcp path /mcp
+    handle @mcp {
+        reverse_proxy https://127.0.0.1:8443 {
+            header_up Host bridge.example.com
+            transport http {
+                tls_server_name bridge.example.com
+                # Backend cert must chain to the system trust store.
+                # For a private CA, configure tls_trust_pool explicitly.
+                # Never use tls_insecure_skip_verify.
+            }
+        }
+    }
+    handle {
+        respond 404
+    }
+}

@@ -3,9 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,12 +23,14 @@ import (
 )
 
 type nativeFixture struct {
-	mu              sync.Mutex
-	root            string
-	messages        []opencode.Message
-	posts, aborts   int
-	finish          bool
-	block, canceled chan struct{}
+	mu                        sync.Mutex
+	root                      string
+	messages                  []opencode.Message
+	posts, aborts             int
+	historyReads, statusReads int
+	finish                    bool
+	loseReply                 bool
+	block, canceled           chan struct{}
 }
 
 func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +50,7 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/session/ses_existing":
 		_ = json.NewEncoder(w).Encode(opencode.Session{ID: "ses_existing", Directory: f.root, Title: "existing fixture"})
 	case "/session/status":
+		f.statusReads++
 		status := "idle"
 		if len(f.messages) > 1 && !f.finish {
 			status = "busy"
@@ -53,6 +59,7 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/permission":
 		_, _ = w.Write([]byte(`[]`))
 	case "/session/ses_existing/message":
+		f.historyReads++
 		_ = json.NewEncoder(w).Encode(f.messages)
 	case "/session/ses_existing/prompt_async":
 		var in struct {
@@ -78,6 +85,13 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			assistant.Info.Finish = "stop"
 		}
 		f.messages = append(f.messages, user, assistant)
+		if f.loseReply {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		w.WriteHeader(204)
 	case "/session/ses_existing/abort":
 		f.aborts++
@@ -91,6 +105,12 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
+	return integrationMode(t, finish, false)
+}
+func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
+	return integrationTiming(t, finish, remote, 3*time.Second)
+}
+func integrationTiming(t *testing.T, finish, remote bool, timeout time.Duration) (*sdk.ClientSession, *nativeFixture, *Server, string) {
 	t.Helper()
 	f := &nativeFixture{root: t.TempDir(), finish: finish, block: make(chan struct{}), canceled: make(chan struct{}), messages: []opencode.Message{{Parts: []json.RawMessage{}}}}
 	f.messages[0].Info.ID = "msg_seed"
@@ -106,14 +126,29 @@ func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture,
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := execution.NewWithTiming(c, time.Second*3, time.Millisecond*5)
+	runs := execution.NewWithTiming(c, timeout, time.Millisecond*5)
 	t.Cleanup(runs.Close)
 	bridge := &Server{Client: c, Runs: runs, Policy: p, Token: strings.Repeat("t", 32)}
-	httpServer := httptest.NewServer(bridge)
+	httpServer := httptest.NewUnstartedServer(bridge)
+	if remote {
+		httpServer.StartTLS()
+		bridge.Remote, err = security.NewRemote("https://example.com", "test-operator", time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		httpServer.Start()
+	}
 	t.Cleanup(httpServer.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	client, err := mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	var client *sdk.ClientSession
+	if remote {
+		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: httpServer.Certificate().Raw})
+		client, err = mcpclient.ConnectPrivateTLS(ctx, httpServer.URL+"/mcp", "https://example.com", bridge.Token, caPEM)
+	} else {
+		client, err = mcpclient.Connect(ctx, httpServer.URL, bridge.Token)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +193,11 @@ func awaitExecution(t *testing.T, c *sdk.ClientSession, id, state string) execut
 	t.Fatalf("execution did not reach %s", state)
 	return execution.Execution{}
 }
-func TestSDKLocalIntegration(t *testing.T) {
-	client, f, bridge, _ := integration(t, true)
+
+func TestSDKLocalIntegration(t *testing.T) { testSDKContinuation(t, false) }
+func TestSDKHTTPSIntegration(t *testing.T) { testSDKContinuation(t, true) }
+func testSDKContinuation(t *testing.T, remote bool) {
+	client, f, bridge, _ := integrationMode(t, true, remote)
 	if v := client.InitializeResult(); v.ProtocolVersion != "2025-11-25" || v.ServerInfo.Name != "harness-bridge" {
 		t.Fatal(v)
 	}
@@ -218,7 +256,10 @@ func TestSDKLocalIntegration(t *testing.T) {
 			t.Fatal("duplicate")
 		}
 		input.Prompt = "changed"
-		invoke(t, client, "send_prompt", input, true)
+		conflict := decode[execution.Error](t, invoke(t, client, "send_prompt", input, true))
+		if conflict.Code != "IDEMPOTENCY_CONFLICT" {
+			t.Fatal(conflict)
+		}
 		awaitExecution(t, client, x.ID, "completed")
 		result := decode[Result](t, check("get_execution_result", ExecutionInput{x.ID}))
 		if len(result.Messages) != 2 || result.Messages[1].Info.ParentID != x.MessageID || result.Messages[1].Info.Path.Cwd != f.root {
@@ -398,4 +439,212 @@ func TestSDKExecutionAuthorization(t *testing.T) {
 	}
 	invoke(t, client, "interrupt_execution", ExecutionInput{x.ID}, false)
 	awaitExecution(t, client, x.ID, "interrupted")
+}
+
+func TestSDKReadOnlyStaging(t *testing.T) {
+	_, f, bridge, _ := integration(t, true)
+	policy, err := security.New([]string{f.root}, []string{"ses_existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := &Server{Client: bridge.Client, Runs: bridge.Runs, Token: bridge.Token, Policy: policy, ReadOnly: true}
+	ts := httptest.NewServer(staged)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := mcpclient.Connect(ctx, ts.URL, staged.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	tools, err := client.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 7 {
+		t.Fatal("tool surface changed", err)
+	}
+	for _, name := range []string{"get_session", "read_session_history"} {
+		invoke(t, client, name, SessionInput{"opencode:ses_existing"}, false)
+	}
+	invoke(t, client, "list_sessions", EmptyInput{}, false)
+	for _, tc := range []struct {
+		name  string
+		input any
+	}{
+		{"send_prompt", PromptInput{"opencode:ses_existing", "must not execute", "staged-denial"}},
+		{"interrupt_execution", ExecutionInput{"exe_staged_denial"}},
+	} {
+		failure := decode[execution.Error](t, invoke(t, client, tc.name, tc.input, true))
+		if failure.Code != "FORBIDDEN" {
+			t.Fatal("mutation was not forbidden", tc.name)
+		}
+	}
+	invoke(t, client, "get_session", SessionInput{"opencode:ses_unauthorized"}, true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 0 || f.aborts != 0 {
+		t.Fatal("read-only staging touched native execution")
+	}
+}
+
+func TestSDKConcurrentSingleWriter(t *testing.T) {
+	client, f, _, _ := integration(t, false)
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "concurrent-key"}
+	start := make(chan struct{})
+	results := make(chan *sdk.CallToolResult, 12)
+	errs := make(chan error, 12)
+	for i := 0; i < 12; i++ {
+		go func() {
+			<-start
+			r, err := client.CallTool(context.Background(), &sdk.CallToolParams{Name: "send_prompt", Arguments: input})
+			results <- r
+			errs <- err
+		}()
+	}
+	close(start)
+	id := ""
+	for i := 0; i < 12; i++ {
+		r := <-results
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if r.IsError {
+			t.Fatal(r)
+		}
+		x := decode[execution.Execution](t, r)
+		if id != "" && x.ID != id {
+			t.Fatal("duplicate execution")
+		}
+		id = x.ID
+	}
+	different := input
+	different.IdempotencyKey = "another-key"
+	if failure := decode[execution.Error](t, invoke(t, client, "send_prompt", different, true)); failure.Code != "SESSION_BUSY" {
+		t.Fatal(failure)
+	}
+	different = input
+	different.Prompt = "changed"
+	if failure := decode[execution.Error](t, invoke(t, client, "send_prompt", different, true)); failure.Code != "IDEMPOTENCY_CONFLICT" {
+		t.Fatal(failure)
+	}
+	awaitExecution(t, client, id, "running")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 {
+		t.Fatal(f.posts)
+	}
+}
+
+func TestSDKLostNativeReplyNeverResubmits(t *testing.T) {
+	client, f, _, _ := integration(t, false)
+	f.mu.Lock()
+	f.loseReply = true
+	f.mu.Unlock()
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "lost-reply-key"}
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	awaitExecution(t, client, x.ID, "unknown")
+	replay := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	if replay.ID != x.ID || replay.State != "unknown" {
+		t.Fatal(replay)
+	}
+	input.IdempotencyKey = "unsafe-new-key"
+	failure := decode[execution.Error](t, invoke(t, client, "send_prompt", input, true))
+	if failure.Code != "SESSION_BUSY" {
+		t.Fatal(failure)
+	}
+	f.mu.Lock()
+	if f.posts != 1 {
+		f.mu.Unlock()
+		t.Fatal("native POST replayed")
+	}
+	f.finish = true
+	final := &f.messages[len(f.messages)-1]
+	final.Info.Time.Completed = time.Now().UnixMilli()
+	final.Info.Finish = "stop"
+	f.mu.Unlock()
+	reconciled := awaitExecution(t, client, x.ID, "completed")
+	if reconciled.ReconciledAt == nil || reconciled.MessageID != x.MessageID {
+		t.Fatal("lost reply did not reconcile existing execution")
+	}
+}
+
+func monitorStopped(t *testing.T, m *execution.Manager, id string) execution.Execution {
+	t.Helper()
+	end := time.Now().Add(time.Second)
+	for time.Now().Before(end) {
+		x, err := m.Snapshot(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x.MonitorEndedAt != nil {
+			return x
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("bounded fixture monitor did not stop")
+	return execution.Execution{}
+}
+
+func TestSDKLateCompletionReconciliation(t *testing.T) {
+	client, f, bridge, _ := integrationTiming(t, false, true, 30*time.Millisecond)
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "sdk-late-key"}
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	expired := monitorStopped(t, bridge.Runs, x.ID)
+	if expired.State != "unknown" || expired.Unresolved == nil || expired.Unresolved.Reason != "MONITOR_EXPIRED" {
+		t.Fatal(expired)
+	}
+	unknown := decode[execution.Execution](t, invoke(t, client, "get_execution_status", ExecutionInput{x.ID}, false))
+	if unknown.State != "unknown" || unknown.Unresolved.LastCheckedAt == nil {
+		t.Fatal(unknown)
+	}
+	replay := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	if replay.ID != x.ID || replay.MessageID != x.MessageID {
+		t.Fatal("late replay changed IDs")
+	}
+	another := input
+	another.IdempotencyKey = "sdk-next-key"
+	if e := decode[execution.Error](t, invoke(t, client, "send_prompt", another, true)); e.Code != "SESSION_BUSY" {
+		t.Fatal(e)
+	}
+	f.mu.Lock()
+	f.finish = true
+	last := &f.messages[len(f.messages)-1]
+	last.Info.Time.Completed = time.Now().UnixMilli()
+	last.Info.Finish = "stop"
+	f.mu.Unlock()
+	done := awaitExecution(t, client, x.ID, "completed")
+	result := decode[Result](t, invoke(t, client, "get_execution_result", ExecutionInput{x.ID}, false))
+	if done.ReconciledAt == nil || done.Unresolved != nil || len(result.Messages) != 2 || result.Execution.ID != x.ID || result.Messages[1].Info.ParentID != x.MessageID {
+		t.Fatal(done, result.Execution)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 || f.aborts != 0 {
+		t.Fatal(f.posts, f.aborts)
+	}
+}
+
+func TestSDKReconciliationAuthorizationAndOriginalWorkspace(t *testing.T) {
+	client, f, bridge, _ := integrationTiming(t, false, false, 30*time.Millisecond)
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", PromptInput{"opencode:ses_existing", "fixture", "workspace-key"}, false))
+	monitorStopped(t, bridge.Runs, x.ID)
+	// A different path still WITHIN the same allowed root must not be accepted as
+	// the original execution workspace. Native probing must follow authorization.
+	moved := filepath.Join(f.root, "moved")
+	if err := os.Mkdir(moved, 0700); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.root = moved
+	reads, statuses := f.historyReads, f.statusReads
+	f.mu.Unlock()
+	for _, name := range []string{"get_execution_status", "get_execution_result", "interrupt_execution"} {
+		failure := decode[execution.Error](t, invoke(t, client, name, ExecutionInput{x.ID}, true))
+		if failure.Code != "FORBIDDEN" {
+			t.Fatal(failure)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.historyReads != reads || f.statusReads != statuses || f.aborts != 0 || f.posts != 1 {
+		t.Fatal("native probe ran before original-workspace authorization")
+	}
 }
