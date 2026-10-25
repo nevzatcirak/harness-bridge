@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,13 +23,14 @@ import (
 )
 
 type nativeFixture struct {
-	mu              sync.Mutex
-	root            string
-	messages        []opencode.Message
-	posts, aborts   int
-	finish          bool
-	loseReply       bool
-	block, canceled chan struct{}
+	mu                        sync.Mutex
+	root                      string
+	messages                  []opencode.Message
+	posts, aborts             int
+	historyReads, statusReads int
+	finish                    bool
+	loseReply                 bool
+	block, canceled           chan struct{}
 }
 
 func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +50,7 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/session/ses_existing":
 		_ = json.NewEncoder(w).Encode(opencode.Session{ID: "ses_existing", Directory: f.root, Title: "existing fixture"})
 	case "/session/status":
+		f.statusReads++
 		status := "idle"
 		if len(f.messages) > 1 && !f.finish {
 			status = "busy"
@@ -55,6 +59,7 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/permission":
 		_, _ = w.Write([]byte(`[]`))
 	case "/session/ses_existing/message":
+		f.historyReads++
 		_ = json.NewEncoder(w).Encode(f.messages)
 	case "/session/ses_existing/prompt_async":
 		var in struct {
@@ -103,6 +108,9 @@ func integration(t *testing.T, finish bool) (*sdk.ClientSession, *nativeFixture,
 	return integrationMode(t, finish, false)
 }
 func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *nativeFixture, *Server, string) {
+	return integrationTiming(t, finish, remote, 3*time.Second)
+}
+func integrationTiming(t *testing.T, finish, remote bool, timeout time.Duration) (*sdk.ClientSession, *nativeFixture, *Server, string) {
 	t.Helper()
 	f := &nativeFixture{root: t.TempDir(), finish: finish, block: make(chan struct{}), canceled: make(chan struct{}), messages: []opencode.Message{{Parts: []json.RawMessage{}}}}
 	f.messages[0].Info.ID = "msg_seed"
@@ -118,7 +126,7 @@ func integrationMode(t *testing.T, finish, remote bool) (*sdk.ClientSession, *na
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := execution.NewWithTiming(c, time.Second*3, time.Millisecond*5)
+	runs := execution.NewWithTiming(c, timeout, time.Millisecond*5)
 	t.Cleanup(runs.Close)
 	bridge := &Server{Client: c, Runs: runs, Policy: p, Token: strings.Repeat("t", 32)}
 	httpServer := httptest.NewUnstartedServer(bridge)
@@ -526,7 +534,7 @@ func TestSDKConcurrentSingleWriter(t *testing.T) {
 }
 
 func TestSDKLostNativeReplyNeverResubmits(t *testing.T) {
-	client, f, _, _ := integration(t, true)
+	client, f, _, _ := integration(t, false)
 	f.mu.Lock()
 	f.loseReply = true
 	f.mu.Unlock()
@@ -543,8 +551,100 @@ func TestSDKLostNativeReplyNeverResubmits(t *testing.T) {
 		t.Fatal(failure)
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.posts != 1 {
-		t.Fatal("native POST replayed", f.posts)
+		f.mu.Unlock()
+		t.Fatal("native POST replayed")
+	}
+	f.finish = true
+	final := &f.messages[len(f.messages)-1]
+	final.Info.Time.Completed = time.Now().UnixMilli()
+	final.Info.Finish = "stop"
+	f.mu.Unlock()
+	reconciled := awaitExecution(t, client, x.ID, "completed")
+	if reconciled.ReconciledAt == nil || reconciled.MessageID != x.MessageID {
+		t.Fatal("lost reply did not reconcile existing execution")
+	}
+}
+
+func monitorStopped(t *testing.T, m *execution.Manager, id string) execution.Execution {
+	t.Helper()
+	end := time.Now().Add(time.Second)
+	for time.Now().Before(end) {
+		x, err := m.Snapshot(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x.MonitorEndedAt != nil {
+			return x
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("bounded fixture monitor did not stop")
+	return execution.Execution{}
+}
+
+func TestSDKLateCompletionReconciliation(t *testing.T) {
+	client, f, bridge, _ := integrationTiming(t, false, true, 30*time.Millisecond)
+	input := PromptInput{"opencode:ses_existing", "fixture prompt", "sdk-late-key"}
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	expired := monitorStopped(t, bridge.Runs, x.ID)
+	if expired.State != "unknown" || expired.Unresolved == nil || expired.Unresolved.Reason != "MONITOR_EXPIRED" {
+		t.Fatal(expired)
+	}
+	unknown := decode[execution.Execution](t, invoke(t, client, "get_execution_status", ExecutionInput{x.ID}, false))
+	if unknown.State != "unknown" || unknown.Unresolved.LastCheckedAt == nil {
+		t.Fatal(unknown)
+	}
+	replay := decode[execution.Execution](t, invoke(t, client, "send_prompt", input, false))
+	if replay.ID != x.ID || replay.MessageID != x.MessageID {
+		t.Fatal("late replay changed IDs")
+	}
+	another := input
+	another.IdempotencyKey = "sdk-next-key"
+	if e := decode[execution.Error](t, invoke(t, client, "send_prompt", another, true)); e.Code != "SESSION_BUSY" {
+		t.Fatal(e)
+	}
+	f.mu.Lock()
+	f.finish = true
+	last := &f.messages[len(f.messages)-1]
+	last.Info.Time.Completed = time.Now().UnixMilli()
+	last.Info.Finish = "stop"
+	f.mu.Unlock()
+	done := awaitExecution(t, client, x.ID, "completed")
+	result := decode[Result](t, invoke(t, client, "get_execution_result", ExecutionInput{x.ID}, false))
+	if done.ReconciledAt == nil || done.Unresolved != nil || len(result.Messages) != 2 || result.Execution.ID != x.ID || result.Messages[1].Info.ParentID != x.MessageID {
+		t.Fatal(done, result.Execution)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 1 || f.aborts != 0 {
+		t.Fatal(f.posts, f.aborts)
+	}
+}
+
+func TestSDKReconciliationAuthorizationAndOriginalWorkspace(t *testing.T) {
+	client, f, bridge, _ := integrationTiming(t, false, false, 30*time.Millisecond)
+	x := decode[execution.Execution](t, invoke(t, client, "send_prompt", PromptInput{"opencode:ses_existing", "fixture", "workspace-key"}, false))
+	monitorStopped(t, bridge.Runs, x.ID)
+	// A different path still WITHIN the same allowed root must not be accepted as
+	// the original execution workspace. Native probing must follow authorization.
+	moved := filepath.Join(f.root, "moved")
+	if err := os.Mkdir(moved, 0700); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.root = moved
+	reads, statuses := f.historyReads, f.statusReads
+	f.mu.Unlock()
+	for _, name := range []string{"get_execution_status", "get_execution_result", "interrupt_execution"} {
+		failure := decode[execution.Error](t, invoke(t, client, name, ExecutionInput{x.ID}, true))
+		if failure.Code != "FORBIDDEN" {
+			t.Fatal(failure)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.historyReads != reads || f.statusReads != statuses || f.aborts != 0 || f.posts != 1 {
+		t.Fatal("native probe ran before original-workspace authorization")
 	}
 }

@@ -85,6 +85,9 @@ func New(base, username, password string) (*Client, error) {
 	return &Client{base: u, http: &http.Client{Timeout: 10 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, username: username, password: password}, nil
 }
 
+// Directory is the immutable routing scope captured by the execution manager.
+func (c *Client) Directory() string { return c.directory }
+
 // WithDirectory routes every request to the native session's original workspace.
 func (c *Client) WithDirectory(directory string) *Client { v := *c; v.directory = directory; return &v }
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

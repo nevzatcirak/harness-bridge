@@ -149,3 +149,27 @@ Public ingress/auth success alone is not two-turn acceptance. An agent claiming
 its cwd is insufficient without native metadata/message-path comparison. If the
 result does not expose cwd or the provider fails, record that gap and stop; do
 not invent a success. Normal Chat is not a durable background supervisor.
+
+## ADR-011 acceptance amendment — requires fresh live-test approval
+
+For the candidate implementing late reconciliation, distinguish stop NEW
+submissions from stop the writer. After monitor expiry, keep the SAME approved
+writer lifetime and recorded IDs, and use get_execution_status/result for bounded
+read-only evidence gathering. Native work is never replayed. Use an explicitly
+approved overall observation budget (proposed 10min),2–5s polling, and bounded
+individual calls; do not treat the 300s monitor boundary as a native failure.
+A client disconnect may reconnect/read the same execution; no new key is needed.
+
+Require at least one controlled native execution to finish AFTER monitor expiry,
+then obtain completed status AND correlated result through that original process.
+Verify guard rejection while unresolved and one terminal promotion/guard release,
+with the same session/cwd/seed history and no duplicate native prompt. Synthetic
+virtual-clock tests prove the mechanism, not that a real provider will run late
+on demand. Never deliberately induce destructive work to manufacture delay.
+
+If native work finishes before expiry, record normal completion and do not claim
+a real late-reconciliation demonstration. If the approved overall budget expires,
+report unresolved and follow the separately approved recovery decision; preserve
+the guard/ledger. No restart/Abort, third prompt or permission approval is implied.
+The previous migration's two-prompt allowance is exhausted; a new real run needs
+explicit authorization. Current read-only deployment must stay unchanged here.

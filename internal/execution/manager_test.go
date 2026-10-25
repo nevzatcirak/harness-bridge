@@ -19,6 +19,12 @@ type fake struct {
 	entered, release                        chan struct{}
 }
 
+func (f *fake) Get(ctx context.Context, id string) (opencode.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return opencode.Session{}, err
+	}
+	return opencode.Session{ID: id, Directory: "/"}, nil
+}
 func (f *fake) History(context.Context, string) ([]opencode.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -46,10 +52,15 @@ func (f *fake) Permissions(context.Context) ([]opencode.Permission, error) {
 	}
 	return nil, nil
 }
-func (f *fake) Prompt(ctx context.Context, _, _, mid string) error {
+func (f *fake) Prompt(ctx context.Context, session, _, mid string) error {
 	f.mu.Lock()
 	f.sends++
 	f.mid = mid
+	user := opencode.Message{}
+	user.Info.ID = mid
+	user.Info.Role = "user"
+	user.Info.SessionID = session
+	f.messages = append(f.messages, user)
 	fail := f.fail
 	f.mu.Unlock()
 	if f.entered != nil {
@@ -125,11 +136,11 @@ func TestTwoTurnsCorrelationAndResults(t *testing.T) {
 			t.Fatal(done)
 		}
 		_, msgs, e := m.Result(ctx, x.ID)
-		if e != nil || len(msgs) != 2 {
+		if e != nil || len(msgs) != 3 {
 			t.Fatalf("result: %d %v", len(msgs), e)
 		}
 		for _, v := range msgs {
-			if v.Info.ParentID != x.MessageID {
+			if v.Info.Role == "assistant" && v.Info.ParentID != x.MessageID {
 				t.Fatal("unrelated result")
 			}
 		}

@@ -102,3 +102,11 @@ After separate explicit migration approval:
 
 None of these service changes is performed by this development task. Public
 routing requires its own Approval B. Locking does not grant write/public access.
+
+## Lifecycle follow-up (2026-10-25)
+
+[ADR-011](ADR-011-late-completion.md) supersedes the frozen-read limitation within
+a still-running manager: known unresolved submissions can be reconciled by bounded
+status/result reads, without resubmission. Background workers still stop on their
+budget; host ownership, the one-writer deployment decision and memory-only restart
+limitations above remain unchanged. No new live migration was performed.

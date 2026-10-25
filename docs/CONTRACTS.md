@@ -154,3 +154,58 @@ interrupt_execution remains authenticated/session-authorized and is forbidden
 on read-only instances. See ADR-010 for required host ownership configuration,
 nonparticipating native clients and lost restart state. Never interpret a fresh
 process's NOT_FOUND as proof that an earlier prompt was not submitted.
+
+## H3 late-completion contract (ADR-011)
+
+This section supersedes the old frozen-snapshot behavior after monitoring ends.
+Tools and input schemas remain unchanged. Only an existing in-memory execution
+can be reconciled; there is no arbitrary message-ID recovery/import endpoint.
+
+Optional additive `Execution` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `unresolved.reason` | `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`, `OBSERVATION_UNAVAILABLE`, `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH` or `MANAGER_CLOSED` |
+| `unresolved.since` | UTC time the currently retained uncertainty cause began |
+| `unresolved.last_checked_at` | Most recent on-demand evidence attempt, including inconclusive/unavailable reads |
+| `monitor_ended_at` | UTC time the bounded background worker exited; never native completion proof |
+| `reconciled_at` | UTC time terminal evidence was committed by an on-demand read or explicit-interrupt evidence check |
+
+`unknown` is nonterminal; `ended_at` remains absent without proof. Background
+expiry preserves IDs, idempotency and busy guard. Subsequent status/result reads
+may promote the SAME execution to completed/failed/interrupted after original
+session/workspace/user/assistant-parent/positive-completed-time/final-finish-or-
+named-error proof, no correlated unfinished assistant and no pending permission.
+A missing native status is acceptable ONLY with that full terminal evidence.
+Pending permission remains waiting_for_permission and cannot release the guard.
+
+The original unresolved reason/since are retained while late checks remain
+inconclusive; the error string gives a sanitized current explanation. Identity
+violations return typed FORBIDDEN, never native content. Metadata/permission
+read failures cannot establish success or authorize an Abort. Once proven
+terminal, clear unresolved and preserve the final snapshot without re-probing.
+`ended_at` is now the native completion time, not the time Bridge happened to
+observe it; `updated_at` / `reconciled_at` distinguish observation time. This
+semantic clarification matters to clients measuring durations or detection lag.
+
+Reconciliation happens AFTER current MCP session/root authorization and original
+workspace validation. `Snapshot` is an internal local-only lookup, not a new MCP
+tool. Status/result no longer necessarily have zero upstream latency: one probe
+is bounded to 5s including global-slot/per-run-gate waits, or a shorter caller
+deadline. MCP's preceding authorization metadata request retains the adapter's
+10s bound. Concurrent reads coalesce; completed attempts have the poll-interval
+cooldown (default 500ms). At most 4 on-demand probes run per manager; at most one
+native observation/Abort operation runs for each execution. Queue/request timeout
+may return a tool error; it neither releases the guard nor retries Prompt.
+
+The background monitor remains 300s/default 500ms. No perpetual reconciliation loop
+is created: another bounded attempt requires another read call. Cancelled client
+reads cannot cancel accepted native work; Close cancels/joins monitors/probes.
+Explicit interruption still requires the authenticated authorized tool, preserves
+abort-acknowledgement semantics, and refuses already proven terminal executions.
+No automatic permission/interrupt action is added. Native compare-and-abort is
+not atomic against nonparticipating direct native clients.
+
+Restart still loses IDs/keys/results; NOT_FOUND after restart is not proof of
+non-delivery or successful completion. Reconcile native history using the private
+operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 specify.

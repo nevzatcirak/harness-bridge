@@ -6,8 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,15 +17,13 @@ import (
 )
 
 type Runner interface {
+	Get(context.Context, string) (opencode.Session, error)
+	Permissions(context.Context) ([]opencode.Permission, error)
 	History(context.Context, string) ([]opencode.Message, error)
 	Status(context.Context) (map[string]opencode.Status, error)
 	Prompt(context.Context, string, string, string) error
 	Abort(context.Context, string) error
 }
-type permissionReader interface {
-	Permissions(context.Context) ([]opencode.Permission, error)
-}
-
 type Error struct {
 	Code        string `json:"code"`
 	Message     string `json:"message"`
@@ -36,23 +34,40 @@ type Error struct {
 func (e *Error) Error() string        { return e.Code + ": " + e.Message }
 func Fail(code, message string) error { return &Error{Code: code, Message: message} }
 
+// Unresolved describes an outcome requiring evidence, never a native failure.
+type Unresolved struct {
+	Reason        string     `json:"reason"`
+	Since         time.Time  `json:"since"`
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+}
+
 type Execution struct {
-	ID        string     `json:"execution_id"`
-	SessionID string     `json:"session_id"`
-	MessageID string     `json:"message_id"`
-	State     string     `json:"state"`
-	Error     string     `json:"error,omitempty"`
-	Started   time.Time  `json:"started_at"`
-	Updated   time.Time  `json:"updated_at"`
-	Ended     *time.Time `json:"ended_at,omitempty"`
+	ID             string      `json:"execution_id"`
+	SessionID      string      `json:"session_id"`
+	MessageID      string      `json:"message_id"`
+	State          string      `json:"state"`
+	Error          string      `json:"error,omitempty"`
+	Started        time.Time   `json:"started_at"`
+	Updated        time.Time   `json:"updated_at"`
+	Ended          *time.Time  `json:"ended_at,omitempty"`
+	Unresolved     *Unresolved `json:"unresolved,omitempty"`
+	MonitorEndedAt *time.Time  `json:"monitor_ended_at,omitempty"`
+	ReconciledAt   *time.Time  `json:"reconciled_at,omitempty"`
 }
 type run struct {
-	mu             sync.Mutex
-	view           Execution
-	native         string
-	runner         Runner
-	messages       []opencode.Message
-	abortRequested bool
+	mu                            sync.Mutex
+	view                          Execution
+	native                        string
+	runner                        Runner
+	messages                      []opencode.Message
+	abortRequested                bool
+	op                            chan struct{}
+	monitorDone                   bool
+	directory, canonicalDirectory string
+	flight                        *reconciliation
+	nextProbe                     time.Time
+	probeError                    error
+	observationValid              bool
 }
 type Manager struct {
 	mu                sync.Mutex
@@ -67,14 +82,35 @@ type Manager struct {
 	wg                sync.WaitGroup
 	timeout, interval time.Duration
 	closed            bool
+	reconcileTimeout  time.Duration
+	reconcileSlots    chan struct{}
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4)}
 }
-func (m *Manager) Close() { m.mu.Lock(); m.closed = true; m.cancel(); m.mu.Unlock(); m.wg.Wait() }
+func (m *Manager) Close() {
+	m.mu.Lock()
+	m.closed = true
+	m.cancel()
+	m.mu.Unlock()
+	m.wg.Wait()
+	m.mu.Lock()
+	runs := make([]*run, 0, len(m.runs))
+	for _, x := range m.runs {
+		runs = append(runs, x)
+	}
+	m.mu.Unlock()
+	for _, x := range runs {
+		x.mu.Lock()
+		if !terminal(x.view.State) {
+			unresolved(x, "MANAGER_CLOSED", "bridge shutdown; native work may continue", time.Now().UTC(), false)
+		}
+		x.mu.Unlock()
+	}
+}
 func token() string {
 	var b [16]byte
 	if _, e := rand.Read(b[:]); e != nil {
@@ -126,9 +162,12 @@ retry:
 		}
 		x := m.runs[id]
 		m.mu.Unlock()
+		if scoped, ok := r.(directoryScoped); ok && x.directory != "" && scoped.Directory() != "" && scoped.Directory() != x.directory {
+			return Execution{}, Fail("FORBIDDEN", "execution workspace changed")
+		}
 		x.mu.Lock()
 		defer x.mu.Unlock()
-		return x.view, nil
+		return snapshot(x.view), nil
 	}
 	if pending, ok := m.pending[k]; ok {
 		if m.fingerprints[k] != hash {
@@ -170,6 +209,30 @@ retry:
 		}
 		m.mu.Unlock()
 	}
+	directory, canonical := "", ""
+	{
+		reader := r
+		meta, err := reader.Get(ctx, session)
+		if err != nil {
+			release()
+			return Execution{}, err
+		}
+		if meta.ID != session || !filepath.IsAbs(meta.Directory) {
+			release()
+			return Execution{}, Fail("FORBIDDEN", "native session identity mismatch")
+		}
+		directory = meta.Directory
+		if scoped, ok := r.(directoryScoped); ok && scoped.Directory() != "" && scoped.Directory() != directory {
+			release()
+			return Execution{}, Fail("FORBIDDEN", "native workspace changed")
+		}
+		resolved, err := filepath.EvalSymlinks(directory)
+		if err != nil {
+			release()
+			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
+		}
+		canonical = resolved
+	}
 	statuses, err := r.Status(ctx)
 	if err != nil {
 		release()
@@ -185,12 +248,13 @@ retry:
 		return Execution{}, err
 	}
 	for _, msg := range history {
-		if msg.Info.Role == "assistant" && msg.Info.Time.Completed == 0 {
+		if msg.Info.Role == "assistant" && msg.Info.Time.Completed <= 0 {
 			release()
 			return Execution{}, Fail("SESSION_BUSY", "unfinished native assistant message")
 		}
 	}
-	if p, ok := r.(permissionReader); ok {
+	{
+		p := r
 		permissions, e := p.Permissions(ctx)
 		if e != nil {
 			release()
@@ -208,7 +272,7 @@ retry:
 		return Execution{}, err
 	}
 	now := time.Now().UTC()
-	x := &run{native: session, runner: r, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
+	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -220,7 +284,7 @@ retry:
 	m.fingerprints[k] = hash
 	m.wg.Add(1)
 	m.mu.Unlock()
-	initial := x.view
+	initial := snapshot(x.view)
 	go m.work(x, prompt)
 	return initial, nil
 }
@@ -228,12 +292,20 @@ func (m *Manager) work(x *run, prompt string) {
 	defer m.wg.Done()
 	ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
 	defer cancel()
-	// The caller disconnecting after acceptance must not cancel a submitted native prompt.
+	defer func() {
+		x.mu.Lock()
+		defer x.mu.Unlock()
+		now := time.Now().UTC()
+		x.monitorDone = true
+		x.view.MonitorEndedAt = &now
+		if !terminal(x.view.State) && m.ctx.Err() != nil {
+			unresolved(x, "MANAGER_CLOSED", "bridge shutdown; native work may continue", now, false)
+		}
+	}()
+	// Accepted work is detached from the caller. No retry of Prompt, even on timeout.
 	if err := x.runner.Prompt(ctx, x.native, prompt, x.view.MessageID); err != nil {
 		x.mu.Lock()
-		x.view.State = "unknown"
-		x.view.Error = "UNKNOWN_OUTCOME: submission not confirmed; never retry blindly"
-		x.view.Updated = time.Now().UTC()
+		unresolved(x, "SUBMISSION_UNCONFIRMED", "submission not confirmed; never replay blindly", time.Now().UTC(), false)
 		x.mu.Unlock()
 		return
 	}
@@ -250,111 +322,25 @@ func (m *Manager) work(x *run, prompt string) {
 		select {
 		case <-ctx.Done():
 			x.mu.Lock()
-			x.view.State = "unknown"
-			x.view.Error = "UNKNOWN_OUTCOME: monitor timeout or bridge shutdown; native execution may continue"
-			x.view.Updated = time.Now().UTC()
+			if !terminal(x.view.State) {
+				unresolved(x, "MONITOR_EXPIRED", "background monitor expired; native work may continue", time.Now().UTC(), false)
+			}
 			x.mu.Unlock()
 			return
 		case <-ticker.C:
 		}
 	}
 }
+
 func (m *Manager) observe(ctx context.Context, x *run) bool {
-	statuses, err := x.runner.Status(ctx)
-	if err != nil {
-		x.mu.Lock()
-		defer x.mu.Unlock()
-		x.view.State = "unknown"
-		x.view.Error = "UPSTREAM_FAILURE: status unavailable"
-		x.view.Updated = time.Now().UTC()
+	if err := take(ctx, x.op); err != nil {
 		return false
 	}
-	msgs, err := x.runner.History(ctx, x.native)
-	if err != nil {
-		x.mu.Lock()
-		defer x.mu.Unlock()
-		x.view.State = "unknown"
-		x.view.Error = "UPSTREAM_FAILURE: history unavailable"
-		x.view.Updated = time.Now().UTC()
-		return false
-	}
-	var permissions []opencode.Permission
-	var permissionErr error
-	if p, ok := x.runner.(permissionReader); ok {
-		permissions, permissionErr = p.Permissions(ctx)
-	}
+	defer give(x.op)
+	_ = m.probe(ctx, x, false)
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.messages = nil
-	for _, msg := range msgs {
-		if msg.Info.SessionID != x.native {
-			continue
-		}
-		if msg.Info.ID == x.view.MessageID && msg.Info.Role == "user" || msg.Info.ParentID == x.view.MessageID && msg.Info.Role == "assistant" {
-			x.messages = append(x.messages, msg)
-		}
-	}
-	x.view.State = "running"
-	x.view.Error = ""
-	x.view.Updated = time.Now().UTC()
-	status, exists := statuses[x.native]
-	for _, msg := range x.messages {
-		if msg.Info.Role != "assistant" || msg.Info.Time.Completed == 0 {
-			continue
-		}
-		state := ""
-		if len(msg.Info.Error) > 0 && string(msg.Info.Error) != "null" {
-			state = "failed"
-			var v struct {
-				Name string `json:"name"`
-			}
-			_ = json.Unmarshal(msg.Info.Error, &v)
-			if v.Name == "MessageAbortedError" {
-				state = "interrupted"
-			}
-		}
-		if msg.Info.Finish == "stop" || msg.Info.Finish == "end_turn" {
-			if state == "" {
-				state = "completed"
-			}
-		}
-		// A tool-calls finish is only an intermediate assistant message.
-		if state != "" && (!exists || status.Type == "idle") {
-			x.view.State = state
-			now := time.Now().UTC()
-			x.view.Ended = &now
-			if state == "failed" {
-				x.view.Error = "UPSTREAM_FAILURE: correlated assistant error (inspect result)"
-			}
-			m.mu.Lock()
-			if m.busy[x.native] == x.view.ID {
-				delete(m.busy, x.native)
-			}
-			m.mu.Unlock()
-			return true
-		}
-	}
-	if _, ok := x.runner.(permissionReader); ok {
-		if permissionErr != nil {
-			x.view.State = "unknown"
-			x.view.Error = "UPSTREAM_FAILURE: permissions unavailable"
-		} else {
-			for _, p := range permissions {
-				if p.SessionID == x.native {
-					x.view.State = "waiting_for_permission"
-					return false
-				}
-			}
-		}
-	}
-	if !exists {
-		x.view.State = "unknown"
-		x.view.Error = "UNKNOWN_OUTCOME: native status absent without terminal message"
-	} else if status.Type != "idle" && status.Type != "busy" && status.Type != "retry" {
-		x.view.State = "unknown"
-		x.view.Error = "UNKNOWN_OUTCOME: unsupported native status"
-	}
-	return false
+	return terminal(x.view.State)
 }
 func (m *Manager) find(id string) (*run, error) {
 	m.mu.Lock()
@@ -365,52 +351,112 @@ func (m *Manager) find(id string) (*run, error) {
 	}
 	return x, nil
 }
-func (m *Manager) Get(ctx context.Context, id string) (Execution, error) {
-	if e := ctx.Err(); e != nil {
-		return Execution{}, e
+
+// Snapshot never calls the native API. MCP uses it to authorize BEFORE reconciliation.
+func (m *Manager) Snapshot(ctx context.Context, id string) (Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return Execution{}, err
 	}
-	x, e := m.find(id)
-	if e != nil {
-		return Execution{}, e
+	x, err := m.find(id)
+	if err != nil {
+		return Execution{}, err
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	return x.view, nil
+	return snapshot(x.view), nil
+}
+func (m *Manager) Get(ctx context.Context, id string) (Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return Execution{}, err
+	}
+	x, err := m.find(id)
+	if err != nil {
+		return Execution{}, err
+	}
+	if err = m.refresh(ctx, x); err != nil {
+		return Execution{}, err
+	}
+	return m.Snapshot(ctx, id)
 }
 func (m *Manager) Result(ctx context.Context, id string) (Execution, []opencode.Message, error) {
-	if e := ctx.Err(); e != nil {
-		return Execution{}, nil, e
+	if err := ctx.Err(); err != nil {
+		return Execution{}, nil, err
 	}
-	x, e := m.find(id)
-	if e != nil {
-		return Execution{}, nil, e
+	x, err := m.find(id)
+	if err != nil {
+		return Execution{}, nil, err
+	}
+	if err = m.refresh(ctx, x); err != nil {
+		return Execution{}, nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return Execution{}, nil, err
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	return x.view, append([]opencode.Message(nil), x.messages...), nil
+	return snapshot(x.view), copyMessages(x.messages), nil
 }
 func (m *Manager) Interrupt(ctx context.Context, id string) (Execution, error) {
-	x, e := m.find(id)
-	if e != nil {
-		return Execution{}, e
+	x, err := m.find(id)
+	if err != nil {
+		return Execution{}, err
+	}
+	if !m.beginRead() {
+		return Execution{}, Fail("UNKNOWN_OUTCOME", "manager closed")
+	}
+	defer m.wg.Done()
+	bounded, cancel := m.readContext(ctx)
+	defer cancel()
+	if err = take(bounded, m.reconcileSlots); err != nil {
+		return Execution{}, err
+	}
+	defer give(m.reconcileSlots)
+	if err = take(bounded, x.op); err != nil {
+		return Execution{}, err
+	}
+	defer give(x.op)
+	x.mu.Lock()
+	v := snapshot(x.view)
+	x.mu.Unlock()
+	if terminal(v.State) {
+		return v, Fail("INVALID_INPUT", "execution already terminal")
+	}
+	if v.State == "submitting" {
+		return v, Fail("SESSION_BUSY", "submission in progress; wait for acknowledgement")
+	}
+	// Serialize fresh evidence and explicit Abort with the monitor/reconciler.
+	// A newly proven terminal result must never be aborted by this request.
+	if err = m.probe(bounded, x, true); err != nil {
+		return Execution{}, err
+	}
+	x.mu.Lock()
+	if terminal(x.view.State) {
+		v := snapshot(x.view)
+		x.mu.Unlock()
+		return v, Fail("INVALID_INPUT", "execution already terminal")
+	}
+	if !x.observationValid {
+		v := snapshot(x.view)
+		x.mu.Unlock()
+		return v, Fail("UNKNOWN_OUTCOME", "native identity/state unavailable; interruption not submitted")
+	}
+	requested := x.abortRequested
+	x.mu.Unlock()
+	if err = bounded.Err(); err != nil {
+		return Execution{}, err
+	}
+	if !requested {
+		if err = x.runner.Abort(bounded, x.native); err != nil {
+			x.mu.Lock()
+			unresolved(x, "ABORT_UNCONFIRMED", "abort not confirmed", time.Now().UTC(), false)
+			v := snapshot(x.view)
+			x.mu.Unlock()
+			return v, err
+		}
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if terminal(x.view.State) {
-		return x.view, Fail("INVALID_INPUT", "execution already terminal")
-	}
-	if x.view.State == "submitting" {
-		return x.view, Fail("SESSION_BUSY", "submission in progress; retry interruption after acknowledgement")
-	}
-	// Abort acknowledgement is not completion; keep the guard until correlated terminal proof.
-	if !x.abortRequested {
-		if e = x.runner.Abort(ctx, x.native); e != nil {
-			x.view.State = "unknown"
-			x.view.Error = "UNKNOWN_OUTCOME: abort not confirmed"
-			return x.view, e
-		}
-		x.abortRequested = true
-	}
+	x.abortRequested = true
 	x.view.Updated = time.Now().UTC()
-	return x.view, nil
+	return snapshot(x.view), nil
 }

@@ -76,3 +76,14 @@ local/remote mutations; other ingress remains read-only. Linux advisory session
 locks exclude cooperating updated writers on the same host/shared directory.
 Idempotency, uncertainty guards and execution mappings remain process-local;
 restart requires operator reconciliation. No deployment changes are implied.
+
+## ADR-011 — bounded late-completion reconciliation
+
+[Decision](adr/ADR-011-late-completion.md): retain the 300s background budget but
+allow authorized status/result reads to reconcile a known unresolved execution.
+Per-run serialization/coalescing,5s request probes, four manager-wide slots and
+poll-interval cooldown bound the work. Only exact native terminal correlation
+releases the busy guard. Workspace identity and permissions fail closed. Terminal
+snapshots are immutable; client cancellation is distinct from native Abort.
+No durable recovery or new infrastructure; restart remains an operator boundary.
+See [implementation/test evidence](H3_LATE_COMPLETION_EVIDENCE.md).

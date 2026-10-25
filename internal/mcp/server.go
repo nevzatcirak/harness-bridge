@@ -105,7 +105,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 		slog.Info("prompt submission", "accepted", e == nil)
 		return x, e
 	case "get_execution_status", "get_execution_result", "interrupt_execution":
-		x, e := s.Runs.Get(ctx, a.ExecutionID)
+		x, e := s.Runs.Snapshot(ctx, a.ExecutionID)
 		if e != nil {
 			return nil, e
 		}
@@ -113,11 +113,15 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 		if e != nil {
 			return nil, e
 		}
-		if _, _, e = s.authorized(ctx, id); e != nil {
+		meta, _, e := s.authorized(ctx, id)
+		if e != nil {
+			return nil, e
+		}
+		if e = s.Runs.ValidateSession(a.ExecutionID, meta); e != nil {
 			return nil, e
 		}
 		if name == "get_execution_status" {
-			return x, nil
+			return s.Runs.Get(ctx, a.ExecutionID)
 		}
 		if name == "get_execution_result" {
 			x, msgs, e := s.Runs.Result(ctx, a.ExecutionID)
