@@ -49,6 +49,10 @@ func (f *nativeFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/session/ses_existing":
 		_ = json.NewEncoder(w).Encode(opencode.Session{ID: "ses_existing", Directory: f.root, Title: "existing fixture"})
+	case "/agent":
+		_, _ = w.Write([]byte(`[{"name":"build","mode":"primary"},{"name":"general","mode":"subagent"}]`))
+	case "/doc":
+		_, _ = w.Write([]byte(`{"paths":{"/session":{"post":{}},"/session/{sessionID}/children":{"get":{}}}}`))
 	case "/session/status":
 		f.statusReads++
 		status := "idle"
@@ -202,8 +206,17 @@ func testSDKContinuation(t *testing.T, remote bool) {
 		t.Fatal(v)
 	}
 	tools, err := client.ListTools(context.Background(), nil)
-	if err != nil || len(tools.Tools) != 7 {
+	if err != nil || len(tools.Tools) != 11 {
 		t.Fatal(tools, err)
+	}
+	names := map[string]bool{}
+	for _, tool := range tools.Tools {
+		names[tool.Name] = true
+	}
+	for _, name := range []string{"list_sessions", "get_session", "read_session_history", "send_prompt", "get_execution_status", "get_execution_result", "interrupt_execution"} {
+		if !names[name] {
+			t.Fatalf("legacy tool removed: %s", name)
+		}
 	}
 	schemas := map[string]*jsonschema.Resolved{}
 	for _, tool := range tools.Tools {
@@ -458,7 +471,7 @@ func TestSDKReadOnlyStaging(t *testing.T) {
 	}
 	defer client.Close()
 	tools, err := client.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 7 {
+	if err != nil || len(tools.Tools) != 11 {
 		t.Fatal("tool surface changed", err)
 	}
 	for _, name := range []string{"get_session", "read_session_history"} {
@@ -647,4 +660,36 @@ func TestSDKReconciliationAuthorizationAndOriginalWorkspace(t *testing.T) {
 	if f.historyReads != reads || f.statusReads != statuses || f.aborts != 0 || f.posts != 1 {
 		t.Fatal("native probe ran before original-workspace authorization")
 	}
+}
+
+func TestSDKDiscoveryAdditions(t *testing.T) {
+	_, f, bridge, _ := integration(t, true)
+	policy, e := security.New([]string{f.root}, []string{"ses_existing"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	staged := &Server{Client: bridge.Client, Runs: bridge.Runs, Token: bridge.Token, Policy: policy, ReadOnly: true}
+	ts := httptest.NewServer(staged)
+	defer ts.Close()
+	client, e := mcpclient.Connect(context.Background(), ts.URL, staged.Token)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer client.Close()
+	if client.InitializeResult().Instructions == "" {
+		t.Fatal("missing delegation guidance")
+	}
+	for _, tc := range []struct {
+		name string
+		in   any
+	}{
+		{"list_repositories", EmptyInput{}},
+		{"find_sessions", FindInput{Limit: 1}},
+		{"get_harness_capabilities", SessionInput{"opencode:ses_existing"}},
+	} {
+		invoke(t, client, tc.name, tc.in, false)
+	}
+	invoke(t, client, "find_sessions", FindInput{Limit: 201}, true)
+	invoke(t, client, "get_repository", RepositoryInput{"repo:invisible"}, true)
+	invoke(t, client, "get_harness_capabilities", SessionInput{"opencode:ses_denied"}, true)
 }

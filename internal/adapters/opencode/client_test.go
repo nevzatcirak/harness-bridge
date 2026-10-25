@@ -146,3 +146,51 @@ func TestTimeoutDisconnectAndAbortRejection(t *testing.T) {
 		t.Fatal("disconnect accepted")
 	}
 }
+
+// Fixture semantics mirror the installed 1.19.4 observation; the adapter must
+// preserve each native page's sequence and forward its opaque cursor unchanged.
+func TestHistoryPageOrderingAndLegacy(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/session/ses_existing/message" || r.URL.Query().Get("directory") != "/approved" {
+			t.Errorf("unexpected request: %s", r.URL)
+			w.WriteHeader(400)
+			return
+		}
+		switch r.URL.Query().Get("limit") {
+		case "":
+			if r.URL.Query().Get("before") != "" {
+				t.Error("legacy query changed")
+			}
+			w.Write([]byte(`[{"info":{"id":"msg_old","time":{"created":1}},"parts":[]},{"info":{"id":"msg_new","time":{"created":2}},"parts":[]}]`))
+		case "2":
+			if r.URL.Query().Get("before") == "" {
+				w.Header().Set("X-Next-Cursor", "opaque_cursor")
+				w.Write([]byte(`[{"info":{"id":"msg_later1","time":{"created":3}},"parts":[]},{"info":{"id":"msg_later2","time":{"created":4}},"parts":[]}]`))
+			} else if r.URL.Query().Get("before") == "opaque_cursor" {
+				w.Write([]byte(`[{"info":{"id":"msg_older1","time":{"created":1}},"parts":[]},{"info":{"id":"msg_older2","time":{"created":2}},"parts":[]}]`))
+			} else {
+				t.Error("cursor changed")
+			}
+		default:
+			w.Write([]byte(`[{"info":{"id":"msg_1"}},{"info":{"id":"msg_2"}}]`))
+		}
+	}))
+	defer up.Close()
+	c, _ := New(up.URL, "", "")
+	c = c.WithDirectory("/approved")
+	page, next, e := c.HistoryPage(context.Background(), "ses_existing", 2, "")
+	if e != nil || len(page) != 2 || page[0].Info.ID != "msg_later1" || next != "opaque_cursor" {
+		t.Fatal(page, next, e)
+	}
+	older, end, e := c.HistoryPage(context.Background(), "ses_existing", 2, next)
+	if e != nil || len(older) != 2 || end != "" || older[0].Info.Time.Created >= page[0].Info.Time.Created {
+		t.Fatal(older, end, e)
+	}
+	legacy, e := c.History(context.Background(), "ses_existing")
+	if e != nil || len(legacy) != 2 || legacy[0].Info.ID != "msg_old" {
+		t.Fatal(legacy, e)
+	}
+	if _, _, e := c.HistoryPage(context.Background(), "ses_existing", 1, ""); e == nil {
+		t.Fatal("oversized page accepted")
+	}
+}

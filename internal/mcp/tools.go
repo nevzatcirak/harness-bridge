@@ -9,6 +9,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/harness-bridge/internal/repository"
 )
 
 type EmptyInput struct{}
@@ -23,19 +24,32 @@ type PromptInput struct {
 	Prompt         string `json:"prompt"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
-type Session struct {
+type HistoryInput struct {
 	SessionID string `json:"session_id"`
-	NativeID  string `json:"native_id"`
-	Harness   string `json:"harness"`
-	Directory string `json:"directory"`
-	Title     string `json:"title"`
-	State     string `json:"state"`
+	Limit     int    `json:"limit,omitempty"`
+	Before    string `json:"before,omitempty"`
+}
+type Session struct {
+	Repository        *repository.Repository `json:"repository,omitempty"`
+	Workspace         *repository.Workspace  `json:"workspace,omitempty"`
+	ParentSessionID   string                 `json:"parent_session_id,omitempty"`
+	HarnessInstanceID string                 `json:"harness_instance_id,omitempty"`
+	NativeProjectID   string                 `json:"native_project_id,omitempty"`
+	NativeWorkspaceID string                 `json:"native_workspace_id,omitempty"`
+	NativeState       string                 `json:"native_state,omitempty"`
+	SessionID         string                 `json:"session_id"`
+	NativeID          string                 `json:"native_id"`
+	Harness           string                 `json:"harness"`
+	Directory         string                 `json:"directory"`
+	Title             string                 `json:"title"`
+	State             string                 `json:"state"`
 }
 type Sessions struct {
 	Sessions []Session `json:"sessions"`
 }
 type History struct {
-	Messages []opencode.Message `json:"messages"`
+	NextCursor string             `json:"next_cursor,omitempty"`
+	Messages   []opencode.Message `json:"messages"`
 }
 type Result struct {
 	Execution execution.Execution `json:"execution"`

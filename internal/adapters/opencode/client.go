@@ -11,15 +11,20 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nevzatcirak/harness-bridge/internal/repository"
 )
 
 type Session struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Directory string `json:"directory"`
-	ProjectID string `json:"projectID"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Directory   string `json:"directory"`
+	ProjectID   string `json:"projectID"`
+	ParentID    string `json:"parentID,omitempty"`
+	WorkspaceID string `json:"workspaceID,omitempty"`
 }
 type MessageInfo struct {
 	ID        string          `json:"id"`
@@ -91,8 +96,15 @@ func (c *Client) Directory() string { return c.directory }
 // WithDirectory routes every request to the native session's original workspace.
 func (c *Client) WithDirectory(directory string) *Client { v := *c; v.directory = directory; return &v }
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	return c.doHeaders(ctx, method, path, body, out, nil)
+}
+func (c *Client) doHeaders(ctx context.Context, method, path string, body, out any, headers *http.Header) error {
 	u := *c.base
-	u.Path = path
+	parts := strings.SplitN(path, "?", 2)
+	u.Path = parts[0]
+	if len(parts) == 2 {
+		u.RawQuery = parts[1]
+	}
 	if c.directory != "" {
 		q := u.Query()
 		q.Set("directory", c.directory)
@@ -121,6 +133,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return errors.New("opencode transport unavailable or request canceled")
 	}
 	defer res.Body.Close()
+	if headers != nil {
+		*headers = res.Header.Clone()
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return &HTTPError{Status: res.StatusCode}
 	}
@@ -188,4 +203,51 @@ func (c *Client) Abort(ctx context.Context, id string) error {
 		return errors.New("abort rejected")
 	}
 	return nil
+}
+
+// InstanceID identifies the configured endpoint, not a verified process lifetime.
+func (c *Client) InstanceID() string { return repository.Identity("harness", c.base.String()) }
+
+type Agent struct {
+	Name   string `json:"name"`
+	Mode   string `json:"mode"`
+	Hidden bool   `json:"hidden,omitempty"`
+}
+
+func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
+	var a []Agent
+	e := c.do(ctx, "GET", "/agent", nil, &a)
+	return a, e
+}
+func (c *Client) Documented(ctx context.Context) (map[string]map[string]json.RawMessage, error) {
+	var d struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	e := c.do(ctx, "GET", "/doc", nil, &d)
+	return d.Paths, e
+}
+
+var cursorPattern = regexp.MustCompile(`^[A-Za-z0-9_=-]+$`)
+
+func ValidCursor(v string) bool { return len(v) <= 2048 && (v == "" || cursorPattern.MatchString(v)) }
+func (c *Client) HistoryPage(ctx context.Context, id string, limit int, before string) ([]Message, string, error) {
+	if !ValidID(id, "ses") || limit < 1 || limit > 200 || !ValidCursor(before) {
+		return nil, "", errors.New("invalid history page")
+	}
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(limit))
+	if before != "" {
+		q.Set("before", before)
+	}
+	var m []Message
+	var headers http.Header
+	e := c.doHeaders(ctx, "GET", "/session/"+id+"/message?"+q.Encode(), nil, &m, &headers)
+	if len(m) > limit {
+		return nil, "", errors.New("upstream ignored history bound")
+	}
+	next := headers.Get("X-Next-Cursor")
+	if !ValidCursor(next) {
+		return nil, "", errors.New("invalid upstream cursor")
+	}
+	return m, next, e
 }
