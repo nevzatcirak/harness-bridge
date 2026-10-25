@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -64,6 +65,7 @@ type run struct {
 	op                            chan struct{}
 	monitorDone                   bool
 	directory, canonicalDirectory string
+	workspace                     os.FileInfo
 	flight                        *reconciliation
 	nextProbe                     time.Time
 	probeError                    error
@@ -84,12 +86,13 @@ type Manager struct {
 	closed            bool
 	reconcileTimeout  time.Duration
 	reconcileSlots    chan struct{}
+	admissionSlots    chan struct{}
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4)}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4)}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -165,6 +168,9 @@ retry:
 		if scoped, ok := r.(directoryScoped); ok && x.directory != "" && scoped.Directory() != "" && scoped.Directory() != x.directory {
 			return Execution{}, Fail("FORBIDDEN", "execution workspace changed")
 		}
+		if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			return Execution{}, err
+		}
 		x.mu.Lock()
 		defer x.mu.Unlock()
 		return snapshot(x.view), nil
@@ -191,7 +197,13 @@ retry:
 	m.busy[session] = id
 	m.pending[k] = make(chan struct{})
 	m.fingerprints[k] = hash
+	// Admission is managed work too: Close cancels and joins native preflight
+	// reads before returning ownership to its caller. Add under the closed gate.
+	m.wg.Add(1)
 	m.mu.Unlock()
+	defer m.wg.Done()
+	ctx, cancel := m.readContext(ctx)
+	defer cancel()
 	// Wake same-key callers only after preflight has accepted or rejected.
 	defer func() {
 		m.mu.Lock()
@@ -209,7 +221,16 @@ retry:
 		}
 		m.mu.Unlock()
 	}
+	// Queueing consumes the same admission deadline; many distinct sessions must
+	// not create unbounded concurrent native preflights. Reconciliation has its
+	// own slots so admission cannot consume read-side recovery capacity.
+	if err := take(ctx, m.admissionSlots); err != nil {
+		release()
+		return Execution{}, err
+	}
+	defer give(m.admissionSlots)
 	directory, canonical := "", ""
+	var workspace os.FileInfo
 	{
 		reader := r
 		meta, err := reader.Get(ctx, session)
@@ -227,11 +248,16 @@ retry:
 			return Execution{}, Fail("FORBIDDEN", "native workspace changed")
 		}
 		resolved, err := filepath.EvalSymlinks(directory)
-		if err != nil {
+		if err != nil || resolved != directory || filepath.Clean(directory) != directory {
 			release()
 			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
 		}
 		canonical = resolved
+		workspace, err = os.Stat(canonical)
+		if err != nil || !workspace.IsDir() {
+			release()
+			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
+		}
 	}
 	statuses, err := r.Status(ctx)
 	if err != nil {
@@ -272,7 +298,7 @@ retry:
 		return Execution{}, err
 	}
 	now := time.Now().UTC()
-	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
+	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, workspace: workspace, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -302,6 +328,18 @@ func (m *Manager) work(x *run, prompt string) {
 			unresolved(x, "MANAGER_CLOSED", "bridge shutdown; native work may continue", now, false)
 		}
 	}()
+	// Recheck filesystem identity and routing immediately before submission. This
+	// detects observed replacements, not an atomic lease on native path lookup.
+	meta, err := x.runner.Get(ctx, x.native)
+	if err == nil {
+		err = validateSession(x, meta)
+	}
+	if err != nil || ctx.Err() != nil {
+		x.mu.Lock()
+		unresolved(x, "PRE_SUBMISSION_UNAVAILABLE", "accepted workspace/session could not be revalidated; prompt not submitted", time.Now().UTC(), false)
+		x.mu.Unlock()
+		return
+	}
 	// Accepted work is detached from the caller. No retry of Prompt, even on timeout.
 	if err := x.runner.Prompt(ctx, x.native, prompt, x.view.MessageID); err != nil {
 		x.mu.Lock()
@@ -446,6 +484,9 @@ func (m *Manager) Interrupt(ctx context.Context, id string) (Execution, error) {
 		return Execution{}, err
 	}
 	if !requested {
+		if err = validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			return Execution{}, err
+		}
 		if err = x.runner.Abort(bounded, x.native); err != nil {
 			x.mu.Lock()
 			unresolved(x, "ABORT_UNCONFIRMED", "abort not confirmed", time.Now().UTC(), false)

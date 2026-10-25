@@ -1,0 +1,74 @@
+{
+  "observed_at": "2026-10-25T22:56:26.202267+00:00",
+  "base_revision": "0b3c319c96b0da0f921d63e8be6e5b063c66b0fc",
+  "go": "go1.27.2 linux/arm64",
+  "scope": "synthetic fixtures; not live native mutations",
+  "checks": [
+    {
+      "check": "format",
+      "command": "test -z \"$(gofmt -l cmd internal tests/confinement/cmd)\"",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "build",
+      "command": "go build ./...",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "vet",
+      "command": "go vet ./...",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "unit_integration",
+      "command": "go test ./... -count=1",
+      "exit_code": 0,
+      "output": "ok  \tgithub.com/nevzatcirak/harness-bridge/cmd/bridge\t0.035s\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/mcpsmoke\t[no test files]\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/privatecheck\t[no test files]\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/smoke\t[no test files]\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/adapters/opencode\t0.119s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/execution\t0.507s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/mcp\t2.754s\n?   \tgithub.com/nevzatcirak/harness-bridge/internal/mcpclient\t[no test files]\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/repository\t0.384s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/security\t0.021s\n"
+    },
+    {
+      "check": "race",
+      "command": "go test -race ./... -count=1",
+      "exit_code": 0,
+      "output": "ok  \tgithub.com/nevzatcirak/harness-bridge/cmd/bridge\t1.108s\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/mcpsmoke\t[no test files]\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/privatecheck\t[no test files]\n?   \tgithub.com/nevzatcirak/harness-bridge/cmd/smoke\t[no test files]\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/adapters/opencode\t1.392s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/execution\t2.743s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/mcp\t7.682s\n?   \tgithub.com/nevzatcirak/harness-bridge/internal/mcpclient\t[no test files]\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/repository\t1.357s\nok  \tgithub.com/nevzatcirak/harness-bridge/internal/security\t1.049s\n"
+    },
+    {
+      "check": "confinement_build",
+      "command": "cd tests/confinement && go build ./...",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "confinement_vet",
+      "command": "cd tests/confinement && go vet ./...",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "confinement_unit",
+      "command": "cd tests/confinement && go test ./... -count=1",
+      "exit_code": 0,
+      "output": "ok  \tharness-bridge-confinement-fixture/cmd/fixture\t0.753s\n"
+    },
+    {
+      "check": "confinement_kernel_race",
+      "command": "cd tests/confinement && HB_CONFINEMENT_INTEGRATION=1 go test -race ./... -count=1 -v",
+      "exit_code": 0,
+      "output": "=== RUN   TestDirectHostRunRefused\n--- PASS: TestDirectHostRunRefused (0.60s)\n=== RUN   TestIsolatedKernelProfiles\n--- PASS: TestIsolatedKernelProfiles (0.91s)\nPASS\nok  \tharness-bridge-confinement-fixture/cmd/fixture\t2.541s\n"
+    },
+    {
+      "check": "kernel_json",
+      "command": "cd tests/confinement && ./run-fixture.sh > evidence/kernel-results.json",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "check": "diff_check",
+      "command": "git diff --check",
+      "exit_code": 0,
+      "output": ""
+    }
+  ]
+}

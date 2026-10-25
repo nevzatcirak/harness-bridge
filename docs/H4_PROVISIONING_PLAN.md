@@ -1,4 +1,9 @@
-# H4-B/C/D — Future implementation plan (not implemented or authorized)
+# H4-B/C/D — Provisioning plan (not implemented or authorized)
+
+The current H4-B continuation is a security gate before provisioning. ADR-014
+and H4_B_SECURITY_EVIDENCE.md describe implemented execution checks and synthetic
+confinement tests; they do not authorize or implement the creation/lifecycle
+operations below. Full native confinement acceptance remains blocked.
 
 H4-A only discovers existing ACL-authorized sessions. None of the operations below
 is registered as an MCP tool. No service or authorization changes are included.

@@ -125,3 +125,16 @@ bounded discovery request. Four workers/request and two admitted requests/server
 bound active discovery work; cancellation covers queueing. No atomic native
 snapshot or new write grant is claimed. See
 [review findings and acceptance procedure](H4_A_REVIEW_FIXES.md).
+
+## H4-B security gate (review candidate)
+
+[ADR-014](adr/ADR-014-workspace-evidence-and-admission.md) records observed workspace
+replacement rejection and bounded, cancelable/joined native admission. Static ACLs,
+original writer ownership and process-local idempotency remain authoritative.
+The [H4-B evidence](H4_B_SECURITY_EVIDENCE.md) distinguishes implemented checks
+from the independent rootfs fixture. The native process's filesystem authority is
+still a separate boundary: ProtectSystem=strict restricts writes, not host-data
+visibility. A rootfs allowlist also cannot isolate a same-UID tool from its own
+allowed secrets or reject a pre-imported hard link by pathname alone. Network
+compatibility preserves TCP attack/exfiltration paths. Do not classify these
+residuals as fixed, or enable provisioning/promotion on fixture results alone.
