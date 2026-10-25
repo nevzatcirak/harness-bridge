@@ -39,7 +39,7 @@ func (p *Policy) Allows(id, directory string) bool {
 		return false
 	}
 	real, e := filepath.EvalSymlinks(directory)
-	if e != nil {
+	if e != nil || filepath.Clean(directory) != directory || real != directory {
 		return false
 	}
 	for _, root := range p.Roots {

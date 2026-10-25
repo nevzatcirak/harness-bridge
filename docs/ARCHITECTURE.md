@@ -87,3 +87,36 @@ releases the busy guard. Workspace identity and permissions fail closed. Termina
 snapshots are immutable; client cancellation is distinct from native Abort.
 No durable recovery or new infrastructure; restart remains an operator boundary.
 See [implementation/test evidence](H3_LATE_COMPLETION_EVIDENCE.md).
+
+## H4-A — repository-aware discovery (feature branch, not deployed)
+
+[ADR-012](adr/ADR-012-repository-aware-session-registry.md) adds a read-through
+ACL-scoped repository/worktree registry and optional session metadata.
+[ADR-013](adr/ADR-013-native-subagent-delegation-guidance.md) adds live agent
+inventory and conditional native delegation guidance without a spawning API.
+[Audit and supported capabilities](H4_A_EVIDENCE.md) distinguish installed endpoint
+declarations from exercised behavior; [future provisioning](H4_PROVISIONING_PLAN.md)
+is design only. ADR-010/011 writer and reconciliation boundaries are retained.
+
+### H4 threat model additions
+
+Repository discovery cannot grant session access. A malicious native directory,
+Git pointer, project label, remote URL, parentID or client filter cannot expand
+operator roots/session ACLs. Reject symlink aliases and traversal, reauthorize
+parents separately, and omit repository fields unless Git root, common directory
+and Git directory are each inside approved roots. Never follow a history Link
+URL; forward only a bounded opaque cursor to the fixed local endpoint. Bounded
+Git output/time, response sizes, registry ACL size and pagination limit discovery
+costs; no shared mutable registry is introduced.
+
+Git metadata and native status remain untrusted observations. Read-only Git
+commands do not intentionally execute hooks/configured commands; the fixed system
+Git binary must be operator-trusted. Repository config and pointers may cause Git
+to read metadata before the resulting paths are checked; this is not filesystem
+sandboxing. Concurrent filesystem replacement (TOCTOU), privileged local users,
+malicious Git vulnerabilities, hostname/path reuse and endpoint replacement are
+not solved by path hashes. Run Bridge as a least-privilege UID with an OS sandbox
+and operator-protected roots; do not use these identities as a process-control
+capability. No new launch authority exists. Roots and ACL remain immutable during
+serving. Native status/permissions reads are non-atomic and cannot fence other
+native writers; explicit session execution evidence still follows ADR-010/011.

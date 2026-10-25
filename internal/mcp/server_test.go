@@ -31,6 +31,10 @@ func TestSessionACLHistoryAndDirectory(t *testing.T) {
 	historyCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/session/status":
+			w.Write([]byte(`{}`))
+		case "/permission":
+			w.Write([]byte(`[]`))
 		case "/session/ses_allowed":
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_allowed", Directory: root})
 		case "/session/ses_outside":

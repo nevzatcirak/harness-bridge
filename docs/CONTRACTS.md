@@ -209,3 +209,30 @@ not atomic against nonparticipating direct native clients.
 Restart still loses IDs/keys/results; NOT_FOUND after restart is not proof of
 non-delivery or successful completion. Reconcile native history using the private
 operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 specify.
+
+## H4-A additive discovery contracts (not deployed)
+
+- `list_repositories {}` -> `{repositories:[{repository_id,common_directory}]}`.
+- `get_repository {repository_id}` -> one visible repository; otherwise NOT_FOUND.
+- `find_sessions {repository_id?,workspace_id?,parent_session_id?,limit?,offset?}`
+  -> `{sessions:[],next_offset?}`. Default 50, limit <=200, offset <=1000; session-ID
+  order. Registry maximum 1000 ACL entries, 10s total deadline. Filters never grant
+  authority and cannot accept a client directory. Results can change between reads.
+- `get_harness_capabilities {session_id}` -> harness_instance_id, primary_agents,
+  subagents, native_delegation (`unknown`), child_session_inspection and
+  native_session_creation (installed endpoint declarations), bridge_session_creation
+  (`false`), evidence and conditional guidance. This tool requires session ACL and
+  workspace authorization before reading the native inventory/specification.
+- `read_session_history` retains session_id and messages; optional limit (1–200)
+  and before (opaque native cursor, <=2048 URL-safe characters) enable bounded
+  native pages; optional next_cursor comes from X-Next-Cursor. Omit both inputs
+  for old behavior. No promised numeric total, snapshot consistency or synthetic
+  cursor; an upstream server ignoring the limit fails closed.
+
+Session fields gain optional repository/workspace objects, parent_session_id,
+harness_instance_id, native_project_id, native_workspace_id, native_state. Existing
+required fields remain. Absent native state means unknown, never assumed idle.
+Parent links require separate authorization; unapproved children stay invisible.
+Repository/workspace hashes and endpoint IDs are metadata locators, not grants.
+Canonical path authorization now also rejects symlink aliases and unclean paths.
+See ADR-012/013 and H4_A_EVIDENCE for exact support and limitations.
