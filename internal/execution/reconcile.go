@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -68,8 +69,12 @@ func validateSession(x *run, meta opencode.Session) error {
 		return Fail("FORBIDDEN", "execution session or workspace changed")
 	}
 	canonical, err := filepath.EvalSymlinks(meta.Directory)
-	if err != nil || canonical != x.canonicalDirectory {
+	if err != nil || canonical != x.canonicalDirectory || canonical != meta.Directory {
 		return Fail("FORBIDDEN", "execution workspace identity changed")
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || x.workspace == nil || !os.SameFile(x.workspace, info) {
+		return Fail("FORBIDDEN", "execution workspace replaced")
 	}
 	return nil
 }
@@ -102,6 +107,10 @@ func (m *Manager) readContext(ctx context.Context) (context.Context, context.Can
 // One caller does one bounded probe. Followers join it, or read the cached
 // result during the interval cooldown. No reconciliation worker survives a call.
 func (m *Manager) refresh(ctx context.Context, x *run) error {
+	// Cached terminal results also belong to the original workspace identity.
+	if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+		return err
+	}
 	if !m.beginRead() {
 		return nil
 	}
@@ -195,6 +204,14 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	permissions, err := x.runner.Permissions(ctx)
 	if err != nil {
 		return failed("OBSERVATION_UNAVAILABLE", "native permissions unavailable", nil)
+	}
+	// Native reads are not atomic. Detect observed replacement during those reads
+	// before exposing content, committing terminal proof or permitting interruption.
+	if err = validateSession(x, meta); err != nil {
+		x.mu.Lock()
+		x.messages = nil
+		x.mu.Unlock()
+		return failed("IDENTITY_MISMATCH", "workspace changed during observation", err)
 	}
 	if ctx.Err() != nil || m.ctx.Err() != nil {
 		return failed("OBSERVATION_UNAVAILABLE", "native observation canceled or expired", nil)

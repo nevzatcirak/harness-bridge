@@ -246,3 +246,18 @@ is printable and bounded to 128 characters; workspace linked_worktree is optiona
 No remote URL is exposed. Confined metadata reads replace Git subprocesses; unsafe
 storage leaves repository/workspace absent. See H4_A_REVIEW_FIXES for exact Git
 layout limits, installed history ordering, authorization separation and rollback.
+
+## H4-B security hardening (review candidate, not deployed)
+
+No tool name/input/output schema changes: eleven H4-A tools including the original
+seven. Execution validation additionally compares the accepted directory's
+filesystem identity, including cached status/result and same-key reads. Observed
+workspace replacement returns FORBIDDEN; no result content is exposed. Snapshot
+remains internal authorization evidence. A failed fresh pre-submission check
+retains unknown with optional unresolved.reason PRE_SUBMISSION_UNAVAILABLE,
+submits no native Prompt and preserves the accepted key/guard conservatively.
+Preflight now has a total 5s deadline including queueing and four native admission
+slots; read-side reconciliation retains its separate four slots. Close cancels
+and joins preflight too. Neither manager Close nor client disconnection implies
+native interruption. Process restart still loses execution/key mappings: no old
+key may be replayed. These are evidence/race mitigations, not filesystem isolation.

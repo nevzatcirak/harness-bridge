@@ -101,3 +101,8 @@ and [future provisioning plan](docs/H4_PROVISIONING_PLAN.md). Four additive
 read-only discovery tools; no deployment, session creation or process launch.
 
 H4-A [security/discovery review fixes and read-only acceptance procedure](docs/H4_A_REVIEW_FIXES.md) supersede the original Git subprocess metadata reader.
+
+H4-B security continuation: [evidence and acceptance gates](docs/H4_B_SECURITY_EVIDENCE.md),
+[ADR-014](docs/adr/ADR-014-workspace-evidence-and-admission.md), and
+[opt-in synthetic Linux confinement tests](tests/confinement/README.md).
+No production deployment or native session provisioning is included.

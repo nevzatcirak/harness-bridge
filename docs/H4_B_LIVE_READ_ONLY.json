@@ -1,0 +1,36 @@
+{
+  "native_observation": {
+    "observed_at": "2026-10-25T22:58:41.901997+00:00",
+    "phase": "h4b-final",
+    "native_reconciliation": "PASS",
+    "history_count": 16,
+    "user_count": 8,
+    "assistant_count": 8,
+    "original12_unchanged": true,
+    "same_16_history_digest": true,
+    "unfinished_turns": 0,
+    "pending_permissions": 0,
+    "sealed_pre_rotation_executions": 4,
+    "native_status_entry": null
+  },
+  "preservation": {
+    "observed_at": "2026-10-25T22:58:42.916916+00:00",
+    "process_identity_and_binary_unchanged": {
+      "harness-bridge-private.service": true,
+      "opencode-hb-test.service": true,
+      "3489290": true,
+      "2875781": true
+    },
+    "protected_files_count": 10,
+    "protected_files_unchanged": true
+  },
+  "tls_unauthenticated_check": {
+    "http_status": 401,
+    "ssl_verify_result": 0
+  },
+  "credential_metadata": {
+    "expires_at": "2026-10-26T16:10:27Z",
+    "expiry_source_runtime_match": true
+  },
+  "connector_read_only": "operator-reported only; not independently tested here"
+}
