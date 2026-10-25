@@ -99,3 +99,5 @@ H4-A development: [audit and exact capabilities](docs/H4_A_EVIDENCE.md),
 [native delegation ADR](docs/adr/ADR-013-native-subagent-delegation-guidance.md),
 and [future provisioning plan](docs/H4_PROVISIONING_PLAN.md). Four additive
 read-only discovery tools; no deployment, session creation or process launch.
+
+H4-A [security/discovery review fixes and read-only acceptance procedure](docs/H4_A_REVIEW_FIXES.md) supersede the original Git subprocess metadata reader.

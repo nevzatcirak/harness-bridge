@@ -112,11 +112,38 @@ missing transcript, running-session conflicts, crash uncertainty and child linea
 ## Live deployment prerequisites
 
 Obtain separate approval after Draft PR review; preserve H3 services meanwhile.
-Build a reviewed binary, confirm installed /doc/version and `/usr/bin/git` within
-the service sandbox, test Git reads under the actual service UID and approved
-common directories. A non-Git test workspace should correctly yield no repository.
+Build a reviewed binary, confirm installed /doc/version and the Linux confined
+metadata-reader behavior under the actual service UID and approved common
+directories. The H4-A reader no longer requires or invokes Git. A non-Git test workspace should correctly yield no repository.
 Verify strict canonical directory policy against the current session configuration.
 Use read-only staging first with unchanged roots/session grants/TLS/firewall.
 For any writer replacement follow ADR-010/011 fencing, native reconciliation,
 shared protected locks, retained ledger, no automatic restart and rollback.
 Do not enable native creation or managed launch as part of H4-A deployment.
+
+
+## H4-B review prerequisites: discovery is not authorization
+
+Define separate capabilities before repository-wide listing: (1) metadata-only
+native discovery for a principal, registered instance and approved repository/
+workspace; (2) exact-session mutation grants; (3) managed creation/lifecycle
+ownership. Current H4-A uses only the static ACL plus the global read-only gate;
+it cannot automatically discover unlisted children or grant any new writes.
+
+A future discovery grant may query a bounded directory-scoped native session list
+with pagination. It must independently validate every candidate directory, instance
+and parent link, avoid exposing denied titles/paths, and treat native project IDs
+as observations. Listing must never insert candidates into the writable session
+map. Grant-store transactions, revocation and writer ownership updates must be
+explicitly designed/tested before enabling dynamic write access.
+
+If Git common directories legitimately live outside workspace roots, propose a
+separate read-only GitStorageRoots policy with confined handles and explicit
+principal/session association. Never merge it into workspace Roots, Allows,
+prompt authorization, session creation or managed process profiles. H4-A adds no
+such configuration or grant. Metadata remains unavailable for those workspaces.
+
+Read-only deployment acceptance and rollback are specified in
+[H4_A_REVIEW_FIXES.md](H4_A_REVIEW_FIXES.md). A root directory replacement now
+invalidates the policy's inode/device identity; do not auto-reload policy to trust
+a replacement. Investigate and separately authorize any new policy lifetime.

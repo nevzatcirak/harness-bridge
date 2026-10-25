@@ -30,3 +30,16 @@ Claude Chat is the reasoning client; no programmable Chat subagent-spawning API
 is assumed. No scheduler, independent orchestrator, delegation tool, permission
 approval, native session creation or automatic follow-up loop is added. Native
 status, child existence and an agent's answer never alone prove task acceptance.
+
+
+## Context-efficiency clarification
+
+Initialization and tool descriptions direct the client to discover repositories
+and candidate sessions, select by workspace/parent/task relevance, and use an
+explicit session ID for every mutation. Prefer history pages of 20–50 messages,
+inspect timestamps, and fetch older pages only as needed. Prefer correlated
+execution results and verification evidence over transcript copying. The installed
+1.19.4 legacy API was observed to select the latest window for a no-cursor limited
+read, return each window chronologically, and continue toward older windows.
+This is observed version-specific behavior, not a universal latest-page promise;
+the adapter preserves native ordering. Legacy unpaginated results are unchanged.

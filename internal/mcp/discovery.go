@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
@@ -39,21 +40,54 @@ type Capabilities struct {
 	Guidance               string   `json:"guidance"`
 }
 
-func (s *Server) describe(ctx context.Context, v opencode.Session, c *opencode.Client) Session {
+// directoryEvidence is request-local. Sharing it never claims an atomic native snapshot.
+type directoryEvidence struct {
+	status        map[string]opencode.Status
+	statusOK      bool
+	permissions   map[string]bool
+	permissionsOK bool
+	repository    *repository.Repository
+	workspace     *repository.Workspace
+}
+
+func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, members ...string) directoryEvidence {
+	c := s.Client.WithDirectory(v.Directory)
+	status, se := c.Status(ctx)
+	permissions, pe := c.Permissions(ctx)
+	d := directoryEvidence{status: map[string]opencode.Status{}, statusOK: se == nil, permissions: map[string]bool{}, permissionsOK: pe == nil}
+	if len(members) == 0 {
+		members = []string{v.ID}
+	}
+	allowed := map[string]bool{}
+	for _, id := range members {
+		allowed[id] = true
+		if value, ok := status[id]; ok {
+			d.status[id] = value
+		}
+	}
+	for _, p := range permissions {
+		if allowed[p.SessionID] {
+			d.permissions[p.SessionID] = true
+		}
+	}
+	// Retain only this directory's authorized members, not the full native inventory.
+	r, w, e := repository.Inspect(ctx, v.Directory, s.Policy, v.ID)
+	if e == nil {
+		d.repository = &r
+		d.workspace = &w
+	}
+	return d
+}
+func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible bool) Session {
 	out := sessionView(v)
 	out.HarnessInstanceID = s.Client.InstanceID()
 	out.NativeProjectID = v.ProjectID
 	out.NativeWorkspaceID = v.WorkspaceID
-	// Never disclose a relationship to a session outside the ACL.
-	if opencode.ValidID(v.ParentID, "ses") {
-		if _, _, e := s.authorized(ctx, v.ParentID); e == nil {
-			out.ParentSessionID = "opencode:" + v.ParentID
-		}
+	if parentVisible {
+		out.ParentSessionID = "opencode:" + v.ParentID
 	}
-	status, se := c.Status(ctx)
-	perms, pe := c.Permissions(ctx)
-	if se == nil {
-		out.NativeState = status[v.ID].Type
+	if d.statusOK {
+		out.NativeState = d.status[v.ID].Type
 		switch out.NativeState {
 		case "idle":
 			out.State = "idle"
@@ -61,21 +95,49 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, c *opencode.C
 			out.State = "running"
 		}
 	}
-	if pe != nil {
+	if !d.permissionsOK {
 		out.State = "unknown"
-	} else {
-		for _, p := range perms {
-			if p.SessionID == v.ID {
-				out.State = "waiting_for_permission"
+	} else if d.permissions[v.ID] {
+		out.State = "waiting_for_permission"
+	}
+	out.Repository = d.repository
+	out.Workspace = d.workspace
+	return out
+}
+func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.Client) Session {
+	visible := false
+	if opencode.ValidID(v.ParentID, "ses") {
+		_, _, e := s.authorized(ctx, v.ParentID)
+		visible = e == nil
+	}
+	return s.view(v, s.inspectDirectory(ctx, v), visible)
+}
+
+// parallel performs at most four jobs concurrently, with no per-session goroutine.
+func parallel(ctx context.Context, n int, fn func(int)) {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if ctx.Err() == nil {
+					fn(i)
+				}
 			}
+		}()
+	}
+send:
+	for i := 0; i < n; i++ {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break send
 		}
 	}
-	r, w, e := repository.Inspect(ctx, v.Directory)
-	if e == nil && s.Policy.Allows(v.ID, w.Root) && s.Policy.Allows(v.ID, r.CommonDirectory) && s.Policy.Allows(v.ID, w.GitDirectory) {
-		out.Repository = &r
-		out.Workspace = &w
-	}
-	return out
+	close(jobs)
+	wg.Wait()
 }
 func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -87,6 +149,14 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	if len(s.Policy.Sessions) > 1000 {
 		return nil, execution.Fail("INVALID_INPUT", "discovery ACL exceeds 1000 sessions")
 	}
+	// At most two discoveries per Server; queueing consumes the same deadline.
+	s.discoveryOnce.Do(func() { s.discoverySlots = make(chan struct{}, 2) })
+	select {
+	case s.discoverySlots <- struct{}{}:
+		defer func() { <-s.discoverySlots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	ids := []string{}
 	for id, allowed := range s.Policy.Sessions {
 		if allowed {
@@ -94,15 +164,50 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 		}
 	}
 	sort.Strings(ids)
-	for _, id := range ids {
-		v, c, e := s.authorized(ctx, id)
-		if e != nil {
-			if envelope(e).Code == "FORBIDDEN" || envelope(e).Code == "NOT_FOUND" {
+	metadata := make([]opencode.Session, len(ids))
+	errs := make([]error, len(ids))
+	parallel(ctx, len(ids), func(i int) { metadata[i], _, errs[i] = s.authorized(ctx, ids[i]) })
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	authorized := map[string]bool{}
+	directories := []opencode.Session{}
+	directoryIndex := map[string]int{}
+	groups := [][]string{}
+	for i, id := range ids {
+		if errs[i] != nil {
+			code := envelope(errs[i]).Code
+			if code == "FORBIDDEN" || code == "NOT_FOUND" {
 				continue
 			}
-			return nil, e
+			return nil, errs[i]
 		}
-		out = append(out, s.describe(ctx, v, c))
+		authorized[id] = true
+		v := metadata[i]
+		if _, ok := directoryIndex[v.Directory]; !ok {
+			directoryIndex[v.Directory] = len(directories)
+			directories = append(directories, v)
+			groups = append(groups, nil)
+		}
+		groups[directoryIndex[v.Directory]] = append(groups[directoryIndex[v.Directory]], id)
+	}
+	evidence := make([]directoryEvidence, len(directories))
+	parallel(ctx, len(directories), func(i int) { evidence[i] = s.inspectDirectory(ctx, directories[i], groups[i]...) })
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	// Revalidate all paths before projecting either sessions or parent links.
+	// This remains a best-effort observation, not an atomic filesystem snapshot.
+	for i, id := range ids {
+		if authorized[id] && !s.Policy.Allows(id, metadata[i].Directory) {
+			delete(authorized, id)
+		}
+	}
+	for i, id := range ids {
+		if authorized[id] {
+			v := metadata[i]
+			out = append(out, s.view(v, evidence[directoryIndex[v.Directory]], authorized[v.ParentID]))
+		}
 	}
 	return out, nil
 }

@@ -8,6 +8,10 @@ Installed /doc SHA-256:
 Read HARNESS_BRIDGE_SPEC.md, architecture ADR-001–009 and accepted ADR-010/011
 before implementation. H4 PR is stacked on the existing H3 feature branch.
 
+This is the original H4-A audit record. The security/discovery correction and
+new final test evidence are in [H4_A_REVIEW_FIXES.md](H4_A_REVIEW_FIXES.md); that
+record supersedes the original Git subprocess inspection approach and bounds.
+
 ## Live read-only observations
 
 Only approved non-root test OpenCode `http://127.0.0.1:4097` was queried, using its

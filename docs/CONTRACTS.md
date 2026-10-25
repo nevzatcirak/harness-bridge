@@ -236,3 +236,13 @@ Parent links require separate authorization; unapproved children stay invisible.
 Repository/workspace hashes and endpoint IDs are metadata locators, not grants.
 Canonical path authorization now also rejects symlink aliases and unclean paths.
 See ADR-012/013 and H4_A_EVIDENCE for exact support and limitations.
+
+
+H4-A review correction: list_sessions now shares the <=1000-ACL/10s registry
+pipeline and explicit oversize/deadline errors, preserving its input and success
+shape. Directory evidence is shared per request only (four workers/request, two
+admitted discoveries/Server), never presented as atomic state. Optional display_name
+is printable and bounded to 128 characters; workspace linked_worktree is optional.
+No remote URL is exposed. Confined metadata reads replace Git subprocesses; unsafe
+storage leaves repository/workspace absent. See H4_A_REVIEW_FIXES for exact Git
+layout limits, installed history ordering, authorization separation and rollback.
