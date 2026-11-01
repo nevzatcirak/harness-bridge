@@ -17,7 +17,6 @@ jobs:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
       CGO_ENABLED: '1'
-      TEST_LOG_DIR: ${{ runner.temp }}/harness-bridge-ci
     defaults:
       run:
         shell: bash
@@ -61,17 +60,20 @@ jobs:
 
       - name: Test
         run: |
+          TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
           mkdir -p "$TEST_LOG_DIR"
           go test ./... -count=1 -json | tee "$TEST_LOG_DIR/test.jsonl"
 
       - name: Race test
         run: |
+          TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
           mkdir -p "$TEST_LOG_DIR"
           go test -race ./... -count=1 -json | tee "$TEST_LOG_DIR/race.jsonl"
 
       - name: Report skipped tests
         if: ${{ always() }}
         run: |
+          TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
           {
             printf '## Test coverage limits\n\n'
             printf 'Unit and fixture integration checks do not establish real native OpenCode or Claude Chat E2E acceptance.\n\n'
