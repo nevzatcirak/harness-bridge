@@ -108,22 +108,11 @@ execution code (manager.go, reconcile.go, hardening_test.go) is a superset of
 fdd5118's identity/admission hunks and is kept verbatim. The only conflicting
 semantic is the accepted-but-never-submitted path: fdd5118's
 unknown/unresolved PRE_SUBMISSION_UNAVAILABLE with a retained guard is superseded
-by P2-REC-02B's local failed outcome above, and its CONTRACTS section is dropped
-in favour of PR #6's. Non-overlapping fdd5118 material (tests/confinement, H4-B
-evidence documents, README/ARCHITECTURE/provisioning-plan notes) is carried
-unchanged except for a supersession note in H4_B_SECURITY_EVIDENCE.md. That
-evidence remains an observation of fdd5118 and is not re-asserted for this head.
-
-## MIG-A-02 reconciliation (2026-11-03)
-
-Reconciles PR #5 head fdd51181b7a7bb441ee6e3557bbcc8542a1a9612 into PR #6 head
-db9da6b0cb3721ad6dc2a271726c01632c98381c over common base 0b3c319. PR #6's
-execution code (manager.go, reconcile.go, hardening_test.go) is a superset of
-fdd5118's identity/admission hunks and is kept verbatim. The only conflicting
-semantic is the accepted-but-never-submitted path: fdd5118's
-unknown/unresolved PRE_SUBMISSION_UNAVAILABLE with a retained guard is superseded
 by P2-REC-02B's local failed outcome above, and fdd5118's CONTRACTS section is
 dropped in favour of PR #6's. Non-overlapping fdd5118 material (tests/confinement,
 H4-B evidence documents, README/ARCHITECTURE/provisioning-plan notes) is carried
-unchanged except for a supersession note in H4_B_SECURITY_EVIDENCE.md. That
-evidence remains an observation of fdd5118 and is not re-asserted for this head.
+unchanged except for a supersession note in H4_B_SECURITY_EVIDENCE.md, plus new
+sibling provenance notes (H4_B_EVIDENCE_PROVENANCE.md and
+tests/confinement/evidence/PROVENANCE.md) that leave the evidence bytes intact.
+That evidence remains an observation of fdd5118 and is not re-asserted for this
+head.
