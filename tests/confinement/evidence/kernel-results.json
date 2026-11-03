@@ -1,0 +1,415 @@
+{
+  "synthetic_only": true,
+  "baseline": {
+    "mode": "control",
+    "checks": [
+      {
+        "name": "synthetic_outside_read_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_outside_write_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_outside_exec_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_credential_read_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_other_workspace_read_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_docker_socket_connect_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_abstract_socket_connect_allowed_without_profile",
+        "pass": true
+      },
+      {
+        "name": "synthetic_tcp_control",
+        "pass": true
+      }
+    ]
+  },
+  "variants": {
+    "setup": {
+      "exec_errors": {
+        "/cache/program": "fork/exec /cache/program: permission denied",
+        "/state/data/program": "fork/exec /state/data/program: permission denied",
+        "/tmp/hb-confinement-fixture-627768006/host/outside/program": "fork/exec /tmp/hb-confinement-fixture-627768006/host/outside/program: no such file or directory",
+        "/tmp/program": "fork/exec /tmp/program: permission denied"
+      },
+      "mode": "probe",
+      "checks": [
+        {
+          "name": "nonroot_uid_gid",
+          "pass": true
+        },
+        {
+          "name": "CapEff_zero",
+          "pass": true
+        },
+        {
+          "name": "CapPrm_zero",
+          "pass": true
+        },
+        {
+          "name": "CapBnd_zero",
+          "pass": true
+        },
+        {
+          "name": "CapAmb_zero",
+          "pass": true
+        },
+        {
+          "name": "no_new_privileges",
+          "pass": true
+        },
+        {
+          "name": "seccomp_filter",
+          "pass": true
+        },
+        {
+          "name": "original_style_workspace_cwd",
+          "pass": true
+        },
+        {
+          "name": "workspace_write_read",
+          "pass": true
+        },
+        {
+          "name": "workspace_rename",
+          "pass": true
+        },
+        {
+          "name": "workspace_exec",
+          "pass": true
+        },
+        {
+          "name": "approved_runtime_exec",
+          "pass": true
+        },
+        {
+          "name": "approved_runtime_read",
+          "pass": true
+        },
+        {
+          "name": "allowed_workspace_shell_script",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/state/data",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/state/data",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/cache",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/cache",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/tmp",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/tmp",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_read_denied",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_write_denied",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_exec_denied",
+          "pass": true
+        },
+        {
+          "name": "outside_guest_read_write_denied",
+          "pass": true
+        },
+        {
+          "name": "root_readonly",
+          "pass": true
+        },
+        {
+          "name": "root_mkdir_denied",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_absolute-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_relative-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_host-path-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_credential-escape",
+          "pass": true
+        },
+        {
+          "name": "other_workspace_read_write_denied",
+          "pass": true
+        },
+        {
+          "name": "host_credential_paths_denied",
+          "pass": true
+        },
+        {
+          "name": "docker_socket_path_connect_denied",
+          "pass": true
+        },
+        {
+          "name": "abstract_socket_denied",
+          "pass": true
+        },
+        {
+          "name": "private_network_blocks_outer_tcp",
+          "pass": true
+        },
+        {
+          "name": "proc_magic_link_escape_denied",
+          "pass": true
+        },
+        {
+          "name": "proc_subset_pid",
+          "pass": true
+        },
+        {
+          "name": "uid_escalation_denied",
+          "pass": true
+        },
+        {
+          "name": "new_user_namespace_denied",
+          "pass": true
+        },
+        {
+          "name": "noexec_interpreter_residual_detected",
+          "pass": true
+        },
+        {
+          "name": "own_credential_residual_detected",
+          "pass": true
+        },
+        {
+          "name": "imported_hardlink_residual_detected",
+          "pass": true
+        }
+      ],
+      "residuals": [
+        "noexec blocks direct exec only; an allowed shell still interprets readable code from writable /tmp",
+        "same-UID tools can read credentials intentionally present in their allowed state; privilege separation still required",
+        "an imported hard link exposes and modifies its shared outside inode; bind-root confinement does not enforce file provenance"
+      ]
+    },
+    "setup-compat": {
+      "exec_errors": {
+        "/cache/program": "fork/exec /cache/program: permission denied",
+        "/state/data/program": "fork/exec /state/data/program: permission denied",
+        "/tmp/hb-confinement-fixture-627768006/host/outside/program": "fork/exec /tmp/hb-confinement-fixture-627768006/host/outside/program: no such file or directory",
+        "/tmp/program": "fork/exec /tmp/program: permission denied"
+      },
+      "mode": "probe-compat",
+      "checks": [
+        {
+          "name": "nonroot_uid_gid",
+          "pass": true
+        },
+        {
+          "name": "CapEff_zero",
+          "pass": true
+        },
+        {
+          "name": "CapPrm_zero",
+          "pass": true
+        },
+        {
+          "name": "CapBnd_zero",
+          "pass": true
+        },
+        {
+          "name": "CapAmb_zero",
+          "pass": true
+        },
+        {
+          "name": "no_new_privileges",
+          "pass": true
+        },
+        {
+          "name": "seccomp_filter",
+          "pass": true
+        },
+        {
+          "name": "original_style_workspace_cwd",
+          "pass": true
+        },
+        {
+          "name": "workspace_write_read",
+          "pass": true
+        },
+        {
+          "name": "workspace_rename",
+          "pass": true
+        },
+        {
+          "name": "workspace_exec",
+          "pass": true
+        },
+        {
+          "name": "approved_runtime_exec",
+          "pass": true
+        },
+        {
+          "name": "approved_runtime_read",
+          "pass": true
+        },
+        {
+          "name": "allowed_workspace_shell_script",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/state/data",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/state/data",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/cache",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/cache",
+          "pass": true
+        },
+        {
+          "name": "required_rw_/tmp",
+          "pass": true
+        },
+        {
+          "name": "direct_exec_denied_/tmp",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_read_denied",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_write_denied",
+          "pass": true
+        },
+        {
+          "name": "unapproved_host_exec_denied",
+          "pass": true
+        },
+        {
+          "name": "outside_guest_read_write_denied",
+          "pass": true
+        },
+        {
+          "name": "root_readonly",
+          "pass": true
+        },
+        {
+          "name": "root_mkdir_denied",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_absolute-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_relative-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_host-path-escape",
+          "pass": true
+        },
+        {
+          "name": "symlink_denied_credential-escape",
+          "pass": true
+        },
+        {
+          "name": "other_workspace_read_write_denied",
+          "pass": true
+        },
+        {
+          "name": "host_credential_paths_denied",
+          "pass": true
+        },
+        {
+          "name": "docker_socket_path_connect_denied",
+          "pass": true
+        },
+        {
+          "name": "abstract_socket_denied",
+          "pass": true
+        },
+        {
+          "name": "tcp_transport_works_in_synthetic_shared_network",
+          "pass": true
+        },
+        {
+          "name": "proc_magic_link_escape_denied",
+          "pass": true
+        },
+        {
+          "name": "proc_subset_pid",
+          "pass": true
+        },
+        {
+          "name": "uid_escalation_denied",
+          "pass": true
+        },
+        {
+          "name": "new_user_namespace_denied",
+          "pass": true
+        },
+        {
+          "name": "noexec_interpreter_residual_detected",
+          "pass": true
+        },
+        {
+          "name": "own_credential_residual_detected",
+          "pass": true
+        },
+        {
+          "name": "imported_hardlink_residual_detected",
+          "pass": true
+        }
+      ],
+      "residuals": [
+        "inet-compatible variant permits TCP peers in its shared network; not network isolation",
+        "noexec blocks direct exec only; an allowed shell still interprets readable code from writable /tmp",
+        "same-UID tools can read credentials intentionally present in their allowed state; privilege separation still required",
+        "an imported hard link exposes and modifies its shared outside inode; bind-root confinement does not enforce file provenance"
+      ]
+    }
+  },
+  "required_checks_pass": true,
+  "credential_isolation_complete": false,
+  "production_ready": false,
+  "production_targets_used": false
+}

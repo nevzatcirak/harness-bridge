@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,29 +42,41 @@ type Unresolved struct {
 	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
 }
 
+// LocalFailure is Bridge evidence of a failure before native Prompt invocation.
+// RecordedAt is a local observation time, never a native completion timestamp.
+type LocalFailure struct {
+	Code       string    `json:"code"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
 type Execution struct {
-	ID             string      `json:"execution_id"`
-	SessionID      string      `json:"session_id"`
-	MessageID      string      `json:"message_id"`
-	State          string      `json:"state"`
-	Error          string      `json:"error,omitempty"`
-	Started        time.Time   `json:"started_at"`
-	Updated        time.Time   `json:"updated_at"`
-	Ended          *time.Time  `json:"ended_at,omitempty"`
-	Unresolved     *Unresolved `json:"unresolved,omitempty"`
-	MonitorEndedAt *time.Time  `json:"monitor_ended_at,omitempty"`
-	ReconciledAt   *time.Time  `json:"reconciled_at,omitempty"`
+	ID             string        `json:"execution_id"`
+	SessionID      string        `json:"session_id"`
+	MessageID      string        `json:"message_id"`
+	State          string        `json:"state"`
+	Error          string        `json:"error,omitempty"`
+	Started        time.Time     `json:"started_at"`
+	Updated        time.Time     `json:"updated_at"`
+	Ended          *time.Time    `json:"ended_at,omitempty"`
+	Unresolved     *Unresolved   `json:"unresolved,omitempty"`
+	MonitorEndedAt *time.Time    `json:"monitor_ended_at,omitempty"`
+	ReconciledAt   *time.Time    `json:"reconciled_at,omitempty"`
+	LocalFailure   *LocalFailure `json:"local_failure,omitempty"`
 }
 type run struct {
-	mu                            sync.Mutex
-	view                          Execution
-	native                        string
-	runner                        Runner
-	messages                      []opencode.Message
-	abortRequested                bool
+	mu             sync.Mutex
+	view           Execution
+	native         string
+	runner         Runner
+	messages       []opencode.Message
+	abortRequested bool
+	// Protected by mu; set once immediately before invoking Runner.Prompt.
+	// A true value is conservative even if the transport sends no bytes.
+	submissionAttempted           bool
 	op                            chan struct{}
 	monitorDone                   bool
 	directory, canonicalDirectory string
+	workspace                     os.FileInfo
 	flight                        *reconciliation
 	nextProbe                     time.Time
 	probeError                    error
@@ -84,12 +97,13 @@ type Manager struct {
 	closed            bool
 	reconcileTimeout  time.Duration
 	reconcileSlots    chan struct{}
+	admissionSlots    chan struct{}
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4)}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4)}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -165,6 +179,9 @@ retry:
 		if scoped, ok := r.(directoryScoped); ok && x.directory != "" && scoped.Directory() != "" && scoped.Directory() != x.directory {
 			return Execution{}, Fail("FORBIDDEN", "execution workspace changed")
 		}
+		if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			return Execution{}, err
+		}
 		x.mu.Lock()
 		defer x.mu.Unlock()
 		return snapshot(x.view), nil
@@ -191,7 +208,13 @@ retry:
 	m.busy[session] = id
 	m.pending[k] = make(chan struct{})
 	m.fingerprints[k] = hash
+	// Admission is managed work too: Close cancels and joins native preflight
+	// reads before returning ownership to its caller. Add under the closed gate.
+	m.wg.Add(1)
 	m.mu.Unlock()
+	defer m.wg.Done()
+	ctx, cancel := m.readContext(ctx)
+	defer cancel()
 	// Wake same-key callers only after preflight has accepted or rejected.
 	defer func() {
 		m.mu.Lock()
@@ -209,7 +232,16 @@ retry:
 		}
 		m.mu.Unlock()
 	}
+	// Queueing consumes the same admission deadline; many distinct sessions must
+	// not create unbounded concurrent native preflights. Reconciliation has its
+	// own slots so admission cannot consume read-side recovery capacity.
+	if err := take(ctx, m.admissionSlots); err != nil {
+		release()
+		return Execution{}, err
+	}
+	defer give(m.admissionSlots)
 	directory, canonical := "", ""
+	var workspace os.FileInfo
 	{
 		reader := r
 		meta, err := reader.Get(ctx, session)
@@ -227,11 +259,16 @@ retry:
 			return Execution{}, Fail("FORBIDDEN", "native workspace changed")
 		}
 		resolved, err := filepath.EvalSymlinks(directory)
-		if err != nil {
+		if err != nil || resolved != directory || filepath.Clean(directory) != directory {
 			release()
 			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
 		}
 		canonical = resolved
+		workspace, err = os.Stat(canonical)
+		if err != nil || !workspace.IsDir() {
+			release()
+			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
+		}
 	}
 	statuses, err := r.Status(ctx)
 	if err != nil {
@@ -272,7 +309,7 @@ retry:
 		return Execution{}, err
 	}
 	now := time.Now().UTC()
-	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
+	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, workspace: workspace, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -288,6 +325,34 @@ retry:
 	go m.work(x, prompt)
 	return initial, nil
 }
+
+// finalizeUnsubmitted commits local terminal evidence and releases only this run's
+// reservation. The accepted key/IDs remain immutable tombstones until restart.
+func (m *Manager) finalizeUnsubmitted(x *run) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.submissionAttempted || terminal(x.view.State) {
+		return
+	}
+	now := time.Now().UTC()
+	x.view.State = "failed"
+	x.view.Error = "PRE_SUBMISSION_UNAVAILABLE: native Prompt was not invoked"
+	x.view.LocalFailure = &LocalFailure{Code: "PRE_SUBMISSION_UNAVAILABLE", RecordedAt: now}
+	x.view.Updated = now
+	x.view.Unresolved = nil
+	x.view.Ended = nil
+	x.view.ReconciledAt = nil
+	x.messages = nil
+	x.observationValid = false
+	x.monitorDone = true
+	x.view.MonitorEndedAt = &now
+	m.mu.Lock()
+	if m.busy[x.native] == x.view.ID {
+		delete(m.busy, x.native)
+	}
+	m.mu.Unlock()
+}
+
 func (m *Manager) work(x *run, prompt string) {
 	defer m.wg.Done()
 	ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
@@ -296,12 +361,39 @@ func (m *Manager) work(x *run, prompt string) {
 		x.mu.Lock()
 		defer x.mu.Unlock()
 		now := time.Now().UTC()
-		x.monitorDone = true
-		x.view.MonitorEndedAt = &now
+		if !x.monitorDone {
+			x.monitorDone = true
+			x.view.MonitorEndedAt = &now
+		}
 		if !terminal(x.view.State) && m.ctx.Err() != nil {
 			unresolved(x, "MANAGER_CLOSED", "bridge shutdown; native work may continue", now, false)
 		}
 	}()
+	// Recheck filesystem identity and routing immediately before submission. This
+	// detects observed replacements, not an atomic lease on native path lookup.
+	meta, err := x.runner.Get(ctx, x.native)
+	if err == nil {
+		err = validateSession(x, meta)
+	}
+	if err != nil || ctx.Err() != nil {
+		m.finalizeUnsubmitted(x)
+		return
+	}
+	// This is the conservative invocation boundary. Once marked, always invoke
+	// Prompt exactly once, even if cancellation races with the call. No later
+	// timeout, missing history or reason string may clear this marker.
+	x.mu.Lock()
+	if terminal(x.view.State) || x.submissionAttempted {
+		x.mu.Unlock()
+		return
+	}
+	if ctx.Err() != nil {
+		x.mu.Unlock()
+		m.finalizeUnsubmitted(x)
+		return
+	}
+	x.submissionAttempted = true
+	x.mu.Unlock()
 	// Accepted work is detached from the caller. No retry of Prompt, even on timeout.
 	if err := x.runner.Prompt(ctx, x.native, prompt, x.view.MessageID); err != nil {
 		x.mu.Lock()
@@ -310,6 +402,10 @@ func (m *Manager) work(x *run, prompt string) {
 		return
 	}
 	x.mu.Lock()
+	if terminal(x.view.State) {
+		x.mu.Unlock()
+		return
+	}
 	x.view.State = "running"
 	x.view.Updated = time.Now().UTC()
 	x.mu.Unlock()
@@ -417,11 +513,12 @@ func (m *Manager) Interrupt(ctx context.Context, id string) (Execution, error) {
 	defer give(x.op)
 	x.mu.Lock()
 	v := snapshot(x.view)
+	attempted := x.submissionAttempted
 	x.mu.Unlock()
 	if terminal(v.State) {
 		return v, Fail("INVALID_INPUT", "execution already terminal")
 	}
-	if v.State == "submitting" {
+	if !attempted || v.State == "submitting" {
 		return v, Fail("SESSION_BUSY", "submission in progress; wait for acknowledgement")
 	}
 	// Serialize fresh evidence and explicit Abort with the monitor/reconciler.
@@ -446,6 +543,9 @@ func (m *Manager) Interrupt(ctx context.Context, id string) (Execution, error) {
 		return Execution{}, err
 	}
 	if !requested {
+		if err = validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			return Execution{}, err
+		}
 		if err = x.runner.Abort(bounded, x.native); err != nil {
 			x.mu.Lock()
 			unresolved(x, "ABORT_UNCONFIRMED", "abort not confirmed", time.Now().UTC(), false)

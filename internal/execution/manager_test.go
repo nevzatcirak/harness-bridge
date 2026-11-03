@@ -224,6 +224,9 @@ func TestTimeoutAndShutdownRetainGuard(t *testing.T) {
 		m := NewWithTiming(f, 30*time.Millisecond, time.Millisecond)
 		x, _ := m.Send(context.Background(), "ses_test", "test", "same-key")
 		if shutdown {
+			// This case exercises possibly-submitted shutdown, not the distinct
+			// accepted-but-never-invoked local failure branch.
+			waitState(t, m, x.ID, "running")
 			m.Close()
 		} else {
 			waitState(t, m, x.ID, "unknown")
@@ -232,6 +235,12 @@ func TestTimeoutAndShutdownRetainGuard(t *testing.T) {
 		x, _ = m.Get(context.Background(), x.ID)
 		if x.State != "unknown" {
 			t.Fatal(x)
+		}
+		m.mu.Lock()
+		retained := m.busy["ses_test"] == x.ID
+		m.mu.Unlock()
+		if !retained {
+			t.Fatal("possibly-submitted shutdown/timeout lost guard")
 		}
 	}
 }

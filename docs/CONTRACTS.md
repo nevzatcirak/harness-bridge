@@ -246,3 +246,58 @@ is printable and bounded to 128 characters; workspace linked_worktree is optiona
 No remote URL is exposed. Confined metadata reads replace Git subprocesses; unsafe
 storage leaves repository/workspace absent. See H4_A_REVIEW_FIXES for exact Git
 layout limits, installed history ordering, authorization separation and rollback.
+
+
+## ADR-014 execution identity and bounded admission (isolated review proposal)
+
+Original seven and candidate eleven tool names, required inputs and output shapes
+remain unchanged. There is no new adapter/runtime dependency or configuration.
+Workspace validation additionally compares the accepted directory's os.FileInfo
+identity using os.SameFile, including same-key and cached status/result reads.
+Observed replacement returns FORBIDDEN without result content; internal Snapshot
+remains authorization evidence and terminal records remain immutable.
+
+### Accepted but never submitted (P2-REC-02B)
+
+A failed fresh pre-Prompt metadata/identity check with no Runner.Prompt invocation
+records an immutable local state=failed. Optional Execution.local_failure contains
+{code: "PRE_SUBMISSION_UNAVAILABLE", recorded_at: <Bridge UTC timestamp>}.
+Execution.error gives a sanitized local explanation. This is not a new MCP domain
+error code. The status/result tool succeeds with a failed execution, as for other
+retrievable execution outcomes. Local failure has no unresolved, ended_at or
+reconciled_at; result messages is an empty array. The allocated message_id remains
+correlation metadata and is not evidence of a native user message.
+
+The internal submissionAttempted marker, not any error/reason string, determines
+whether local finalization is allowed. It is set conservatively immediately before
+native Prompt invocation and never cleared. Once invocation is attempted, timeout,
+disconnect and missing history cannot prove non-submission: keep unknown and the
+busy guard until native proof. Never automatically retry Prompt.
+
+Local finalization retains execution/message IDs, key and fingerprint, releases
+only that execution's session guard, and rejects interrupt_execution as
+INVALID_INPUT without native Abort. Same-key/payload replay returns the same local
+terminal outcome subject to existing authorization/workspace checks; changed
+payload conflicts. A different key requires full fresh admission. Delayed reads,
+probes and Close cannot change the local outcome or release a newer run's guard.
+No guard-reset tool or native session mutation is introduced.
+
+local_failure is additive and optional; existing seven and eleven tool names,
+required inputs and required output keys remain unchanged. Native execution
+failure has local_failure absent and native ended_at when terminal proof exists.
+Clients that assumed every failed execution had native assistant output/ended_at
+must handle local failure explicitly. Strict output-field allowlists need the new
+optional field; no blanket strict-parser compatibility claim is made.
+
+New reserved manager preflights share four admission slots and a five-second
+budget including slot queueing; these are separate from reconciliation slots.
+Current MCP authorization precedes this budget; same-key followers wait on the
+original admission or caller cancellation. Admission deadline/cancellation before
+acceptance releases its reservation without native Prompt. Close cancels and joins
+managed admission cleanup without issuing native Abort. Caller cancellation after
+acceptance does not cancel native work. The 300-second background monitor and
+existing operator-controlled restart reconciliation boundary remain unchanged.
+
+This detects observed replacement; it is not an atomic native-filesystem lease,
+full isolation or protection from inode reuse, mount changes or swaps between
+checks. Existing sessions whose workspace spelling is noncanonical are rejected.
