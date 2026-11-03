@@ -260,3 +260,225 @@ func TestPermissionCoreExternalResolutionAndChangedObservation(t *testing.T) {
 		t.Fatal("old observation restored a decision", got, err)
 	}
 }
+
+// F1 regression: native request identity is a shared namespace, but a retained
+// entry belongs to the principal bound in it. A differently authorized principal
+// colliding on (Authority, Lineage, RequestID) must neither mutate the foreign
+// entry nor receive its binding, state or a distinguishing stale error.
+func TestPermissionCoreForeignPrincipalObserve(t *testing.T) {
+	for _, where := range []string{"pending", "decided", "reserved", "denied"} {
+		for _, variant := range []string{"same-scope", "changed-scope"} {
+			t.Run(where+"/"+variant, func(t *testing.T) {
+				c, a, n, _ := fixture(t, false)
+				a.others = map[Principal]bool{"bob": true}
+				v := observe(t, c, n, request("per_A"))
+				var x Claim
+				switch where {
+				case "decided", "reserved":
+					decide(t, c, a, v, AllowOnce)
+				case "denied":
+					decide(t, c, a, v, Deny)
+				}
+				if where == "reserved" {
+					x = claimOnce(t, c, v)
+				}
+				before, err := c.Snapshot(t.Context(), "alice", v.Challenge)
+				if err != nil {
+					t.Fatal(err)
+				}
+				foreign := request("per_A")
+				foreign.Binding.Principal = "bob"
+				if variant == "changed-scope" {
+					foreign.ScopeMaterial = []byte("bob scope")
+				}
+				if err := a.Authorize(t.Context(), "bob", foreign.Binding); err != nil {
+					t.Fatal("bob must be independently authorized for his own binding", err)
+				}
+				unauthorized := request("per_B")
+				unauthorized.Binding.Principal = "mallory"
+				_, denyErr := c.Observe(t.Context(), "mallory", unauthorized)
+				for range 2 {
+					got, err := c.Observe(t.Context(), "bob", foreign)
+					requireError(t, err, ErrAuthority)
+					if err != denyErr || got != (View{}) {
+						t.Fatalf("foreign entry disclosed: %+v %v", got, err)
+					}
+				}
+				after, err := c.Snapshot(t.Context(), "alice", v.Challenge)
+				if err != nil || after != before {
+					t.Fatalf("foreign observe mutated entry: %+v -> %+v %v", before, after, err)
+				}
+				if where == "decided" {
+					x = claimOnce(t, c, v)
+				}
+				if where == "decided" || where == "reserved" {
+					got, err := c.Consume(t.Context(), "alice", x)
+					if err != nil || got.State != ReplyObserved {
+						t.Fatal("owner decision destroyed", got, err)
+					}
+				}
+				if fresh, err := c.Observe(t.Context(), "bob", request2("per_bob", "bob")); err != nil || fresh.State != Pending {
+					t.Fatal("bob's own request rejected", fresh, err)
+				}
+			})
+		}
+	}
+}
+
+func request2(id string, p Principal) Request {
+	r := request(id)
+	r.Binding.Principal = p
+	return r
+}
+
+// The documented same-owner fail-closed rule stays, but invalidating a record now
+// also requires current authorization for that record's own immutable binding.
+func TestPermissionCoreSameOwnerChangedObserve(t *testing.T) {
+	t.Run("still-authorized", func(t *testing.T) {
+		c, a, n, _ := fixture(t, false)
+		v := observe(t, c, n, request("per_A"))
+		decide(t, c, a, v, AllowOnce)
+		changed := request("per_A")
+		changed.ScopeMaterial = []byte("changed")
+		_, err := c.Observe(t.Context(), "alice", changed)
+		requireError(t, err, ErrStale)
+		got, err := c.Snapshot(t.Context(), "alice", v.Challenge)
+		if err != nil || got.State != Stale || got.Attempted {
+			t.Fatal(got, err)
+		}
+		_, err = c.Claim(t.Context(), "alice", v.Challenge)
+		requireError(t, err, ErrStale)
+	})
+	t.Run("owner-binding-revoked", func(t *testing.T) {
+		c, a, n, _ := fixture(t, false)
+		v := observe(t, c, n, request("per_A"))
+		decide(t, c, a, v, AllowOnce)
+		a.mu.Lock()
+		a.deny = func(b Binding) bool { return b.Generation == 1 }
+		a.mu.Unlock()
+		changed := request("per_A")
+		changed.Binding.Generation = 2
+		got, err := c.Observe(t.Context(), "alice", changed)
+		requireError(t, err, ErrAuthority)
+		if got != (View{}) {
+			t.Fatal(got)
+		}
+		a.mu.Lock()
+		a.deny = nil
+		a.mu.Unlock()
+		after, err := c.Snapshot(t.Context(), "alice", v.Challenge)
+		if err != nil || after.State != Decided {
+			t.Fatal("unauthorized invalidation", after, err)
+		}
+	})
+	t.Run("close-during-reauthorization", func(t *testing.T) {
+		c, a, n, _ := fixture(t, false)
+		v := observe(t, c, n, request("per_A"))
+		decide(t, c, a, v, AllowOnce)
+		enter, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		a.mu.Lock()
+		a.gate = func(b Binding) {
+			if b.Generation == 1 {
+				once.Do(func() { close(enter); <-release })
+			}
+		}
+		a.mu.Unlock()
+		changed := request("per_A")
+		changed.Binding.Generation = 2
+		out := make(chan error, 1)
+		go func() { _, err := c.Observe(t.Context(), "alice", changed); out <- err }()
+		wait(t, enter)
+		c.Close()
+		close(release)
+		requireError(t, <-out, ErrClosed)
+		c.mu.Lock()
+		e := c.entries[key(v.Challenge.Binding)]
+		state, reason, binding := e.state, e.reason, e.challenge.Binding
+		c.mu.Unlock()
+		if state != Canceled || reason != ErrClosed || binding != v.Challenge.Binding {
+			t.Fatal(state, reason)
+		}
+	})
+}
+
+func TestPermissionCoreConcurrentForeignObserve(t *testing.T) {
+	for _, ownerChanges := range []bool{false, true} {
+		t.Run(fmt.Sprint("owner-changes=", ownerChanges), func(t *testing.T) {
+			c, a, n, _ := fixture(t, false)
+			a.others = map[Principal]bool{"bob": true}
+			r := request("per_A")
+			v := observe(t, c, n, r)
+			decide(t, c, a, v, AllowOnce)
+			foreign := request2("per_A", "bob")
+			foreignChanged := foreign
+			foreignChanged.ScopeMaterial = []byte("bob scope")
+			ownerChanged := request("per_A")
+			ownerChanged.ScopeMaterial = []byte("alice changed")
+			start := make(chan struct{})
+			errs := make(chan error, 32*4)
+			var wg sync.WaitGroup
+			for range 32 {
+				wg.Add(3)
+				go func() {
+					defer wg.Done()
+					<-start
+					if got, err := c.Observe(context.Background(), "bob", foreign); err != ErrAuthority || got != (View{}) {
+						errs <- fmt.Errorf("bob same: %+v %v", got, err)
+					}
+				}()
+				go func() {
+					defer wg.Done()
+					<-start
+					if got, err := c.Observe(context.Background(), "bob", foreignChanged); err != ErrAuthority || got != (View{}) {
+						errs <- fmt.Errorf("bob changed: %+v %v", got, err)
+					}
+				}()
+				go func() {
+					defer wg.Done()
+					<-start
+					got, err := c.Observe(context.Background(), "alice", r)
+					if err == nil && (got.Challenge != v.Challenge || got.State != Decided && got.State != Stale) || err != nil && err != ErrStale {
+						errs <- fmt.Errorf("alice: %+v %v", got, err)
+					}
+				}()
+				if ownerChanges {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						<-start
+						if _, err := c.Observe(context.Background(), "alice", ownerChanged); err != ErrStale {
+							errs <- fmt.Errorf("alice changed: %v", err)
+						}
+					}()
+				}
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				t.Error(err)
+			}
+			got, err := c.Snapshot(t.Context(), "alice", v.Challenge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ownerChanges {
+				if got.State != Stale {
+					t.Fatal(got)
+				}
+				return
+			}
+			if got.State != Decided {
+				t.Fatal("foreign observers changed state", got)
+			}
+			x := claimOnce(t, c, v)
+			if res, err := c.Consume(t.Context(), "alice", x); err != nil || res.State != ReplyObserved {
+				t.Fatal(res, err)
+			}
+			if calls, _ := n.counts(); calls != 1 {
+				t.Fatal(calls)
+			}
+		})
+	}
+}

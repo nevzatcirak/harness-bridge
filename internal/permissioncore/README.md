@@ -98,6 +98,15 @@ no tombstone eviction or reset-to-pending. Reobservation never renews consent;
 changed scope/generation under the same native authority/lineage/request ID makes
 that entry stale. Each fresh request needs fresh positive correlation and consent.
 
+A retained entry is owned by the principal in its immutable binding. `Observe`
+by a different principal on the same native authority/lineage/request ID returns
+`ErrAuthority`, the same error as an unauthorized caller, without the entry's
+binding or state, and leaves the entry unchanged. Only its owner can make it
+stale, and only while the Authority still authorizes the owner for the entry's
+original binding (checked outside the mutex, then revalidated). Residual limit:
+native request IDs are a shared namespace, so a colliding principal still cannot
+create its own entry under that key and could infer that the key is taken.
+
 `Consume` rechecks current policy and human receipt before and after native
 freshness reads in the fixture path. It never holds its mutex across callback IO.
 This mutex/attempt marker is **not** the approved Mutation Gate M and is not a

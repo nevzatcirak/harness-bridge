@@ -160,6 +160,11 @@ func stateError(e *entry) error {
 // Observe accepts an authoritative request with already-proven execution/tool
 // correlation. Reobservation cannot reset expiry, replace bindings or erase spent
 // state. A changed request under the same native identity is permanently stale.
+//
+// A retained entry belongs to the principal in its immutable binding. Another
+// principal colliding on the native identity gets ErrAuthority, the same error as
+// an unauthorized caller, and the entry is untouched. Invalidating an entry also
+// requires the owner's current authorization for that entry's own binding.
 func (c *Core) Observe(ctx context.Context, p Principal, r Request) (View, error) {
 	b, err := requestBinding(r)
 	if err != nil {
@@ -169,21 +174,43 @@ func (c *Core) Observe(ctx context.Context, p Principal, r Request) (View, error
 		return View{}, err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return View{}, ErrClosed
 	}
-	if e := c.entries[key(b)]; e != nil {
-		if b != e.challenge.Binding {
-			e.state, e.reason = Stale, ErrStale
-			if e.attempted {
-				e.state = Uncertain
-			}
-			return View{}, ErrStale
+	e := c.entries[key(b)]
+	if e != nil {
+		owner := e.challenge.Binding // immutable after creation
+		if owner.Principal != p {
+			c.mu.Unlock()
+			return View{}, ErrAuthority
 		}
-		_ = c.current(e)
-		return view(e), nil
+		if b == owner {
+			_ = c.current(e)
+			v := view(e)
+			c.mu.Unlock()
+			return v, nil
+		}
+		c.mu.Unlock()
+		// Never hold c.mu across Authority IO; revalidate identity after it.
+		if err = c.authorize(ctx, p, owner); err != nil {
+			return View{}, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed {
+			return View{}, ErrClosed
+		}
+		if c.entries[key(b)] != e {
+			return View{}, ErrAuthority // entries are never replaced; fail closed
+		}
+		e.state, e.reason = Stale, ErrStale
+		if e.attempted {
+			e.state = Uncertain
+		}
+		return View{}, ErrStale
 	}
+	defer c.mu.Unlock()
 	if len(c.entries) >= c.config.Capacity {
 		return View{}, ErrCapacity
 	}
@@ -191,7 +218,7 @@ func (c *Core) Observe(ctx context.Context, p Principal, r Request) (View, error
 	if now < 0 || now > time.Duration(math.MaxInt64)-c.config.DecisionTTL {
 		return View{}, ErrExpired
 	}
-	e := &entry{challenge: Challenge{c.epoch, uint64(len(c.entries) + 1), b, now + c.config.DecisionTTL}, state: Pending, native: NativePending}
+	e = &entry{challenge: Challenge{c.epoch, uint64(len(c.entries) + 1), b, now + c.config.DecisionTTL}, state: Pending, native: NativePending}
 	c.entries[key(b)] = e
 	return view(e), nil
 }

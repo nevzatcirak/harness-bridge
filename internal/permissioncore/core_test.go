@@ -16,12 +16,21 @@ type fixtureAuthority struct {
 	mu       sync.Mutex
 	receipts map[string]HumanEvidence
 	denied   bool
+	others   map[Principal]bool // independently authorized principals besides alice
+	deny     func(Binding) bool // binding-specific revocation
+	gate     func(Binding)      // called outside a.mu before each decision
 }
 
 func (a *fixtureAuthority) Authorize(ctx context.Context, p Principal, b Binding) error {
 	a.mu.Lock()
+	gate := a.gate
+	a.mu.Unlock()
+	if gate != nil {
+		gate(b)
+	}
+	a.mu.Lock()
 	defer a.mu.Unlock()
-	if ctx.Err() != nil || a.denied || p != "alice" || b.Principal != p {
+	if ctx.Err() != nil || a.denied || (p != "alice" && !a.others[p]) || b.Principal != p || a.deny != nil && a.deny(b) {
 		return ErrAuthority
 	}
 	return nil
