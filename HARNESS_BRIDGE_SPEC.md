@@ -61,7 +61,7 @@ Components and responsibilities:
 
 Prefer one modular Go binary; keep integration boundaries meaningful without premature abstraction.
 
-## 5. Phase 1: OpenCode adapter
+## 5. OpenCode adapter (Roadmap Phases 1–3)
 
 Use OpenCode's **currently documented** HTTP API and official SDK when appropriate. Verify available endpoints, parameters, error responses and event semantics before coding.
 
@@ -76,7 +76,7 @@ Required capabilities:
 
 Distinguish four independent concepts: OpenCode session, running OpenCode server process, attached TUI client, and in-flight execution. Launching a new server does **not** imply control over a pre-existing interactive terminal process. Document any API capability gap rather than hiding it behind an abstraction.
 
-## 6. Phase 2: Claude Code adapter
+## 6. Claude Code adapter (Roadmap Phase 6)
 
 Investigate the latest **supported** Claude Code CLI and Agent SDK for: discovering resumable sessions, permitted history access, resuming a specific session, sending follow-up instructions, and collecting/monitoring results. Distinguish **resuming a historical conversation** from **controlling an actively running interactive terminal**. Do not claim the latter unless a documented or directly verified supported mechanism exists.
 
@@ -192,13 +192,17 @@ Include negative tests for duplicate submission, busy sessions, connection loss,
 
 ## 14. Development phases
 
-- **0 — Feasibility:** Verify latest OpenCode session API, SDK, transport and Claude Custom Connector requirements; document unknowns.
-- **1 — OpenCode local proof:** Demonstrate connection to an existing server and two-prompt same-session continuation.
-- **2 — MCP surface:** Implement proposed tools with robust contracts and lifecycle control.
-- **3 — Claude integration:** Set up authenticated remote connectivity to Claude Chat; test the real product behavior.
-- **4 — Supervisor loop:** Monitor, evaluate, retry within bounds, verify evidence and test recovery paths.
-- **5 — Claude Code:** Add the documented supported session continuation mechanisms.
-- **6 — Optional improvements:** Consider durable supervisor, persistence, or operational extras only when justified.
+Canonical phase numbering and status live in [docs/ROADMAP.md](docs/ROADMAP.md) (v1.4).
+
+- **0 — Feasibility & Capability Matrix:** Verify latest OpenCode session API, SDK, transport and Claude Custom Connector requirements; document unknowns.
+- **1 — OpenCode Existing-Session Proof:** Demonstrate connection to an existing server and two-prompt same-session continuation.
+- **2 — Execution Control & Recovery:** Bounded asynchronous execution, correlation, idempotency, busy guards, uncertainty, interruption, permission-state safety and recovery limits.
+- **3 — MCP Tool Contracts:** Implement proposed tools with robust contracts and lifecycle control.
+- **4 — Secure Claude Connector:** Set up authenticated remote connectivity to Claude Chat; test the real product behavior.
+- **5 — Supervisor & Evidence Loop:** Monitor, evaluate, retry within bounds, verify evidence and test recovery paths.
+- **6 — Claude Code Adapter:** Add the documented supported session continuation mechanisms.
+- **7 — Workspace Discovery, Selection, Launcher & Session Observatory:** Future product capability outside the MVP; no frontend in the MVP.
+- **8 — Optional Extensions:** Consider durable supervisor, persistence, or operational extras only when justified.
 
 For every phase, document goal, dependencies, risks, acceptance criteria, code/tests, confirmed functionality and unsupported limitations.
 
