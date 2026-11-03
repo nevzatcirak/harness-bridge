@@ -41,7 +41,7 @@ Do not expand scope without a new authorized task.
 
 ## Git workflow
 
-Use `feature/*`, `fix/*` or `docs/*` branches.
+Use `feature/*`, `feat/*`, `fix/*` or `docs/*` branches.
 
 Never push directly to `main`.
 

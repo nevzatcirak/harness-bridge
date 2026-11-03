@@ -22,12 +22,12 @@ jobs:
         shell: bash
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.2'
           check-latest: false
@@ -70,6 +70,54 @@ jobs:
           mkdir -p "$TEST_LOG_DIR"
           go test -race ./... -count=1 -json | tee "$TEST_LOG_DIR/race.jsonl"
 
+      - name: Verify unprivileged runner for confinement module
+        run: |
+          uid=$(id -u)
+          printf 'user=%s uid=%s\n' "$(id -un)" "$uid"
+          if [[ "$uid" == 0 ]]; then
+            echo 'confinement module checks must run as an unprivileged user' >&2
+            exit 1
+          fi
+          cap_eff=$(awk '/^CapEff:/ {print $2}' /proc/self/status)
+          printf 'CapEff=%s\n' "$cap_eff"
+          if [[ "$cap_eff" != 0000000000000000 ]]; then
+            echo 'confinement module checks must run without effective capabilities' >&2
+            exit 1
+          fi
+          if [[ -n "${HB_CONFINEMENT_INTEGRATION+set}" ]]; then
+            echo 'HB_CONFINEMENT_INTEGRATION must be unset in CI' >&2
+            exit 1
+          fi
+
+      - name: Confinement vet
+        working-directory: tests/confinement
+        run: env -u HB_CONFINEMENT_INTEGRATION go vet ./...
+
+      - name: Confinement test
+        working-directory: tests/confinement
+        run: |
+          TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
+          mkdir -p "$TEST_LOG_DIR"
+          env -u HB_CONFINEMENT_INTEGRATION go test ./... -count=1 -json | tee "$TEST_LOG_DIR/confinement.jsonl"
+
+      - name: Verify confinement test outcomes
+        run: |
+          log="$RUNNER_TEMP/harness-bridge-ci/confinement.jsonl"
+          outcome() {
+            jq -r --arg t "$1" 'select(.Test == $t and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | .Action' "$log"
+          }
+          direct=$(outcome TestDirectHostRunRefused)
+          isolated=$(outcome TestIsolatedKernelProfiles)
+          printf 'TestDirectHostRunRefused=%s\nTestIsolatedKernelProfiles=%s\n' "${direct:-missing}" "${isolated:-missing}"
+          if [[ "$direct" != pass ]]; then
+            echo 'TestDirectHostRunRefused must run and pass (not skip)' >&2
+            exit 1
+          fi
+          if [[ "$isolated" != skip ]]; then
+            echo 'privileged TestIsolatedKernelProfiles must remain skipped in CI' >&2
+            exit 1
+          fi
+
       - name: Report skipped tests
         if: ${{ always() }}
         run: |
@@ -77,13 +125,17 @@ jobs:
           {
             printf '## Test coverage limits\n\n'
             printf 'Unit and fixture integration checks do not establish real native OpenCode or Claude Chat E2E acceptance.\n\n'
-            for suite in test race; do
+            for suite in test race confinement; do
               printf '### %s\n\n' "$suite"
               log="$TEST_LOG_DIR/$suite.jsonl"
               if [[ -f "$log" ]]; then
                 count=$(jq -s '[.[] | select(.Action == "skip" and .Test != null)] | length' "$log")
                 printf 'Skipped tests: %s. Skips are not PASS.\n\n' "$count"
                 jq -r 'select(.Action == "skip" and .Test != null) | "- " + .Package + ": " + .Test' "$log"
+                printf '\n'
+                notests=$(jq -s '[.[] | select(.Action == "skip" and .Test == null)] | length' "$log")
+                printf 'Packages with [no test files]: %s. Not tested; not PASS.\n\n' "$notests"
+                jq -r 'select(.Action == "skip" and .Test == null) | "- " + .Package' "$log"
               else
                 printf 'No test log: suite was not executed; not PASS.\n'
               fi
