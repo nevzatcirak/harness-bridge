@@ -2,12 +2,14 @@
 
 ## Baseline and scope
 
-This increment is isolated at `db9da6b` on `feat/p2-perm-core-01` in
-`/tmp/hb-p2-perm-core-01`. The approved five `internal/permissioncore` files are
-available as uncommitted baseline files and remain unchanged. The current Core
+This increment was developed and reviewed in isolation at `db9da6b` on
+`feat/p2-perm-core-01` against the original CORE-01 `internal/permissioncore`
+files. It lands on `main` at `eabb148`, which already contains CORE-01
+(`5e6547c`) and its cross-principal `Observe` fix (`3b2660e`). The observer has
+no compile-time or runtime dependency on `internal/permissioncore`, so that fix
+does not change its behavior, and it leaves those files unchanged. The Core
 Runtime integration worktree's later uncommitted Journal, Mutation Gate and
-execution APIs are **not** present in this baseline. Roadmap v1.3 was consulted
-from that authoritative worktree, not copied or modified.
+execution APIs are **not** part of this change.
 
 `PermissionObserver` adds caller-driven bounded `Snapshot`, `ReadEvents` and
 `View` operations to the existing OpenCode adapter. It adds no service, goroutine
