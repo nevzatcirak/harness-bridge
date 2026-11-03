@@ -44,11 +44,18 @@ HTTP operations. No descriptor is passed to OpenCode; stat metadata is not a
 permanent inode pin, so inode reuse/mount manipulation and swaps between checks
 remain residuals. No rootfs/native tool isolation is supplied by an MCP ACL.
 
-This isolated P2-REC-02 proposal contains only execution workspace identity and
-admission coordination. It adds no confinement module, credential authority,
+The isolated P2-REC-02 proposal (PR #6) contained only execution workspace
+identity and admission coordination. MIG-A-02 (below) additionally carries the
+non-overlapping H4-B material from fdd5118; neither adds a credential authority,
 provider/plugin integration or new MCP tool. H4-B provisioning and production
 promotion remain outside this change. ADR-015 remains PROPOSED and its review
 pending; no restricted experiment is repeated here.
+
+The synthetic Linux confinement fixture is test code, not a service or a remotely
+callable launcher. Same-UID credentials, imported hard links, interpreted writable
+scripts, egress and exact native-runtime compatibility remain blocking acceptance
+gates; see H4_B_SECURITY_EVIDENCE.md. H4-B full acceptance and production H4-A
+promotion are not declared complete.
 
 ## Isolated review clarification (2026-10-29)
 
@@ -92,3 +99,31 @@ and revalidates immediately before Prompt within its existing monitor context.
 Stat/path syscalls and context-ignoring Runner implementations are not made bounded
 by this change. Close joins managed work but cannot guarantee prompt return from
 uninterruptible operations. Native execution may continue after Bridge exits.
+
+## MIG-A-02 reconciliation (2026-11-03)
+
+Reconciles PR #5 head fdd51181b7a7bb441ee6e3557bbcc8542a1a9612 into PR #6 head
+db9da6b0cb3721ad6dc2a271726c01632c98381c over common base 0b3c319. PR #6's
+execution code (manager.go, reconcile.go, hardening_test.go) is a superset of
+fdd5118's identity/admission hunks and is kept verbatim. The only conflicting
+semantic is the accepted-but-never-submitted path: fdd5118's
+unknown/unresolved PRE_SUBMISSION_UNAVAILABLE with a retained guard is superseded
+by P2-REC-02B's local failed outcome above, and its CONTRACTS section is dropped
+in favour of PR #6's. Non-overlapping fdd5118 material (tests/confinement, H4-B
+evidence documents, README/ARCHITECTURE/provisioning-plan notes) is carried
+unchanged except for a supersession note in H4_B_SECURITY_EVIDENCE.md. That
+evidence remains an observation of fdd5118 and is not re-asserted for this head.
+
+## MIG-A-02 reconciliation (2026-11-03)
+
+Reconciles PR #5 head fdd51181b7a7bb441ee6e3557bbcc8542a1a9612 into PR #6 head
+db9da6b0cb3721ad6dc2a271726c01632c98381c over common base 0b3c319. PR #6's
+execution code (manager.go, reconcile.go, hardening_test.go) is a superset of
+fdd5118's identity/admission hunks and is kept verbatim. The only conflicting
+semantic is the accepted-but-never-submitted path: fdd5118's
+unknown/unresolved PRE_SUBMISSION_UNAVAILABLE with a retained guard is superseded
+by P2-REC-02B's local failed outcome above, and fdd5118's CONTRACTS section is
+dropped in favour of PR #6's. Non-overlapping fdd5118 material (tests/confinement,
+H4-B evidence documents, README/ARCHITECTURE/provisioning-plan notes) is carried
+unchanged except for a supersession note in H4_B_SECURITY_EVIDENCE.md. That
+evidence remains an observation of fdd5118 and is not re-asserted for this head.
