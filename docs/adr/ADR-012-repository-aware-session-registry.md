@@ -2,6 +2,8 @@
 
 Date: 2026-10-25. Status: proposed for H4-A review; implemented on feature branch,
 not deployed. Preserves accepted ADR-010 and ADR-011.
+Session state semantics accepted by maintainer 2026-11-04 (option b, Bridge guard
+overlay); remainder of ADR-012 stays proposed.
 
 ## Decision
 
@@ -88,7 +90,14 @@ errors or deadline/cancellation fail the whole request without partial results.
 Observed state is not atomic. list_sessions keeps its original input/output
 shape but now shares the 1000-entry/10s guard; oversized ACLs fail explicitly.
 
-Session state uses native status and permissions: explicit idle -> idle,
+Bridge guard overlay (accepted 2026-11-04, option b): while this Bridge holds the
+session's busy guard, state is never idle. After permission evidence (failed read ->
+unknown, pending -> waiting_for_permission), a held submitting/running execution ->
+running, waiting_for_permission -> waiting_for_permission, unknown -> unknown;
+native status is then ignored for state. The guard is per Bridge process and read
+without native I/O (CONTRACTS.md "Session state and the Bridge guard").
+
+Without a guard, session state uses native status and permissions: explicit idle -> idle,
 busy/retry -> running, pending matching permission -> waiting_for_permission;
 absent/unrecognized/unavailable status -> unknown. Failed permission reads force
 unknown. Native raw state is optional. This is a non-atomic observation and never
