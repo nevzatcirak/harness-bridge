@@ -100,9 +100,33 @@ func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible boo
 	} else if d.permissions[v.ID] {
 		out.State = "waiting_for_permission"
 	}
+	// A session guarded by this Bridge is never idle, whatever native status says.
+	if s.Runs != nil {
+		if held, executionState := s.Runs.SessionGuard(v.ID); held {
+			out.State = guardedState(executionState, d.permissionsOK, d.permissions[v.ID])
+		}
+	}
 	out.Repository = d.repository
 	out.Workspace = d.workspace
 	return out
+}
+
+// guardedState maps a held execution to session state: permission evidence first
+// (as for unguarded sessions), then the execution; native status is ignored.
+func guardedState(executionState string, permissionsOK, pending bool) string {
+	if !permissionsOK {
+		return "unknown"
+	}
+	if pending {
+		return "waiting_for_permission"
+	}
+	switch executionState {
+	case "submitting", "running":
+		return "running"
+	case "waiting_for_permission":
+		return "waiting_for_permission"
+	}
+	return "unknown"
 }
 func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.Client) Session {
 	visible := false

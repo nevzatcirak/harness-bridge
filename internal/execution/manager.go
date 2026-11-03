@@ -461,6 +461,34 @@ func (m *Manager) Snapshot(ctx context.Context, id string) (Execution, error) {
 	defer x.mu.Unlock()
 	return snapshot(x.view), nil
 }
+
+// SessionGuard reports whether this Manager holds the busy guard for a native
+// session and, if so, the held execution's state. It performs no native I/O and
+// never holds m.mu and run.mu together. A reservation whose run is not published
+// yet reports "submitting". A terminal run is released in the same run.mu
+// critical section that made it terminal, so observing one means the guard moved;
+// re-read, and stay conservative if the race persists.
+func (m *Manager) SessionGuard(session string) (held bool, state string) {
+	for attempt := 0; attempt < 3; attempt++ {
+		m.mu.Lock()
+		id := m.busy[session]
+		x := m.runs[id]
+		m.mu.Unlock()
+		if id == "" {
+			return false, ""
+		}
+		if x == nil {
+			return true, "submitting"
+		}
+		x.mu.Lock()
+		state = x.view.State
+		x.mu.Unlock()
+		if !terminal(state) {
+			return true, state
+		}
+	}
+	return true, "unknown"
+}
 func (m *Manager) Get(ctx context.Context, id string) (Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return Execution{}, err
