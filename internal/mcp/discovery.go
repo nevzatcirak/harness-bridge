@@ -87,7 +87,16 @@ func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible boo
 		out.ParentSessionID = "opencode:" + v.ParentID
 	}
 	if d.statusOK {
-		out.NativeState = d.status[v.ID].Type
+		native, listed := d.status[v.ID]
+		if !listed {
+			// OpenCode drops idle sessions from its per-directory status map and
+			// reports idle for absent ones. Absence counts only from this successful
+			// read of the session's own directory-scoped client. Permission and
+			// guard evidence below can still override it.
+			native.Type = "idle"
+			out.NativeStateInferredFromAbsence = true
+		}
+		out.NativeState = native.Type
 		switch out.NativeState {
 		case "idle":
 			out.State = "idle"

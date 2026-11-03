@@ -232,8 +232,10 @@ operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 spec
   cursor; an upstream server ignoring the limit fails closed.
 
 Session fields gain optional repository/workspace objects, parent_session_id,
-harness_instance_id, native_project_id, native_workspace_id, native_state. Existing
-required fields remain. Absent native state means unknown, never assumed idle.
+harness_instance_id, native_project_id, native_workspace_id, native_state and
+native_state_inferred_from_absence. Existing required fields remain. Omitted
+native_state means native status was unavailable (failed read); see "Session state
+and the Bridge guard" for when absence from a successful read is reported as idle.
 
 ### Session state and the Bridge guard
 
@@ -248,11 +250,27 @@ read gives `unknown`; otherwise a pending native permission for the session give
   (a pending permission cannot release the guard); `unknown` gives `unknown`. Native
   status is ignored for `state` and is reported only in `native_state`.
 - **No guard:** native status maps explicit `idle` to `idle`, `busy`/`retry` to
-  `running`, and absent/unrecognized/unavailable status to `unknown`.
+  `running`, and unrecognized (for example a future native type) or unavailable
+  (failed status read) status to `unknown`.
+- **Absent from native status (F-4, 2026-11-04):** OpenCode 1.19.4 deletes a session
+  from its per-directory status map when it becomes idle and reports `idle` for any
+  absent session, so `GET /session/status` lists only non-idle sessions. A session
+  absent from a *successful* status read of its own directory-scoped client is
+  reported with `native_state: "idle"` and `native_state_inferred_from_absence: true`.
+  `state` is `idle` only if, in addition, the permission read succeeded, no native
+  permission is pending for the session and this Bridge holds no guard for it; the
+  precedence above still applies (failed permission read -> `unknown`, pending ->
+  `waiting_for_permission`, held guard -> never `idle`). An explicit native `idle`
+  entry omits `native_state_inferred_from_absence`. A failed status read omits both
+  fields and never yields `idle`.
 
 The guard is per Bridge process: another Bridge or native client is not visible
 (ADR-010). The guard is read without native I/O. Session state is a non-atomic
-observation and never completion proof; use execution status/result.
+observation and never completion proof; use execution status/result. In particular,
+`idle` (explicit or inferred from absence) only means no native work was observed for
+the session at read time: it does not prove that a submitted prompt ran, finished or
+succeeded, and absence cannot distinguish "finished" from "never started", "aborted"
+or a native instance that lost in-memory status (for example after restart).
 Parent links require separate authorization; unapproved children stay invisible.
 Repository/workspace hashes and endpoint IDs are metadata locators, not grants.
 Canonical path authorization now also rejects symlink aliases and unclean paths.

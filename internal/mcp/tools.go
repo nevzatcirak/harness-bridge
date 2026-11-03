@@ -43,6 +43,11 @@ type Session struct {
 	Directory         string                 `json:"directory"`
 	Title             string                 `json:"title"`
 	State             string                 `json:"state"`
+
+	// NativeStateInferredFromAbsence is true when native_state "idle" was inferred
+	// because the session is absent from a successful native status read of its
+	// own directory. Omitted otherwise, including for an explicit native "idle".
+	NativeStateInferredFromAbsence bool `json:"native_state_inferred_from_absence,omitempty"`
 }
 type Sessions struct {
 	Sessions []Session `json:"sessions"`
