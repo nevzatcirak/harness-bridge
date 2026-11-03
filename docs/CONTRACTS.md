@@ -50,8 +50,9 @@ Important: these are design contracts, not a claim that every field, pagination 
 
 H1 keeps the seven bootstrap tools with strict argument parsing. List/history
 return `{sessions:[...]}` and `{messages:[...]}`. Session metadata contains
-`session_id`, `native_id`, `harness`, `directory`, `title`, and conservative
-`state:unknown` (execution state is separate). Execution IDs and message IDs are
+`session_id`, `native_id`, `harness`, `directory`, `title`, and `state`
+(H1–H3: conservatively `unknown`; from H4-A see "Session state and the Bridge
+guard" below; execution state is separate). Execution IDs and message IDs are
 separate; execution `session_id` is always `opencode:<native-id>`. Status/result
 reads are snapshots of a background monitor. Result messages include only the
 submitted user message and assistant messages whose native session and parent ID
@@ -92,7 +93,8 @@ blank prompts and enforces its stricter 32768-byte bound. Keys have schema lengt
 cursor/limit/reason argument; history remains bounded by the 8 MiB upstream read.
 
 Session fields: `session_id`, `native_id`, `harness`, `directory`, `title`,
-`state` (conservatively `unknown`). Execution fields: `execution_id`, `session_id`,
+`state` (H1–H3: conservatively `unknown`; from H4-A per "Session state and the
+Bridge guard"). Execution fields: `execution_id`, `session_id`,
 `message_id`, `state`, `started_at`, `updated_at`, optional `error`, `ended_at`.
 Native messages preserve `{info,parts}` including `sessionID`, `parentID`,
 `time.completed`, `finish`, `error`, `path.cwd`. Parts and native errors are
@@ -232,6 +234,25 @@ operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 spec
 Session fields gain optional repository/workspace objects, parent_session_id,
 harness_instance_id, native_project_id, native_workspace_id, native_state. Existing
 required fields remain. Absent native state means unknown, never assumed idle.
+
+### Session state and the Bridge guard
+
+Accepted by the maintainer 2026-11-04 (ADR-012 state semantics, option b). Applies to
+`get_session`, `list_sessions` and `find_sessions`. Precedence: a failed permission
+read gives `unknown`; otherwise a pending native permission for the session gives
+`waiting_for_permission`; otherwise:
+
+- **This Bridge holds the session's busy guard:** state follows the held execution and
+  is never `idle`. `submitting` (including a reservation not yet submitted) and
+  `running` give `running`; `waiting_for_permission` stays `waiting_for_permission`
+  (a pending permission cannot release the guard); `unknown` gives `unknown`. Native
+  status is ignored for `state` and is reported only in `native_state`.
+- **No guard:** native status maps explicit `idle` to `idle`, `busy`/`retry` to
+  `running`, and absent/unrecognized/unavailable status to `unknown`.
+
+The guard is per Bridge process: another Bridge or native client is not visible
+(ADR-010). The guard is read without native I/O. Session state is a non-atomic
+observation and never completion proof; use execution status/result.
 Parent links require separate authorization; unapproved children stay invisible.
 Repository/workspace hashes and endpoint IDs are metadata locators, not grants.
 Canonical path authorization now also rejects symlink aliases and unclean paths.
