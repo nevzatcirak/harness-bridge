@@ -128,6 +128,19 @@ func decodePermissionRequest(raw []byte) (nativePermissionRequest, string, error
 	if len(fields) != 6 && len(fields) != 7 || len(fields) == 7 && fields["tool"] == nil {
 		return r, "", ErrPermissionMalformed
 	}
+	// encoding/json silently converts null array members to an empty Go string.
+	// Validate the wire types before that coercion can collapse scope evidence.
+	for _, key := range []string{"patterns", "always"} {
+		var members []json.RawMessage
+		if json.Unmarshal(fields[key], &members) != nil || members == nil {
+			return r, "", ErrPermissionMalformed
+		}
+		for _, member := range members {
+			if raw := bytes.TrimSpace(member); len(raw) == 0 || raw[0] != '"' {
+				return r, "", ErrPermissionMalformed
+			}
+		}
+	}
 	if rawTool := fields["tool"]; rawTool != nil {
 		tool, err := permissionProjection(rawTool, []string{"messageID", "callID"}, []string{"messageID", "callID"})
 		if err != nil || len(tool) != 2 {

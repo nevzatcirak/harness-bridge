@@ -99,6 +99,27 @@ Terminal tombstones are retained. Reappearing/rebound IDs and conflicting
 replies become uncertain and clear execution attribution; they never rearm a
 permission. Out-of-order created-after-replied evidence remains uncertain.
 
+P2-PERM-CORE-02-FIX-01 retains the first positively verified binding privately
+for the observer lifetime, including trusted scope/incarnation and exact request,
+session, tool message/call/part, tool-name hash, user-parent and Bridge execution.
+Later contradictory native or trusted-run evidence permanently tombstones that
+identity. The original binding and first contradictory identity are retained in
+bounded private state even when the public attribution is cleared. Returning to
+the original payload/execution cannot repair a conflict. Duplicate event bytes
+do not hide contradictory message evidence read while processing that event.
+
+Only a fully parsed, authorized, successfully committed pending snapshot records
+disappearance. Such disappearance permanently removes verified attribution in
+this observer: same-ID/same-payload reappearance, reconnect, local stream generation,
+or a native claimed generation cannot establish continuity. An old replied event
+may retain its native reply enum but cannot resolve the vanished request identity.
+Failed/incomplete/stale snapshots do not manufacture successful absence. A later
+successful read can repair their transport uncertainty only against the retained
+original binding; it cannot clear conflict/disappearance tombstones. This adapter
+offers no independently verified new-request-generation API or reset. Observer
+replacement, process restart and new incarnation evidence remain the trusted
+owner's responsibility; no history, authority or consent is restored here.
+
 A changed trusted scope denies access to old views. Disposed native instances
 require new trusted evidence and a fresh observer; restart restores no authority.
 No native incarnation is fabricated from event IDs. No local deny is converted
@@ -124,6 +145,9 @@ capacity the observer fails closed without evicting identity tombstones.
 
 Duplicate JSON keys (including metadata), invalid UTF-8, malformed IDs, incorrect
 case aliases and invalid native shapes fail with typed observation errors.
+Every `patterns` and `always` element must be an actual JSON string before
+canonicalization. Null, numbers, booleans, objects, arrays and mixed-type arrays
+fail with `ErrPermissionMalformed` and no digest; empty strings/arrays remain valid.
 Metadata stays opaque and untrusted; only a deterministic digest, counts,
 whitelisted tool/permission categories and validated opaque IDs are retained.
 Raw patterns, commands, prompt fragments, native errors, credentials and tool
@@ -150,3 +174,12 @@ There is no permission audit integration, trusted human decision channel, native
 reply dispatch, durable observation history, guaranteed event completeness or
 automatic execution recovery. A same-UID process, Unix socket or model-generated
 approval text is not human authorization.
+
+The FIX-01 permanent regressions cover snapshot/event rebinding (including
+duplicate event IDs), returning old evidence after conflict, changed tool-part
+identity, missing user evidence, disappearance/reappearance, old asked/replied
+events, reconnect/capacity, incomplete snapshots, unproven generation, strict
+array members and 2/32 conflicting contenders. Fixture cleanup asserts zero
+native mutations. The original absence/reuse test is retained with its old
+post-disappearance `resolved_externally` expectation strengthened to uncertainty;
+the reply enum remains an observation rather than generation continuity proof.

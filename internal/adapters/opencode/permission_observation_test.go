@@ -279,8 +279,8 @@ func TestPermissionObservationSnapshotAbsenceAndReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err = o.Snapshot(t.Context())
-	if err != nil || v.Permissions[0].State != "resolved_externally" {
-		t.Fatal(v, err)
+	if err != nil || v.Permissions[0].State != "observation_uncertain" || v.Permissions[0].ObservedReply != "once" || v.Permissions[0].ExecutionID != "" {
+		t.Fatal("reply without generation proof repaired disappearance", v, err)
 	}
 	f.pending = []json.RawMessage{raw}
 	v, err = o.Snapshot(t.Context())

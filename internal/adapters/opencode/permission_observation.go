@@ -16,9 +16,39 @@ import (
 	"time"
 )
 
+// These private facts never establish caller authority. Scope is supplied by the
+// existing trusted owner; native message/part facts only corroborate its run index.
+type permissionObservationIdentity struct {
+	scope                                                   PermissionScope
+	requestID, sessionID, digest, toolMessageID, toolCallID string
+	userMessageID, executionID, toolPartID                  string
+	toolHash                                                [32]byte
+}
+
+func (b permissionObservationIdentity) contradicts(next permissionObservationIdentity) bool {
+	return b.scope != next.scope || b.requestID != next.requestID || b.sessionID != next.sessionID || b.digest != next.digest ||
+		b.toolMessageID != next.toolMessageID || b.toolCallID != next.toolCallID ||
+		next.userMessageID != "" && b.userMessageID != next.userMessageID ||
+		next.executionID != "" && b.executionID != next.executionID ||
+		next.toolPartID != "" && b.toolPartID != next.toolPartID ||
+		next.toolHash != [32]byte{} && b.toolHash != next.toolHash
+}
+
 type permissionObservationEntry struct {
-	view     ObservedPermission
-	conflict bool
+	view                  ObservedPermission
+	identity              permissionObservationIdentity
+	binding               *permissionObservationIdentity // first verified binding; never overwritten
+	conflictingIdentity   *permissionObservationIdentity // first contradiction; bounded, never overwritten
+	conflict, disappeared bool
+}
+
+func (e *permissionObservationEntry) uncertain(reason string) {
+	e.view.State, e.view.Attribution, e.view.Reason = "observation_uncertain", "unattributed", reason
+	e.view.ExecutionID, e.view.UserMessageID = "", ""
+}
+
+func (e permissionObservationEntry) bindingConflict(next permissionObservationEntry) bool {
+	return e.binding != nil && (next.view.Attribution == "conflicting" || e.binding.contradicts(next.identity))
 }
 
 // PermissionObserver has no reply API and no background worker. The caller owns
@@ -219,28 +249,33 @@ func (o *PermissionObserver) executions(ctx context.Context) ([]KnownPermissionE
 	return known, nil
 }
 
-func (o *PermissionObserver) correlate(ctx context.Context, r nativePermissionRequest, digest string, known []KnownPermissionExecution) ObservedPermission {
-	v := ObservedPermission{RequestID: r.ID, SessionID: r.SessionID, Kind: safePermissionKind(r.Permission), PatternCount: len(r.Patterns), ScopeDigest: digest, State: "pending", Attribution: "unattributed", Reason: "correlation_missing"}
+func (o *PermissionObserver) correlate(ctx context.Context, r nativePermissionRequest, digest string, known []KnownPermissionExecution) (candidate permissionObservationEntry) {
+	candidate.view = ObservedPermission{RequestID: r.ID, SessionID: r.SessionID, Kind: safePermissionKind(r.Permission), PatternCount: len(r.Patterns), ScopeDigest: digest, State: "pending", Attribution: "unattributed", Reason: "correlation_missing"}
+	candidate.identity = permissionObservationIdentity{scope: o.scope, requestID: r.ID, sessionID: r.SessionID, digest: digest}
+	v, identity := &candidate.view, &candidate.identity
 	if r.Tool == nil {
-		return v
+		return candidate
 	}
 	v.ToolMessageID, v.ToolCallID = r.Tool.MessageID, r.Tool.CallID
+	identity.toolMessageID, identity.toolCallID = r.Tool.MessageID, r.Tool.CallID
 	if o.scope.NativeEpoch == "" || o.scope.RootRef == "" || o.scope.WorkspaceRef == "" {
 		v.Reason = "identity_unverified"
-		return v
+		return candidate
 	}
 	var assistant Message
 	if o.readJSON(ctx, "/session/"+r.SessionID+"/message/"+r.Tool.MessageID, permissionPayloadLimit, &assistant) != nil {
 		v.Reason = "message_evidence_unavailable"
-		return v
+		return candidate
 	}
-	conflict := func() ObservedPermission {
+	conflict := func() permissionObservationEntry {
 		v.Attribution, v.Reason = "conflicting", "native_binding_conflict"
-		return v
+		return candidate
 	}
 	if assistant.Info.ID != r.Tool.MessageID || assistant.Info.SessionID != r.SessionID || assistant.Info.Role != "assistant" || !ValidID(assistant.Info.ParentID, "msg") || assistant.Info.Path.Cwd != o.scope.Directory || len(assistant.Parts) > 256 {
 		return conflict()
 	}
+	// Preserve contradictory parent evidence even if its user GET later fails.
+	identity.userMessageID = assistant.Info.ParentID
 	matches := 0
 	for _, raw := range assistant.Parts {
 		var p struct {
@@ -258,6 +293,7 @@ func (o *PermissionObserver) correlate(ctx context.Context, r nativePermissionRe
 		}
 		matches++
 		v.Tool = safePermissionKind(p.Tool)
+		identity.toolPartID, identity.toolHash = p.ID, sha256.Sum256([]byte(p.Tool))
 	}
 	if matches != 1 {
 		return conflict()
@@ -265,7 +301,7 @@ func (o *PermissionObserver) correlate(ctx context.Context, r nativePermissionRe
 	var user Message
 	if o.readJSON(ctx, "/session/"+r.SessionID+"/message/"+assistant.Info.ParentID, permissionPayloadLimit, &user) != nil {
 		v.Reason = "message_evidence_unavailable"
-		return v
+		return candidate
 	}
 	if user.Info.ID != assistant.Info.ParentID || user.Info.SessionID != r.SessionID || user.Info.Role != "user" {
 		return conflict()
@@ -282,8 +318,9 @@ func (o *PermissionObserver) correlate(ctx context.Context, r nativePermissionRe
 	}
 	if execution != "" {
 		v.ExecutionID, v.UserMessageID, v.Attribution, v.Reason = execution, user.Info.ID, "verified", "exact_native_parent_and_tool"
+		identity.executionID = execution
 	}
-	return v
+	return candidate
 }
 
 // Snapshot reconciles an entire bounded native pending list. Absence NEVER means
@@ -327,7 +364,7 @@ func (o *PermissionObserver) Snapshot(ctx context.Context) (PermissionObservatio
 	if len(raw) > 4096 {
 		return PermissionObservationBatch{}, o.fail(ErrPermissionLimit)
 	}
-	candidate := make(map[string]ObservedPermission)
+	candidate := make(map[string]permissionObservationEntry)
 	for _, item := range raw {
 		if _, err = permissionProjection(item, []string{"sessionID"}, []string{"sessionID"}); err != nil {
 			return PermissionObservationBatch{}, o.fail(err)
@@ -382,7 +419,10 @@ func (o *PermissionObserver) Snapshot(ctx context.Context) (PermissionObservatio
 	}
 	for id, e := range o.entries {
 		if _, exists := candidate[id]; !exists && e.view.State != "resolved_externally" {
-			e.view.State, e.view.Reason = "observation_uncertain", "missing_from_snapshot"
+			// Only this fully validated, successful snapshot can record absence.
+			// No native request generation exists that could safely undo it.
+			e.disappeared = true
+			e.uncertain("missing_from_snapshot")
 			o.entries[id] = e
 		}
 	}
@@ -399,19 +439,35 @@ func (o *PermissionObserver) Snapshot(ctx context.Context) (PermissionObservatio
 	return o.viewLocked(), nil
 }
 
-func (o *PermissionObserver) mergeLocked(id string, v ObservedPermission, snapshot bool) {
+func (o *PermissionObserver) mergeLocked(id string, candidate permissionObservationEntry, snapshot bool) {
+	v := candidate.view
 	e, exists := o.entries[id]
-	if exists && (e.conflict || e.view.State == "resolved_externally" || e.view.ScopeDigest != "" && e.view.ScopeDigest != v.ScopeDigest) {
+	if exists && (e.conflict || e.view.State == "resolved_externally" || e.view.ScopeDigest != "" && e.view.ScopeDigest != v.ScopeDigest || e.bindingConflict(candidate)) {
 		e.conflict = true
-		e.view.State, e.view.Attribution, e.view.Reason = "observation_uncertain", "unattributed", "request_identity_conflict"
-		e.view.ExecutionID, e.view.UserMessageID = "", ""
+		if e.conflictingIdentity == nil {
+			identity := candidate.identity
+			e.conflictingIdentity = &identity
+		}
+		e.uncertain("request_identity_conflict")
+		o.status = "observation_uncertain"
+		o.entries[id] = e
+		return
+	}
+	if e.disappeared {
+		e.uncertain("request_generation_unverified")
+		o.status = "observation_uncertain"
 		o.entries[id] = e
 		return
 	}
 	if exists && !snapshot && e.view.State != "pending" {
 		return // an old/reordered asked event cannot repair a gap/missing snapshot
 	}
-	o.entries[id] = permissionObservationEntry{view: v}
+	if e.binding == nil && v.Attribution == "verified" {
+		identity := candidate.identity
+		e.binding = &identity
+	}
+	e.view, e.identity = v, candidate.identity
+	o.entries[id] = e
 }
 
 func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, generation uint64) error {
@@ -456,7 +512,7 @@ func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, gener
 	if err := o.verifySession(ctx); err != nil {
 		return o.fail(err)
 	}
-	var v ObservedPermission
+	var candidate permissionObservationEntry
 	if event.Type == "permission.asked" {
 		r, digest, err := decodePermissionRequest(event.Properties)
 		if err != nil {
@@ -466,7 +522,7 @@ func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, gener
 		if err != nil {
 			return o.fail(err)
 		}
-		v = o.correlate(ctx, r, digest, known)
+		candidate = o.correlate(ctx, r, digest, known)
 	} else {
 		var r nativePermissionReply
 		d := json.NewDecoder(bytes.NewReader(event.Properties))
@@ -475,7 +531,7 @@ func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, gener
 		if json.Unmarshal(event.Properties, &fields) != nil || len(fields) != 3 || fields["sessionID"] == nil || fields["requestID"] == nil || fields["reply"] == nil || d.Decode(&r) != nil || !ValidID(r.RequestID, "per") || r.Reply != "once" && r.Reply != "always" && r.Reply != "reject" {
 			return o.fail(ErrPermissionMalformed)
 		}
-		v = ObservedPermission{RequestID: r.RequestID, SessionID: r.SessionID, State: "resolved_externally", Attribution: "unattributed", ObservedReply: r.Reply, Reason: "native_reply_observed"}
+		candidate.view = ObservedPermission{RequestID: r.RequestID, SessionID: r.SessionID, State: "resolved_externally", Attribution: "unattributed", ObservedReply: r.Reply, Reason: "native_reply_observed"}
 	}
 	if err := o.verifySession(ctx); err != nil {
 		return o.fail(err)
@@ -488,9 +544,16 @@ func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, gener
 	if generation != o.generation || o.fenced {
 		return ErrPermissionStale
 	}
+	v := candidate.view
 	if event.ID != "" {
 		digest := sha256.Sum256(raw)
 		if previous, exists := o.seen[event.ID]; exists {
+			// Duplicate event data cannot hide new contradictory message/run
+			// evidence read while processing that event. Otherwise stay idempotent.
+			if event.Type == "permission.asked" && o.entries[v.RequestID].bindingConflict(candidate) {
+				o.mergeLocked(v.RequestID, candidate, false)
+				o.revision++
+			}
 			if previous != digest {
 				o.markLocked("observation_uncertain", "event_identity_conflict")
 				return ErrPermissionMalformed
@@ -506,15 +569,21 @@ func (o *PermissionObserver) processEvent(ctx context.Context, raw []byte, gener
 		return ErrPermissionLimit
 	}
 	if event.Type == "permission.asked" {
-		o.mergeLocked(v.RequestID, v, false)
+		o.mergeLocked(v.RequestID, candidate, false)
 	} else {
 		e := o.entries[v.RequestID]
 		if e.view.RequestID == "" {
 			e.view = v
 		} else if e.conflict || e.view.ObservedReply != "" && e.view.ObservedReply != v.ObservedReply {
 			e.conflict = true
-			e.view.State, e.view.Reason, e.view.Attribution = "observation_uncertain", "conflicting_resolution", "unattributed"
-			e.view.ExecutionID, e.view.UserMessageID = "", ""
+			e.uncertain("conflicting_resolution")
+			o.status = "observation_uncertain"
+		} else if e.disappeared {
+			// A replied event identifies no request generation. Retain the native
+			// enum as an observation, never as resolution of the vanished identity.
+			e.view.ObservedReply = v.ObservedReply
+			e.uncertain("request_generation_unverified")
+			o.status = "observation_uncertain"
 		} else {
 			e.view.State, e.view.ObservedReply, e.view.Reason = v.State, v.ObservedReply, v.Reason
 		}
