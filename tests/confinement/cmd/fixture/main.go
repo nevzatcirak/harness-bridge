@@ -325,7 +325,7 @@ func installFilter(denyUnix bool) {
 	// clone3's flags live behind a pointer, so reject it with ENOSYS to
 	// preserve documented libc/Go clone fallback, then inspect classic clone flags.
 	f = append(f, syscall.SockFilter{Code: jeq, K: 435, Jf: 1}, syscall.SockFilter{Code: ret, K: 0x00050000 | uint32(syscall.ENOSYS)})
-	for _, number := range []uint32{uint32(syscall.SYS_UNSHARE), uint32(syscall.SYS_SETNS), uint32(syscall.SYS_MOUNT), uint32(syscall.SYS_UMOUNT2), uint32(syscall.SYS_PIVOT_ROOT), uint32(syscall.SYS_CHROOT), uint32(syscall.SYS_PTRACE)} {
+	for _, number := range []uint32{uint32(syscall.SYS_UNSHARE), uint32(sysSetns), uint32(syscall.SYS_MOUNT), uint32(syscall.SYS_UMOUNT2), uint32(syscall.SYS_PIVOT_ROOT), uint32(syscall.SYS_CHROOT), uint32(syscall.SYS_PTRACE)} {
 		f = append(f, syscall.SockFilter{Code: jeq, K: number, Jf: 1}, syscall.SockFilter{Code: ret, K: deny})
 	}
 	if denyUnix {
