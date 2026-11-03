@@ -93,3 +93,11 @@ are documented in [H3 connector guide](docs/H3_CONNECTOR_GUIDE.md) and
 Writer ownership and restart/migration requirements: [ADR-010](docs/adr/ADR-010-single-writer.md).
 Updated writers fail startup without protected shared ownership configuration;
 existing installed services are not upgraded automatically.
+
+H4-A development: [audit and exact capabilities](docs/H4_A_EVIDENCE.md),
+[repository registry ADR](docs/adr/ADR-012-repository-aware-session-registry.md),
+[native delegation ADR](docs/adr/ADR-013-native-subagent-delegation-guidance.md),
+and [future provisioning plan](docs/H4_PROVISIONING_PLAN.md). Four additive
+read-only discovery tools; no deployment, session creation or process launch.
+
+H4-A [security/discovery review fixes and read-only acceptance procedure](docs/H4_A_REVIEW_FIXES.md) supersede the original Git subprocess metadata reader.

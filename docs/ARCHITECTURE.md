@@ -87,3 +87,41 @@ releases the busy guard. Workspace identity and permissions fail closed. Termina
 snapshots are immutable; client cancellation is distinct from native Abort.
 No durable recovery or new infrastructure; restart remains an operator boundary.
 See [implementation/test evidence](H3_LATE_COMPLETION_EVIDENCE.md).
+
+## H4-A — repository-aware discovery (feature branch, not deployed)
+
+[ADR-012](adr/ADR-012-repository-aware-session-registry.md) adds a read-through
+ACL-scoped repository/worktree registry and optional session metadata.
+[ADR-013](adr/ADR-013-native-subagent-delegation-guidance.md) adds live agent
+inventory and conditional native delegation guidance without a spawning API.
+[Audit and supported capabilities](H4_A_EVIDENCE.md) distinguish installed endpoint
+declarations from exercised behavior; [future provisioning](H4_PROVISIONING_PLAN.md)
+is design only. ADR-010/011 writer and reconciliation boundaries are retained.
+
+### H4 threat model additions
+
+Repository discovery cannot grant session access. A malicious native directory,
+Git pointer, project label, remote URL, parentID or client filter cannot expand
+operator roots/session ACLs. Reject symlink aliases and traversal, reauthorize
+parents separately, and omit repository fields unless Git root, common directory
+and Git directory are each inside approved roots. Never follow a history Link
+URL; forward only a bounded opaque cursor to the fixed local endpoint. Bounded
+Git output/time, response sizes, registry ACL size and pagination limit discovery
+costs; no shared mutable registry is introduced.
+
+Git metadata and native status remain untrusted observations. H4-A review removes
+Git subprocesses entirely: no config/includes, remotes, hooks, filters or external
+programs are read/run. Required pointer/ref files are authorized before reading
+through os.Root confinement, pinned policy root identities and bounded Linux
+no-follow/nonblocking regular-file reads. Unsafe storage or unsupported layouts
+leave repository metadata absent. Identity rechecks detect observed replacements,
+not an atomic snapshot. Bind mounts, privileged attackers, in-place content races
+and blocking filesystem operations still require OS confinement and operator
+control. These protections apply to metadata reads; they do not confine the native
+harness's filesystem activity through HTTP. H3 mutation authority is unchanged.
+
+Native state/permission reads are shared per canonical directory only within one
+bounded discovery request. Four workers/request and two admitted requests/server
+bound active discovery work; cancellation covers queueing. No atomic native
+snapshot or new write grant is claimed. See
+[review findings and acceptance procedure](H4_A_REVIEW_FIXES.md).
