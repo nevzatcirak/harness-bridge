@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/mcp"
@@ -75,7 +76,7 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	if len(before) == 0 {
+	if len(before) == 0 && os.Getenv("H2_READ_ONLY") != "1" && os.Getenv("H2_ALLOW_EMPTY_HISTORY") != "1" {
 		return fmt.Errorf("existing session has no conversation history; seed a turn before running smoke")
 	}
 	statuses, e := c.Status(ctx)
@@ -127,6 +128,29 @@ func run() error {
 		go func() { _ = server.Serve(listener) }()
 		endpoint = "http://" + listener.Addr().String() + "/mcp"
 	}
+	// Exercise the HTTP auth boundary before SDK negotiation, without mutations.
+	for _, auth := range []string{"", "Bearer invalid-smoke-token"} {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		if auth != "" {
+			request.Header.Set("Authorization", auth)
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		hc := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		response, err := hc.Do(request)
+		if err != nil {
+			return err
+		}
+		response.Body.Close()
+		transport.CloseIdleConnections()
+		if response.StatusCode != http.StatusUnauthorized {
+			return fmt.Errorf("unauthorized request not rejected")
+		}
+	}
+	fmt.Println("missing and incorrect MCP bearer tokens rejected with HTTP 401")
 	client, e := mcpclient.Connect(ctx, endpoint, token)
 	if e != nil {
 		return e
@@ -156,7 +180,30 @@ func run() error {
 	if e != nil || len(prior.Messages) != len(before) {
 		return fmt.Errorf("MCP history mismatch: %v", e)
 	}
-	fmt.Println("official SDK initialize, tools/list, discovery, metadata and history verified")
+	for _, name := range []string{"get_session", "read_session_history", "send_prompt"} {
+		arguments := map[string]any{"session_id": "opencode:ses_unauthorized_probe"}
+		if name == "send_prompt" {
+			arguments["prompt"] = "Do not execute"
+			arguments["idempotency_key"] = "unauthorized-probe"
+		}
+		result, err := client.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil || !result.IsError {
+			return fmt.Errorf("unauthorized session tool not denied: %s", name)
+		}
+		b, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			return err
+		}
+		var failure execution.Error
+		if json.Unmarshal(b, &failure) != nil || failure.Code != "FORBIDDEN" {
+			return fmt.Errorf("unexpected authorization failure: %s", name)
+		}
+	}
+	fmt.Println("official SDK initialize, seven tools, exact-session discovery, metadata/history and unauthorized session denials verified")
+	if os.Getenv("H2_READ_ONLY") == "1" {
+		fmt.Println("PASS: read-only local MCP authentication and session policy checks; no prompt submitted")
+		return nil
+	}
 	var executions []execution.Execution
 	prompts := []string{"Continuity smoke test. Do not use tools or change files. Remember the exact marker " + marker + " and reply with only that marker.", "Continuity smoke test. Do not use tools or change files. Reply with only the exact marker from my immediately preceding prompt."}
 	for turn, prompt := range prompts {

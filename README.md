@@ -12,6 +12,10 @@ never starts OpenCode or creates a native session.
 export OPENCODE_URL=http://127.0.0.1:4096
 export BRIDGE_ALLOWED_ROOTS=/absolute/project/root
 export BRIDGE_ALLOWED_SESSIONS=ses_EXISTING_NATIVE_ID
+# Writer only: provision an existing 0700 directory owned by the service user.
+# Every writer on this host MUST share its inodes; never delete live lock files.
+export BRIDGE_WRITER_LOCK_DIR=/var/lib/harness-bridge/writer-locks
+# For additional read-only instances instead: BRIDGE_READ_ONLY=1 (no writer lock).
 # Set BRIDGE_TOKEN securely (at least 32 characters).
 # Set OPENCODE_SERVER_PASSWORD securely if the native server requires Basic auth.
 go build -o /tmp/harness-bridge ./cmd/bridge
@@ -80,3 +84,12 @@ verified API details, successful live two-turn evidence, and operational limitat
 State and idempotency records are in memory; use one bridge instance with
 exclusive ownership of selected sessions. Do not expose this privileged service
 through a public listener or tunnel.
+
+H3 authenticated HTTPS configuration, current Claude authentication availability,
+operator publication steps and the pending ordinary Claude Chat acceptance test
+are documented in [H3 connector guide](docs/H3_CONNECTOR_GUIDE.md) and
+[H3 evidence](docs/H3_EVIDENCE.md). No public endpoint was deployed.
+
+Writer ownership and restart/migration requirements: [ADR-010](docs/adr/ADR-010-single-writer.md).
+Updated writers fail startup without protected shared ownership configuration;
+existing installed services are not upgraded automatically.
