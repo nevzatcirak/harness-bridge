@@ -89,13 +89,19 @@ jobs:
             exit 1
           fi
 
-      - name: Confinement vet
+      - name: Confinement vet and build (amd64, arm64)
         working-directory: tests/confinement
-        run: env -u HB_CONFINEMENT_INTEGRATION go vet ./...
+        run: |
+          for arch in amd64 arm64; do
+            printf '== GOOS=linux GOARCH=%s\n' "$arch"
+            env -u HB_CONFINEMENT_INTEGRATION GOOS=linux GOARCH="$arch" go vet ./...
+            env -u HB_CONFINEMENT_INTEGRATION GOOS=linux GOARCH="$arch" go build ./...
+          done
 
       - name: Confinement test
         working-directory: tests/confinement
         run: |
+          printf 'native test arch: %s/%s (uname -m: %s)\n' "$(go env GOOS)" "$(go env GOARCH)" "$(uname -m)"
           TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
           mkdir -p "$TEST_LOG_DIR"
           env -u HB_CONFINEMENT_INTEGRATION go test ./... -count=1 -json | tee "$TEST_LOG_DIR/confinement.jsonl"
