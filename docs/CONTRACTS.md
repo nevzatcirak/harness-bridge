@@ -162,8 +162,21 @@ process's NOT_FOUND as proof that an earlier prompt was not submitted.
 Each `send_prompt` and `interrupt_execution` call writes exactly one structured
 `log/slog` line for its outcome, on every return path (validation failure,
 read-only denial, authorization failure, manager rejection, acceptance, replay).
-Read tools write no audit line. The message strings and the `accepted` key of
-the previous lines are kept for existing journal searches.
+Calls that the MCP SDK rejects against the tool input schema (for example a
+`session_id` not matching its pattern, an `idempotency_key` shorter than 8, an
+empty `prompt` or `execution_id`) never reach the tool handler; SDK receiving
+middleware (go-sdk v1.8.0 `Server.AddReceivingMiddleware` on `tools/call`) writes
+their single line with `outcome=rejected` and `error_code=INVALID_INPUT`. The
+client receives the SDK's untyped tool error (`isError: true`, text
+`validating "arguments": …`) rather than a structured `INVALID_INPUT` envelope;
+the audit code names that rejection class. From raw arguments only string
+`session_id`/`execution_id` values that pass the format checks are logged, and
+only a string `idempotency_key` is hashed. Read tools write no audit line. The
+message strings and the `accepted` key of the previous lines are kept for
+existing journal searches, but `prompt submission accepted=false` now also
+counts authorization, argument-validation and schema rejections, which earlier
+builds did not log at all (read-only denials keep their own message), so counts
+from older journal queries are not directly comparable.
 
 | Key | Values | Notes |
 |---|---|---|

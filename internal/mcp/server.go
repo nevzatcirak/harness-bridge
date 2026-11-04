@@ -78,10 +78,10 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		defer func() {
 			// A panic is never audited as success; the panic itself continues.
 			if p := recover(); p != nil {
-				s.audit(record, a, nil, execution.Fail("INTERNAL", "panic during mutating call"))
+				s.audit(ctx, record, a, nil, execution.Fail("INTERNAL", "panic during mutating call"))
 				panic(p)
 			}
-			s.audit(record, a, out, err)
+			s.audit(ctx, record, a, out, err)
 		}()
 	}
 	if s.ReadOnly && mutating(name) {
@@ -231,6 +231,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			register[ExecutionInput, execution.Execution](server, s, name, name, func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
 		}
 		register[ExecutionInput, Result](server, s, "get_execution_result", "Read correlated execution results and verification evidence; prefer this over copying whole session transcripts", func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
+		// Audit mutating calls the SDK rejects before their handler (AUDIT-01b).
+		server.AddReceivingMiddleware(s.auditMiddleware)
 		// Remote.Check enforces the exact public Host before replacing the SDK
 		// loopback-only Host rule; proxy headers never grant an exception.
 		transport := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{DisableLocalhostProtection: s.Remote != nil, JSONResponse: true, SessionTimeout: time.Minute, MaxRequestBodyBytes: 1 << 20})

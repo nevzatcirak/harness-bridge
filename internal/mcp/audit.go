@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"regexp"
+	"sync/atomic"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
 
@@ -61,7 +65,55 @@ func auditExecution(id string) string {
 	return ""
 }
 
-func (s *Server) audit(r *auditRecord, a args, out any, err error) {
+// auditMark records that the tool handler wrote the call's audit line, so the
+// receiving middleware never writes a second one.
+type auditMark struct{ written atomic.Bool }
+type auditMarkKey struct{}
+
+// auditMiddleware is SDK receiving middleware (go-sdk v1.8.0
+// Server.AddReceivingMiddleware). The SDK validates tool arguments against the
+// input schema inside the tool wrapper, before the typed handler runs, and
+// returns an IsError result without calling it (AUDIT-01b). Such mutating calls
+// get exactly one rejected line here; calls that reach the handler are audited
+// there and skipped here.
+func (s *Server) auditMiddleware(next sdk.MethodHandler) sdk.MethodHandler {
+	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+		call, ok := req.(*sdk.CallToolRequest)
+		if method != "tools/call" || !ok || call.Params == nil || !mutating(call.Params.Name) {
+			return next(ctx, method, req)
+		}
+		mark := &auditMark{}
+		res, err := next(context.WithValue(ctx, auditMarkKey{}, mark), method, req)
+		if !mark.written.Load() {
+			s.audit(ctx, &auditRecord{tool: call.Params.Name}, rawAuditArgs(call.Params.Arguments), nil, execution.Fail("INVALID_INPUT", "arguments rejected before the tool handler"))
+		}
+		return res, err
+	}
+}
+
+// rawAuditArgs extracts only the identifiers audit may log from untrusted raw
+// arguments: string values of session_id, execution_id and idempotency_key.
+// audit still format-checks the IDs and only hashes the key. The prompt and
+// any non-string value are dropped.
+func rawAuditArgs(raw json.RawMessage) args {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return args{}
+	}
+	str := func(key string) string {
+		var v string
+		if json.Unmarshal(fields[key], &v) != nil {
+			return ""
+		}
+		return v
+	}
+	return args{SessionID: str("session_id"), ExecutionID: str("execution_id"), IdempotencyKey: str("idempotency_key")}
+}
+
+func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err error) {
+	if mark, ok := ctx.Value(auditMarkKey{}).(*auditMark); ok {
+		mark.written.Store(true)
+	}
 	event, outcome := "prompt_submission", "new"
 	if r.tool == "interrupt_execution" {
 		event, outcome = "interrupt", "accepted"

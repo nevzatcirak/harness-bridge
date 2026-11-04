@@ -229,3 +229,45 @@ func TestAuditReadToolsSilent(t *testing.T) {
 		t.Fatal(lines)
 	}
 }
+
+// AUDIT-01b (R4-PR23-REVIEW P2-1): calls the SDK rejects against the input
+// schema never reach the handler; the receiving middleware writes exactly one
+// rejected line, logging only format-valid IDs and the hashed string key.
+func TestAuditSchemaRejectedMutations(t *testing.T) {
+	buf := captureLog(t)
+	client, f, _, _ := integration(t, true)
+	seen := 0
+	const prompt = "AUDIT-SCHEMA-SECRET-PROMPT-91d"
+	for _, tc := range []struct {
+		name   string
+		tool   string
+		args   map[string]any
+		fields map[string]any
+	}{
+		{"session_id_pattern", "send_prompt", map[string]any{"session_id": "ses_existing", "prompt": prompt, "idempotency_key": "audit-schema-key-1"},
+			map[string]any{"session_id": "", "idem": idemOf("audit-schema-key-1")}},
+		{"idempotency_key_min_length", "send_prompt", map[string]any{"session_id": "opencode:ses_existing", "prompt": prompt, "idempotency_key": "k7shrt"},
+			map[string]any{"session_id": "opencode:ses_existing", "idem": idemOf("k7shrt")}},
+		{"prompt_min_length", "send_prompt", map[string]any{"session_id": "opencode:ses_existing", "prompt": "", "idempotency_key": "audit-schema-key-3"},
+			map[string]any{"session_id": "opencode:ses_existing", "idem": idemOf("audit-schema-key-3")}},
+		{"execution_id_min_length", "interrupt_execution", map[string]any{"execution_id": ""},
+			map[string]any{"event": "interrupt", "execution_id": "", "session_id": "", "idem": ""}},
+		{"non_string_key_not_hashed", "send_prompt", map[string]any{"session_id": "opencode:ses_existing", "prompt": prompt, "idempotency_key": 12345678},
+			map[string]any{"idem": ""}},
+		{"injected_execution_id", "interrupt_execution", map[string]any{"execution_id": "INJECT\nfake=line", "extra": true},
+			map[string]any{"execution_id": ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invoke(t, client, tc.tool, tc.args, true)
+			line := lastAudit(t, buf, &seen)
+			want(t, line, map[string]any{"tool": tc.tool, "outcome": "rejected", "accepted": false, "error_code": "INVALID_INPUT", "principal": "local"})
+			want(t, line, tc.fields)
+		})
+	}
+	assertNoSecrets(t, buf, prompt, "audit-schema-key-1", "k7shrt", "audit-schema-key-3", "12345678", "INJECT")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != 0 || f.aborts != 0 {
+		t.Fatal("schema-rejected call reached native execution")
+	}
+}
