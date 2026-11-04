@@ -54,7 +54,9 @@ func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, membe
 	c := s.Client.WithDirectory(v.Directory)
 	status, se := c.Status(ctx)
 	permissions, pe := c.Permissions(ctx)
-	d := directoryEvidence{status: map[string]opencode.Status{}, statusOK: se == nil, permissions: map[string]bool{}, permissionsOK: pe == nil}
+	// A 2xx JSON null decodes to a nil map without error; it is not an empty
+	// status map and must not support absence inference (R2-PR16-REVIEW).
+	d := directoryEvidence{status: map[string]opencode.Status{}, statusOK: se == nil && status != nil, permissions: map[string]bool{}, permissionsOK: pe == nil}
 	if len(members) == 0 {
 		members = []string{v.ID}
 	}
@@ -88,11 +90,17 @@ func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible boo
 	}
 	if d.statusOK {
 		native, listed := d.status[v.ID]
-		if !listed {
+		if !listed && v.WorkspaceID == "" {
 			// OpenCode drops idle sessions from its per-directory status map and
 			// reports idle for absent ones. Absence counts only from this successful
 			// read of the session's own directory-scoped client. Permission and
 			// guard evidence below can still override it.
+			//
+			// A workspace-bound session is excluded: OpenCode routes its
+			// session-bound requests by workspaceID, while /session/status has no
+			// session ID and is served by the ?directory= instance, so the session
+			// can be busy elsewhere and still be absent here (R2-PR16-REVIEW).
+			// Its state stays unknown.
 			native.Type = "idle"
 			out.NativeStateInferredFromAbsence = true
 		}

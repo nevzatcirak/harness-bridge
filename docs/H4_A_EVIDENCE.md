@@ -28,7 +28,7 @@ was valid. No authentication configuration changed.
 | Session metadata | Exact existing approved session: same cwd, projectID=global, version=1.19.4; no parentID/workspaceID | Optional native fields retained |
 | Session list | GET /session?directory=approved-cwd&limit=5 returned one existing session | Registry uses ACL Gets, not a global list |
 | List filtering | /doc: directory,workspace,scope,path,roots,start,search,limit | No claim each filter was exercised |
-| Status | Directory-scoped /session/status returned {} | Absence means unknown |
+| Status | Directory-scoped /session/status returned {} | Absence means unknown [^status-absence] |
 | Permissions | Directory-scoped /permission returned [] | No automatic replies |
 | Children | GET /session/{approved-ID}/children returned [] | Parent metadata supported; real child lineage not exercised |
 | Visible primary agents | /agent: build, plan | Live inventory, hidden agents omitted |
@@ -114,3 +114,9 @@ Intermediate tests caught an unused test variable during cursor refinement and
 an intentionally blocked cancellation fixture session in the new discovery test;
 both test defects were corrected before this successful full final run.
 Synthetic fixtures are not a live Claude Chat H4 test.
+
+[^status-absence]: 2026-11-04 note, evidence text above unchanged: the current
+    contract infers `idle` from absence for sessions without a `workspaceID` and
+    keeps `unknown` for workspace-bound sessions. See CONTRACTS.md, "Absent from
+    native status (F-4)" and "Workspace-bound sessions are excluded from absence
+    inference".

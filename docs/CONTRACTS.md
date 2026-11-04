@@ -262,7 +262,15 @@ read gives `unknown`; otherwise a pending native permission for the session give
   precedence above still applies (failed permission read -> `unknown`, pending ->
   `waiting_for_permission`, held guard -> never `idle`). An explicit native `idle`
   entry omits `native_state_inferred_from_absence`. A failed status read omits both
-  fields and never yields `idle`.
+  fields and never yields `idle`; a 2xx `null` status body counts as a failed read.
+- **Workspace-bound sessions are excluded from absence inference (R2-PR16-REVIEW,
+  2026-11-04):** OpenCode 1.19.4 routes session-bound requests by the session's
+  `workspaceID`, but `GET /session/status` carries no session ID and is served by the
+  `?directory=` instance, so a session with a non-empty `workspaceID` can be busy in
+  its workspace instance and still be absent from the map the Bridge reads. For such a
+  session absence gives `state: "unknown"` with `native_state` and
+  `native_state_inferred_from_absence` omitted; an explicit status entry is mapped as
+  above.
 
 The guard is per Bridge process: another Bridge or native client is not visible
 (ADR-010). The guard is read without native I/O. Session state is a non-atomic
