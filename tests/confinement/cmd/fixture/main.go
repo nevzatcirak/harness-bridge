@@ -73,15 +73,72 @@ func fixtureMain() (code int) {
 	case "run":
 		return run()
 	case "setup", "setup-compat":
+		// R-1: guarded before any mount or other side effect.
+		requireAck()
+		requirePrivateMountNamespace(setupNamespaceFD)
 		require(len(os.Args) == 5, "setup input")
 		setup(os.Args[2], os.Args[3], os.Args[4], os.Args[1] == "setup-compat")
 	case "control", "probe", "probe-compat":
+		// R-1: probes write relative to their cwd and /tmp; only the
+		// fixture's dropped probe uid may run them.
+		require(os.Geteuid() == uid, fmt.Sprintf("refused: probe modes run only as the fixture probe uid %d", uid))
 		require(len(os.Args) == 5, "probe input")
 		probe(os.Args[1], os.Args[2], os.Args[3], os.Args[4])
 	default:
 		panic("unknown fixture mode")
 	}
 	return 0
+}
+
+func requireAck() {
+	require(os.Getenv(ackVariable) == ackValue, "refused without disposable-host acknowledgement: run only on a disposable test host that runs no Bridge or OpenCode, via run-fixture.sh")
+}
+
+// setupNamespaceFD is where run hands setup its own mount namespace.
+const setupNamespaceFD = 3
+
+// nsGetNSType is NS_GET_NSTYPE, _IO(0xb7, 0x3).
+const nsGetNSType = 0xb703
+
+// requirePrivateMountNamespace refuses unless this process is in a mount
+// namespace other than the one fd names, which must be the invoking run
+// process's mount namespace (R-1). run itself already runs in namespaces that
+// differ from the host's (see README for the limits of that check).
+//
+// Comparing /proc/self/ns/mnt with /proc/1/ns/mnt alone is vacuous here: setup
+// runs as PID 1 under unshare --mount-proc, so /proc/1 is setup itself. That
+// comparison is applied as well whenever /proc/1 is another process, which
+// catches a root invocation through unshare --pid without a mount namespace.
+func requirePrivateMountNamespace(fd int) {
+	require(privateMountNamespace(fd, "/proc/self/ns/mnt", "/proc/self", "/proc/1/ns/mnt"), "refused: setup needs a private mount namespace (fd 3 must be the invoking run's mount namespace, different from this one)")
+	syscall.Close(fd)
+}
+
+// privateMountNamespace takes its /proc paths as parameters only so each layer
+// can be unit-tested; requirePrivateMountNamespace passes the real ones.
+func privateMountNamespace(fd int, ownPath, procSelfPath, proc1Path string) bool {
+	t, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), nsGetNSType, 0)
+	if errno != 0 || t != syscall.CLONE_NEWNS {
+		return false
+	}
+	var outer, own syscall.Stat_t
+	if syscall.Fstat(fd, &outer) != nil || syscall.Stat(ownPath, &own) != nil {
+		return false
+	}
+	if outer.Dev == own.Dev && outer.Ino == own.Ino {
+		return false
+	}
+	self, e := os.Readlink(procSelfPath)
+	if e != nil {
+		return false
+	}
+	if self != "1" {
+		var first syscall.Stat_t
+		if syscall.Stat(proc1Path, &first) != nil || (first.Dev == own.Dev && first.Ino == own.Ino) {
+			return false
+		}
+	}
+	return true
 }
 
 // write creates a new file. O_EXCL|O_NOFOLLOW never opens an existing name or
@@ -168,7 +225,7 @@ func command(ctx context.Context, path string, args ...string) *exec.Cmd {
 func run() int {
 	// Checked before anything else, including privileges, so a direct
 	// invocation of the binary is guarded too (F-B).
-	require(os.Getenv(ackVariable) == ackValue, "refused without disposable-host acknowledgement: run only on a disposable test host that runs no Bridge or OpenCode, via run-fixture.sh")
+	requireAck()
 	require(os.Geteuid() == 0, "root required only in disposable fixture setup")
 	require(len(os.Args) == 5 && os.Getpid() == 1, "run only under outer disposable namespaces")
 	netns, e := os.Readlink("/proc/self/ns/net")
@@ -226,8 +283,11 @@ func run() int {
 	// credentials, OpenCode executable, Docker socket or runtime state is mounted.
 	variants := map[string]report{}
 	all := true
+	ownMount, e := os.Open("/proc/self/ns/mnt")
+	must(e)
+	defer ownMount.Close()
 	for _, mode := range []string{"setup", "setup-compat"} {
-		sandbox := setupCommand(ctx, exe, mode, base, abstract, tcp, nil)
+		sandbox := setupCommand(ctx, exe, mode, base, abstract, tcp, ownMount)
 		var stderr strings.Builder
 		sandbox.Stderr = &stderr
 		raw, e = sandbox.Output()
@@ -262,14 +322,19 @@ func run() int {
 }
 
 // setupCommand starts a setup variant in fresh mount, IPC and PID namespaces
-// (and a fresh network namespace for "setup").
+// (and a fresh network namespace for "setup"). It hands setup the
+// acknowledgement and run's mount namespace as fd 3, which the R-1 guard
+// requires; probes exec'd by setup get cleanEnv without the acknowledgement.
 func setupCommand(ctx context.Context, exe, mode, base, abstract, tcp string, mnt *os.File) *exec.Cmd {
 	args := []string{"--mount", "--ipc", "--pid", "--fork", "--kill-child", "--mount-proc"}
 	if mode == "setup" {
 		args = append(args, "--net")
 	}
 	args = append(args, exe, mode, base, abstract, tcp)
-	return command(ctx, "/usr/bin/unshare", args...)
+	c := command(ctx, "/usr/bin/unshare", args...)
+	c.Env = append(append([]string{}, cleanEnv...), ackVariable+"="+ackValue)
+	c.ExtraFiles = []*os.File{mnt}
+	return c
 }
 
 // prepare generates the synthetic tree under base and hands the probe-owned

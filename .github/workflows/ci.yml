@@ -127,6 +127,16 @@ jobs:
             echo 'privileged TestIsolatedKernelProfiles must remain skipped in CI' >&2
             exit 1
           fi
+          # R-1 mode guards: these skip as root or as the probe uid 65534, so
+          # CI (non-root, not 65534) must actually run them.
+          for t in TestSetupModesRequireAckAndPrivateMountNamespace TestProbeModesRequireProbeUID TestPrivateMountNamespaceLayers; do
+            got=$(outcome "$t")
+            printf '%s=%s\n' "$t" "${got:-missing}"
+            if [[ "$got" != pass ]]; then
+              echo "$t must run and pass (not skip)" >&2
+              exit 1
+            fi
+          done
 
       - name: Report skipped tests
         if: ${{ always() }}
