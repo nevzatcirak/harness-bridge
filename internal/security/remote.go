@@ -59,3 +59,7 @@ func (p *Remote) Check(w http.ResponseWriter, r *http.Request) bool {
 func (p *Remote) AuditAuth(accepted bool) {
 	slog.Info("remote authentication", "principal", p.principal, "accepted", accepted)
 }
+
+// Principal returns the configured operator name. It is an audit label, not a
+// credential, and is already logged by the boundary and authentication lines.
+func (p *Remote) Principal() string { return p.principal }
