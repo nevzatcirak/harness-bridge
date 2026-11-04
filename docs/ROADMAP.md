@@ -534,15 +534,19 @@ recorded as observed or NOT_EXERCISED, never inferred.
 
 Status 2026-11-03: R0 complete except this commit; R1 PR #7 merged (`477180e`); R3a PASS.
 
-Status 2026-11-04 (results only; plan above unchanged):
+Status 2026-11-04, updated against `main` `0499a23` (results only; plan above unchanged):
 
 | Milestone | Status | Record |
 | --- | --- | --- |
 | R1 | Done | PR #7 (`477180e`), PR #13 CI-02 nested-module and amd64/arm64 CI (`abaf482`) |
 | R2 | Done | PR #3 (`200368f`), #4 (`7ac2704`), #10 (`e84397d`), #9 (`eabb148`), #12 F-1 follow-up (`9ed25a3`) |
 | R3a | PASS | `docs/evidence/R3A_EVIDENCE_2026-11-03.md`; ADR-011 live late completion NOT_EXERCISED |
-| R3b | PASS with F-4 | R3b evidence (2026-11-04); F-4 fix in PR #16 (open) |
+| R3b | PASS with F-4 | `docs/evidence/R3B_EVIDENCE_2026-11-04.md`; F-4 fixed by PR #16 (`0499a23`) |
 | R4 core | Partial | PR #14 CORE-02 merged (`749b08d`); the permission observer is not wired; native E2E NOT_VERIFIED |
+| R5 | Pending | — |
+
+Other merged: PR #15 FIX-FIXTURE-01 (`c49f091`), PR #18 FIX-FIXTURE-02
+(`92c0b13`). Open: PR #22 FIX-FIXTURE-03, PR #23 AUDIT-01.
 
 PR #10 superseded PR #5 and PR #6. Both were closed unmerged, and their changes
 reached `main` only through #10's merge reconciliation (`877b247`). See
@@ -553,10 +557,21 @@ reached `main` only through #10's merge reconciliation (`877b247`). See
 
 | Item | Phase | Note |
 | --- | --- | --- |
-| P3 audit logging | 3 | Add execution ID, replay flag and error code to the accepted/replay log line |
+| P3 audit logging | 3 | Add execution ID, replay flag and error code to the accepted/replay log line; PR #23 AUDIT-01 open |
 | Native "stalled" liveness | 5 (R5) | Detect and report a native execution that stops making progress |
 | Idempotency keys across writer restarts | 2 | Rule: never reuse idempotency keys across writer restarts |
-| H4-A promotion gate | 3 / 7 | F-1 done (PR #12); F-4 (PR #16); F-2; F-3 |
+| H4-A promotion gate | 3 / 7 | F-1 done (PR #12); F-4 done (PR #16); F-2 and F-3 open (below) |
+
+### H4-A promotion gate: F-2 and F-3
+
+Quoted verbatim from independent review R2-PR4-REVIEW (Worker A, 2026-11-03,
+PR #4 head `0b3c319c96b0da0f921d63e8be6e5b063c66b0fc`, reviewed delta
+`4cb09fb..0b3c319`). Locations refer to that head.
+
+| ID  | Sev | Blocks | Location | Finding |
+|-----|-----|--------|----------|---------|
+| F-2 | P3 | writer promotion | internal/adapters/opencode/client.go (Agents, Status, Permissions via WithDirectory); discovery.go:54–56, :224 | Hypothesis, not verified: OpenCode bootstraps its per-directory instance on `?directory=`, which loads that repo's .opencode config, agents and plugins. The Bridge executes nothing itself, and the base already sent `directory` for get_session/history. H4-A adds directory-scoped /agent, status and permission calls for every ACL'd directory on each discovery. Verify before promotion. |
+| F-3 | P3 | writer promotion | internal/repository/repository.go:140; storage_linux.go | The 2 s Inspect deadline is checked between syscalls, but a blocking stat/open (hung NFS/FUSE) is not interruptible. One worker stalls the discovery past its 10 s deadline. |
 
 Writer promotion of H4-A/H4-B code remains NO-GO until its own acceptance;
 Phase 6 is limited to a feasibility spike; Phases 7–8 are out of scope.
