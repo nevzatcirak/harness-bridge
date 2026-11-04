@@ -100,17 +100,28 @@ const setupNamespaceFD = 3
 // nsGetNSType is NS_GET_NSTYPE, _IO(0xb7, 0x3).
 const nsGetNSType = 0xb703
 
-// requirePrivateMountNamespace refuses unless this process is in a mount
-// namespace other than the one fd names, which must be the invoking run
-// process's mount namespace (R-1). run itself already runs in namespaces that
-// differ from the host's (see README for the limits of that check).
+// requirePrivateMountNamespace refuses unless fd names a mount namespace that
+// differs from this process's own, and also differs from /proc/1's whenever
+// /proc/1 is another process (R-1). run passes its own mount namespace as fd 3,
+// but the check cannot prove that fd 3 is the invoking run's namespace: a root
+// caller that deliberately supplies some other mount namespace passes. It is an
+// accident guard, not proof of identity. run itself already runs in namespaces
+// that differ from the host's (see README for the limits of that check).
 //
 // Comparing /proc/self/ns/mnt with /proc/1/ns/mnt alone is vacuous here: setup
 // runs as PID 1 under unshare --mount-proc, so /proc/1 is setup itself. That
 // comparison is applied as well whenever /proc/1 is another process, which
 // catches a root invocation through unshare --pid without a mount namespace.
 func requirePrivateMountNamespace(fd int) {
-	require(privateMountNamespace(fd, "/proc/self/ns/mnt", "/proc/self", "/proc/1/ns/mnt"), "refused: setup needs a private mount namespace (fd 3 must be the invoking run's mount namespace, different from this one)")
+	requirePrivateMountNamespaceAt(fd, "/proc/self/ns/mnt", "/proc/self", "/proc/1/ns/mnt")
+}
+
+// requirePrivateMountNamespaceAt is requirePrivateMountNamespace with its /proc
+// paths as parameters, so tests can exercise the passing path unprivileged.
+// After the guard passes it closes fd: fd 3 arrives without close-on-exec, and
+// setup later execs the probe, which must not inherit a namespace descriptor.
+func requirePrivateMountNamespaceAt(fd int, ownPath, procSelfPath, proc1Path string) {
+	require(privateMountNamespace(fd, ownPath, procSelfPath, proc1Path), "refused: setup needs a private mount namespace (fd 3 must name a mount namespace different from this one; accident guard, not proof of identity)")
 	syscall.Close(fd)
 }
 

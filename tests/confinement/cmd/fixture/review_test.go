@@ -618,6 +618,10 @@ func TestSeccompKernelDeniesMountAPI(t *testing.T) {
 		}
 		out, e := cmd.Output()
 		if e != nil {
+			var exit *exec.ExitError
+			if !errors.As(e, &exit) {
+				return nil, &childStartError{mode: mode, err: e}
+			}
 			return nil, fmt.Errorf("%s child: %v %s", mode, e, out)
 		}
 		line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
@@ -653,26 +657,47 @@ func TestSeccompKernelDeniesMountAPI(t *testing.T) {
 	sort.Strings(distinguished)
 	t.Logf("control=%v filtered=%v", results["control"], results["filtered"])
 
-	// User+mount namespace discriminator for the numbers EPERM hides above.
-	usernsControl, e := child("userns-control", true)
-	if e != nil || usernsControl["fsopen"] == eperm {
-		t.Logf("userns discriminator unavailable (%v, control=%v); kernel-distinguished %d/8: %v; the rest rely on BPF evaluation and the per-arch table", e, usernsControl, len(distinguished), distinguished)
-		return
-	}
-	usernsFiltered, e := child("userns-filtered", true)
-	if e != nil {
-		t.Fatal(e)
-	}
-	einval := syscall.EINVAL.Error()
-	for _, name := range []string{"fsopen", "fsmount", "fspick", "move_mount"} {
-		if usernsControl[name] != einval {
-			t.Errorf("userns unfiltered %s(invalid flags) = %s, want %s; syscall number %d unverified on %s", name, usernsControl[name], einval, mountAPI[name], runtime.GOARCH)
+	// User+mount namespace discriminator for the numbers EPERM hides above. It is
+	// its own subtest so that an environment without it is reported as SKIP with
+	// the reason, never as a silent PASS; a child that starts but fails is a FAIL.
+	t.Run("userns_discriminator", func(t *testing.T) {
+		usernsControl, e := child("userns-control", true)
+		var start *childStartError
+		if errors.As(e, &start) {
+			t.Skipf("unprivileged user+mount namespace not creatable here (%v); kernel-distinguished %d/8 in the parent: %v; the rest rely on BPF evaluation and the per-arch table", start.err, len(distinguished), distinguished)
 		}
-	}
-	for name := range mountAPI {
-		if usernsFiltered[name] != eperm {
-			t.Errorf("userns filtered %s = %s (unfiltered %s), want %s", name, usernsFiltered[name], usernsControl[name], eperm)
+		if e != nil {
+			t.Fatal(e)
 		}
-	}
-	t.Logf("userns discriminator: control=%v filtered=%v; kernel-distinguished 8/8", usernsControl, usernsFiltered)
+		if usernsControl["fsopen"] == eperm {
+			t.Skipf("user namespace grants no mount capability (unfiltered fsopen = %s, e.g. AppArmor userns restriction; control=%v); kernel-distinguished %d/8 in the parent: %v; the rest rely on BPF evaluation and the per-arch table", eperm, usernsControl, len(distinguished), distinguished)
+		}
+		usernsFiltered, e := child("userns-filtered", true)
+		if e != nil {
+			t.Fatal(e)
+		}
+		einval := syscall.EINVAL.Error()
+		for _, name := range []string{"fsopen", "fsmount", "fspick", "move_mount"} {
+			if usernsControl[name] != einval {
+				t.Errorf("userns unfiltered %s(invalid flags) = %s, want %s; syscall number %d unverified on %s", name, usernsControl[name], einval, mountAPI[name], runtime.GOARCH)
+			}
+		}
+		for name := range mountAPI {
+			if usernsFiltered[name] != eperm {
+				t.Errorf("userns filtered %s = %s (unfiltered %s), want %s", name, usernsFiltered[name], usernsControl[name], eperm)
+			}
+		}
+		if !t.Failed() {
+			t.Logf("userns discriminator: control=%v filtered=%v; kernel-distinguished 8/8", usernsControl, usernsFiltered)
+		}
+	})
 }
+
+// childStartError means the seccomp test child could not be started at all, for
+// example because the kernel refused the requested user+mount namespace.
+type childStartError struct {
+	mode string
+	err  error
+}
+
+func (e *childStartError) Error() string { return e.mode + " child did not start: " + e.err.Error() }
