@@ -227,12 +227,7 @@ func run() int {
 	variants := map[string]report{}
 	all := true
 	for _, mode := range []string{"setup", "setup-compat"} {
-		args := []string{"--mount", "--ipc", "--pid", "--fork", "--kill-child", "--mount-proc"}
-		if mode == "setup" {
-			args = append(args, "--net")
-		}
-		args = append(args, exe, mode, base, abstract, tcp)
-		sandbox := command(ctx, "/usr/bin/unshare", args...)
+		sandbox := setupCommand(ctx, exe, mode, base, abstract, tcp, nil)
 		var stderr strings.Builder
 		sandbox.Stderr = &stderr
 		raw, e = sandbox.Output()
@@ -264,6 +259,17 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// setupCommand starts a setup variant in fresh mount, IPC and PID namespaces
+// (and a fresh network namespace for "setup").
+func setupCommand(ctx context.Context, exe, mode, base, abstract, tcp string, mnt *os.File) *exec.Cmd {
+	args := []string{"--mount", "--ipc", "--pid", "--fork", "--kill-child", "--mount-proc"}
+	if mode == "setup" {
+		args = append(args, "--net")
+	}
+	args = append(args, exe, mode, base, abstract, tcp)
+	return command(ctx, "/usr/bin/unshare", args...)
 }
 
 // prepare generates the synthetic tree under base and hands the probe-owned
