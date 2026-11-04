@@ -120,27 +120,7 @@ func run() {
 	must(e)
 	must(os.Chmod(base, 0755))
 	defer os.RemoveAll(base)
-	write(filepath.Join(base, "SYNTHETIC_ONLY"), []byte("NO_PRODUCTION_DATA"), 0600)
-	for _, dir := range []string{"root", "host/outside", "host/credentials", "host/other-workspace", "host/run", "workspace", "state/home", "state/data", "state/state", "cache", "tmp"} {
-		must(os.MkdirAll(filepath.Join(base, dir), 0755))
-	}
-	for _, dir := range []string{"workspace", "state", "state/home", "state/data", "state/state", "cache", "tmp"} {
-		must(os.Chown(filepath.Join(base, dir), uid, uid))
-		must(os.Chmod(filepath.Join(base, dir), 0700))
-	}
-	write(filepath.Join(base, "host/outside/public"), []byte("SYNTHETIC_PUBLIC"), 0666)
-	write(filepath.Join(base, "host/credentials/test-token"), []byte("NOT_A_REAL_CREDENTIAL"), 0666)
-	write(filepath.Join(base, "host/other-workspace/public"), []byte("SYNTHETIC_OTHER_PROJECT"), 0666)
-	write(filepath.Join(base, "host/outside/hardlink-target"), []byte("SYNTHETIC_SHARED_INODE"), 0666)
-	must(os.Link(filepath.Join(base, "host/outside/hardlink-target"), filepath.Join(base, "workspace/imported-hardlink")))
-	copyFile(exe, filepath.Join(base, "host/outside/program"), 0755)
-	copyFile(exe, filepath.Join(base, "workspace/allowed-program"), 0755)
-	write(filepath.Join(base, "state/own-bootstrap-credential"), []byte("SYNTHETIC_SAME_UID_CREDENTIAL"), 0600)
-	must(os.Chown(filepath.Join(base, "state/own-bootstrap-credential"), uid, uid))
-	must(os.Symlink("/outside/public", filepath.Join(base, "workspace/absolute-escape")))
-	must(os.Symlink("../../../../outside/public", filepath.Join(base, "workspace/relative-escape")))
-	must(os.Symlink(filepath.Join(base, "host/outside/public"), filepath.Join(base, "workspace/host-path-escape")))
-	must(os.Symlink("/etc/harness-bridge/private/test-token", filepath.Join(base, "workspace/credential-escape")))
+	prepare(base, exe, uid, nil)
 	socket := filepath.Join(base, "host/run/docker.sock")
 	l, e := net.Listen("unix", socket)
 	must(e)
@@ -209,6 +189,36 @@ func run() {
 	if !all {
 		os.Exit(1)
 	}
+}
+
+// prepare generates the synthetic tree under base and hands the probe-owned
+// directories to owner. handedOff, if set, runs after each directory becomes
+// owner-controlled; tests use it to act as a concurrent owner-uid process.
+func prepare(base, exe string, owner int, handedOff func(rel string)) {
+	write(filepath.Join(base, "SYNTHETIC_ONLY"), []byte("NO_PRODUCTION_DATA"), 0600)
+	for _, dir := range []string{"root", "host/outside", "host/credentials", "host/other-workspace", "host/run", "workspace", "state/home", "state/data", "state/state", "cache", "tmp"} {
+		must(os.MkdirAll(filepath.Join(base, dir), 0755))
+	}
+	for _, dir := range []string{"workspace", "state", "state/home", "state/data", "state/state", "cache", "tmp"} {
+		must(os.Chown(filepath.Join(base, dir), owner, owner))
+		must(os.Chmod(filepath.Join(base, dir), 0700))
+		if handedOff != nil {
+			handedOff(dir)
+		}
+	}
+	write(filepath.Join(base, "host/outside/public"), []byte("SYNTHETIC_PUBLIC"), 0666)
+	write(filepath.Join(base, "host/credentials/test-token"), []byte("NOT_A_REAL_CREDENTIAL"), 0666)
+	write(filepath.Join(base, "host/other-workspace/public"), []byte("SYNTHETIC_OTHER_PROJECT"), 0666)
+	write(filepath.Join(base, "host/outside/hardlink-target"), []byte("SYNTHETIC_SHARED_INODE"), 0666)
+	must(os.Link(filepath.Join(base, "host/outside/hardlink-target"), filepath.Join(base, "workspace/imported-hardlink")))
+	copyFile(exe, filepath.Join(base, "host/outside/program"), 0755)
+	copyFile(exe, filepath.Join(base, "workspace/allowed-program"), 0755)
+	write(filepath.Join(base, "state/own-bootstrap-credential"), []byte("SYNTHETIC_SAME_UID_CREDENTIAL"), 0600)
+	must(os.Chown(filepath.Join(base, "state/own-bootstrap-credential"), owner, owner))
+	must(os.Symlink("/outside/public", filepath.Join(base, "workspace/absolute-escape")))
+	must(os.Symlink("../../../../outside/public", filepath.Join(base, "workspace/relative-escape")))
+	must(os.Symlink(filepath.Join(base, "host/outside/public"), filepath.Join(base, "workspace/host-path-escape")))
+	must(os.Symlink("/etc/harness-bridge/private/test-token", filepath.Join(base, "workspace/credential-escape")))
 }
 func bind(source, target string, ro, noexec bool) {
 	must(syscall.Mount(source, target, "", syscall.MS_BIND, ""))
@@ -302,6 +312,15 @@ func mustErrno(e syscall.Errno) {
 	}
 }
 func installFilter(denyUnix bool) {
+	f := buildFilter(denyUnix)
+	program := syscall.SockFprog{Len: uint16(len(f)), Filter: &f[0]}
+	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 22, 2, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(f)
+	mustErrno(errno)
+}
+
+// buildFilter returns the classic-BPF seccomp program installed by installFilter.
+func buildFilter(denyUnix bool) []syscall.SockFilter {
 	arch := uint32(0)
 	switch runtime.GOARCH {
 	case "arm64":
@@ -335,10 +354,7 @@ func installFilter(denyUnix bool) {
 		}
 	}
 	f = append(f, syscall.SockFilter{Code: jeq, K: uint32(syscall.SYS_CLONE), Jf: 4}, syscall.SockFilter{Code: ld, K: 16}, syscall.SockFilter{Code: and, K: 0x7e020080}, syscall.SockFilter{Code: jeq, K: 0, Jt: 1}, syscall.SockFilter{Code: ret, K: deny}, syscall.SockFilter{Code: ret, K: allow})
-	program := syscall.SockFprog{Len: uint16(len(f)), Filter: &f[0]}
-	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 22, 2, uintptr(unsafe.Pointer(&program)))
-	runtime.KeepAlive(f)
-	mustErrno(errno)
+	return f
 }
 func probe(mode, base, abstract, tcp string) {
 	r := report{Mode: mode, Checks: []check{}}
