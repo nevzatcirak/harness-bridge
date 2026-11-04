@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -23,6 +24,12 @@ import (
 
 const workspace = "/opt/harness-bridge-test/workspace"
 const uid = 65534
+
+// Disposable-host acknowledgement (R2-PR5-FIXTURE-REVIEW F-B). run-fixture.sh
+// requires the same literal; never set it in CI or on a Bridge/OpenCode host.
+const ackVariable = "HB_CONFINEMENT_DISPOSABLE_HOST"
+const ackValue = "disposable-host-without-bridge-or-opencode"
+const basePrefix = "/tmp/hb-confinement-fixture-"
 
 var cleanEnv = []string{"PATH=/usr/bin", "HOME=/state/home", "XDG_DATA_HOME=/state/data", "XDG_STATE_HOME=/state/state", "XDG_CACHE_HOME=/cache", "TMPDIR=/tmp", "SYNTHETIC_ONLY=1"}
 
@@ -48,11 +55,15 @@ func require(ok bool, message string) {
 		panic(message)
 	}
 }
-func main() {
+
+// main is the only os.Exit: every mode returns its code so deferred cleanup
+// runs on success, failed checks and panics alike (F-C).
+func main() { os.Exit(fixtureMain()) }
+func fixtureMain() (code int) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Fprintln(os.Stderr, "BLOCKED/FAIL:", e)
-			os.Exit(2)
+			code = 2
 		}
 	}()
 	require(len(os.Args) >= 2, "fixture mode required")
@@ -60,7 +71,7 @@ func main() {
 	case "noop":
 		fmt.Println("FIXTURE_EXEC_OK")
 	case "run":
-		run()
+		return run()
 	case "setup", "setup-compat":
 		require(len(os.Args) == 5, "setup input")
 		setup(os.Args[2], os.Args[3], os.Args[4], os.Args[1] == "setup-compat")
@@ -70,22 +81,74 @@ func main() {
 	default:
 		panic("unknown fixture mode")
 	}
+	return 0
 }
-func write(path string, data []byte, mode os.FileMode) {
-	must(os.WriteFile(path, data, mode))
-	must(os.Chmod(path, mode))
+
+// write creates a new file. O_EXCL|O_NOFOLLOW never opens an existing name or
+// a planted symlink, and mode/owner are set through the descriptor (F-A).
+func write(path string, data []byte, mode os.FileMode) { writeOwned(path, data, mode, -1) }
+func writeOwned(path string, data []byte, mode os.FileMode, owner int) {
+	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+	must(e)
+	_, e = f.Write(data)
+	if e == nil {
+		e = f.Chmod(mode)
+	}
+	if e == nil && owner >= 0 {
+		e = f.Chown(owner, owner)
+	}
+	if c := f.Close(); e == nil {
+		e = c
+	}
+	must(e)
 }
 func copyFile(from, to string, mode os.FileMode) {
 	f, e := os.Open(from)
 	must(e)
 	defer f.Close()
-	g, e := os.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	g, e := os.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
 	must(e)
 	_, e = io.Copy(g, f)
+	if e == nil {
+		e = g.Chmod(mode)
+	}
+	if c := g.Close(); e == nil {
+		e = c
+	}
 	must(e)
-	must(g.Close())
-	must(os.Chmod(to, mode))
 }
+
+// handoff gives an already populated directory to owner. Each path component
+// is opened relative to its parent with O_NOFOLLOW, and ownership/mode change
+// through the final descriptor, so a symlink can never redirect it (F-A).
+func handoff(base, rel string, owner int) {
+	const flags = syscall.O_RDONLY | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	fd, e := syscall.Open(base, flags, 0)
+	must(e)
+	for _, part := range strings.Split(rel, "/") {
+		next, e := syscall.Openat(fd, part, flags, 0)
+		syscall.Close(fd)
+		must(e)
+		fd = next
+	}
+	defer syscall.Close(fd)
+	must(syscall.Fchown(fd, owner, owner))
+	must(syscall.Fchmod(fd, 0700))
+}
+
+// checkBase validates a fixture root: absolute, clean, under the fixed prefix,
+// a real (non-symlink) root-owned directory.
+func checkBase(base string) os.FileInfo {
+	require(filepath.IsAbs(base) && filepath.Clean(base) == base && strings.HasPrefix(base, basePrefix) && filepath.Dir(base) == "/tmp", "invalid synthetic root")
+	info, e := os.Lstat(base)
+	must(e)
+	require(info.IsDir() && info.Sys().(*syscall.Stat_t).Uid == 0, "untrusted fixture root")
+	return info
+}
+
+// cleanup removes a fixture root. It is idempotent, and RemoveAll unlinks
+// relative to directory descriptors without following symlinks (F-C).
+func cleanup(base string) error { return os.RemoveAll(base) }
 func serve(l net.Listener) {
 	go func() {
 		for {
@@ -102,45 +165,38 @@ func command(ctx context.Context, path string, args ...string) *exec.Cmd {
 	c.Env = cleanEnv
 	return c
 }
-func run() {
+func run() int {
+	// Checked before anything else, including privileges, so a direct
+	// invocation of the binary is guarded too (F-B).
+	require(os.Getenv(ackVariable) == ackValue, "refused without disposable-host acknowledgement: run only on a disposable test host that runs no Bridge or OpenCode, via run-fixture.sh")
 	require(os.Geteuid() == 0, "root required only in disposable fixture setup")
-	require(len(os.Args) == 4 && os.Getpid() == 1, "run only under outer disposable namespaces")
+	require(len(os.Args) == 5 && os.Getpid() == 1, "run only under outer disposable namespaces")
 	netns, e := os.Readlink("/proc/self/ns/net")
 	must(e)
 	mntns, e := os.Readlink("/proc/self/ns/mnt")
 	must(e)
 	require(netns != os.Args[2] && mntns != os.Args[3], "outer namespaces must differ from invoking host")
+	// The fixture root is created and also removed by run-fixture.sh, which
+	// cleans up even if this process is killed. Removing it here as well covers
+	// failed checks, panics and SIGINT/SIGTERM/SIGHUP (F-C).
+	base := os.Args[4]
+	info := checkBase(base)
+	require(info.Mode().Perm() == 0755, "fixture root must be mode 0755")
+	entries, e := os.ReadDir(base)
+	must(e)
+	require(len(entries) == 0, "fixture root must start empty")
+	defer cleanup(base)
+	signals, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	ctx, cancel := context.WithTimeout(signals, 45*time.Second)
+	defer cancel()
 	// Bring up only the disposable outer loopback: no host routing/interface change.
-	loop := exec.Command("/usr/sbin/ip", "link", "set", "lo", "up")
+	loop := exec.CommandContext(ctx, "/usr/sbin/ip", "link", "set", "lo", "up")
 	loop.Env = cleanEnv
 	must(loop.Run())
 	exe, e := os.Executable()
 	must(e)
-	base, e := os.MkdirTemp("/tmp", "hb-confinement-fixture-")
-	must(e)
-	must(os.Chmod(base, 0755))
-	defer os.RemoveAll(base)
-	write(filepath.Join(base, "SYNTHETIC_ONLY"), []byte("NO_PRODUCTION_DATA"), 0600)
-	for _, dir := range []string{"root", "host/outside", "host/credentials", "host/other-workspace", "host/run", "workspace", "state/home", "state/data", "state/state", "cache", "tmp"} {
-		must(os.MkdirAll(filepath.Join(base, dir), 0755))
-	}
-	for _, dir := range []string{"workspace", "state", "state/home", "state/data", "state/state", "cache", "tmp"} {
-		must(os.Chown(filepath.Join(base, dir), uid, uid))
-		must(os.Chmod(filepath.Join(base, dir), 0700))
-	}
-	write(filepath.Join(base, "host/outside/public"), []byte("SYNTHETIC_PUBLIC"), 0666)
-	write(filepath.Join(base, "host/credentials/test-token"), []byte("NOT_A_REAL_CREDENTIAL"), 0666)
-	write(filepath.Join(base, "host/other-workspace/public"), []byte("SYNTHETIC_OTHER_PROJECT"), 0666)
-	write(filepath.Join(base, "host/outside/hardlink-target"), []byte("SYNTHETIC_SHARED_INODE"), 0666)
-	must(os.Link(filepath.Join(base, "host/outside/hardlink-target"), filepath.Join(base, "workspace/imported-hardlink")))
-	copyFile(exe, filepath.Join(base, "host/outside/program"), 0755)
-	copyFile(exe, filepath.Join(base, "workspace/allowed-program"), 0755)
-	write(filepath.Join(base, "state/own-bootstrap-credential"), []byte("SYNTHETIC_SAME_UID_CREDENTIAL"), 0600)
-	must(os.Chown(filepath.Join(base, "state/own-bootstrap-credential"), uid, uid))
-	must(os.Symlink("/outside/public", filepath.Join(base, "workspace/absolute-escape")))
-	must(os.Symlink("../../../../outside/public", filepath.Join(base, "workspace/relative-escape")))
-	must(os.Symlink(filepath.Join(base, "host/outside/public"), filepath.Join(base, "workspace/host-path-escape")))
-	must(os.Symlink("/etc/harness-bridge/private/test-token", filepath.Join(base, "workspace/credential-escape")))
+	prepare(base, exe, uid, nil)
 	socket := filepath.Join(base, "host/run/docker.sock")
 	l, e := net.Listen("unix", socket)
 	must(e)
@@ -157,8 +213,6 @@ func run() {
 	defer tcpListener.Close()
 	serve(tcpListener)
 	tcp := tcpListener.Addr().String()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
 	control := command(ctx, exe, "control", base, abstract, tcp)
 	control.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}, NoSetGroups: false}}
 	raw, e := control.Output()
@@ -207,7 +261,41 @@ func run() {
 	must(e)
 	fmt.Println(string(encoded))
 	if !all {
-		os.Exit(1)
+		return 1
+	}
+	return 0
+}
+
+// prepare generates the synthetic tree under base and hands the probe-owned
+// directories to owner. handedOff, if set, runs after each directory becomes
+// owner-controlled; tests use it to act as a concurrent owner-uid process.
+//
+// F-A: an owner-uid process can rename and plant symlinks in any directory it
+// owns. So every entry is created while all directories are still root-owned,
+// ownership is handed over last, children before their parents, and root
+// performs no further path operation inside a handed-off directory.
+func prepare(base, exe string, owner int, handedOff func(rel string)) {
+	write(filepath.Join(base, "SYNTHETIC_ONLY"), []byte("NO_PRODUCTION_DATA"), 0600)
+	for _, dir := range []string{"root", "host/outside", "host/credentials", "host/other-workspace", "host/run", "workspace", "state/home", "state/data", "state/state", "cache", "tmp"} {
+		must(os.MkdirAll(filepath.Join(base, dir), 0755))
+	}
+	write(filepath.Join(base, "host/outside/public"), []byte("SYNTHETIC_PUBLIC"), 0666)
+	write(filepath.Join(base, "host/credentials/test-token"), []byte("NOT_A_REAL_CREDENTIAL"), 0666)
+	write(filepath.Join(base, "host/other-workspace/public"), []byte("SYNTHETIC_OTHER_PROJECT"), 0666)
+	write(filepath.Join(base, "host/outside/hardlink-target"), []byte("SYNTHETIC_SHARED_INODE"), 0666)
+	must(os.Link(filepath.Join(base, "host/outside/hardlink-target"), filepath.Join(base, "workspace/imported-hardlink")))
+	copyFile(exe, filepath.Join(base, "host/outside/program"), 0755)
+	copyFile(exe, filepath.Join(base, "workspace/allowed-program"), 0755)
+	writeOwned(filepath.Join(base, "state/own-bootstrap-credential"), []byte("SYNTHETIC_SAME_UID_CREDENTIAL"), 0600, owner)
+	must(os.Symlink("/outside/public", filepath.Join(base, "workspace/absolute-escape")))
+	must(os.Symlink("../../../../outside/public", filepath.Join(base, "workspace/relative-escape")))
+	must(os.Symlink(filepath.Join(base, "host/outside/public"), filepath.Join(base, "workspace/host-path-escape")))
+	must(os.Symlink("/etc/harness-bridge/private/test-token", filepath.Join(base, "workspace/credential-escape")))
+	for _, dir := range []string{"state/home", "state/data", "state/state", "state", "workspace", "cache", "tmp"} {
+		handoff(base, dir, owner)
+		if handedOff != nil {
+			handedOff(dir)
+		}
 	}
 }
 func bind(source, target string, ro, noexec bool) {
@@ -224,10 +312,7 @@ func bind(source, target string, ro, noexec bool) {
 func setup(base, abstract, tcp string, compatible bool) {
 	runtime.LockOSThread()
 	require(os.Geteuid() == 0 && os.Getpid() == 1, "setup only as PID1 in disposable namespace")
-	require(filepath.IsAbs(base) && filepath.Clean(base) == base && strings.HasPrefix(base, "/tmp/hb-confinement-fixture-"), "invalid synthetic root")
-	info, e := os.Lstat(base)
-	must(e)
-	require(info.IsDir() && info.Sys().(*syscall.Stat_t).Uid == 0, "untrusted fixture root")
+	checkBase(base)
 	marker, e := os.ReadFile(filepath.Join(base, "SYNTHETIC_ONLY"))
 	must(e)
 	require(string(marker) == "NO_PRODUCTION_DATA", "not synthetic fixture")
@@ -302,6 +387,15 @@ func mustErrno(e syscall.Errno) {
 	}
 }
 func installFilter(denyUnix bool) {
+	f := buildFilter(denyUnix)
+	program := syscall.SockFprog{Len: uint16(len(f)), Filter: &f[0]}
+	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 22, 2, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(f)
+	mustErrno(errno)
+}
+
+// buildFilter returns the classic-BPF seccomp program installed by installFilter.
+func buildFilter(denyUnix bool) []syscall.SockFilter {
 	arch := uint32(0)
 	switch runtime.GOARCH {
 	case "arm64":
@@ -325,7 +419,12 @@ func installFilter(denyUnix bool) {
 	// clone3's flags live behind a pointer, so reject it with ENOSYS to
 	// preserve documented libc/Go clone fallback, then inspect classic clone flags.
 	f = append(f, syscall.SockFilter{Code: jeq, K: 435, Jf: 1}, syscall.SockFilter{Code: ret, K: 0x00050000 | uint32(syscall.ENOSYS)})
-	for _, number := range []uint32{uint32(syscall.SYS_UNSHARE), uint32(sysSetns), uint32(syscall.SYS_MOUNT), uint32(syscall.SYS_UMOUNT2), uint32(syscall.SYS_PIVOT_ROOT), uint32(syscall.SYS_CHROOT), uint32(syscall.SYS_PTRACE)} {
+	// The new mount API (open_tree, move_mount, fsopen, fsconfig, fsmount,
+	// fspick, mount_setattr, open_tree_attr) is a second path to mount
+	// manipulation besides mount(2); per-arch numbers are in mountapi_linux_*.go.
+	denied := []uint32{uint32(syscall.SYS_UNSHARE), uint32(sysSetns), uint32(syscall.SYS_MOUNT), uint32(syscall.SYS_UMOUNT2), uint32(syscall.SYS_PIVOT_ROOT), uint32(syscall.SYS_CHROOT), uint32(syscall.SYS_PTRACE),
+		sysOpenTree, sysMoveMount, sysFsopen, sysFsconfig, sysFsmount, sysFspick, sysMountSetattr, sysOpenTreeAttr}
+	for _, number := range denied {
 		f = append(f, syscall.SockFilter{Code: jeq, K: number, Jf: 1}, syscall.SockFilter{Code: ret, K: deny})
 	}
 	if denyUnix {
@@ -335,10 +434,7 @@ func installFilter(denyUnix bool) {
 		}
 	}
 	f = append(f, syscall.SockFilter{Code: jeq, K: uint32(syscall.SYS_CLONE), Jf: 4}, syscall.SockFilter{Code: ld, K: 16}, syscall.SockFilter{Code: and, K: 0x7e020080}, syscall.SockFilter{Code: jeq, K: 0, Jt: 1}, syscall.SockFilter{Code: ret, K: deny}, syscall.SockFilter{Code: ret, K: allow})
-	program := syscall.SockFprog{Len: uint16(len(f)), Filter: &f[0]}
-	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 22, 2, uintptr(unsafe.Pointer(&program)))
-	runtime.KeepAlive(f)
-	mustErrno(errno)
+	return f
 }
 func probe(mode, base, abstract, tcp string) {
 	r := report{Mode: mode, Checks: []check{}}

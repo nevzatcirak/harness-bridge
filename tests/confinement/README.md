@@ -2,16 +2,25 @@
 
 This is an offline Linux kernel fixture, not a harness launcher or an installed service. It never launches OpenCode, reads native history, loads actual credentials, connects to production sockets, or acquires a Bridge writer lock. Run only reviewed source on a disposable test host with root/CAP_SYS_ADMIN. The test temporarily creates its own mount, PID, IPC and network namespaces; it does not relax production confinement.
 
+## Disposable host only
+
+The privileged run executes as root and writes a synthetic tree, including directories owned by UID 65534, under the host's `/tmp`. **Never run it on a host that runs the Bridge or OpenCode**, or on any host whose data or services matter. Use a throwaway VM or machine with no production credentials, sessions or routes, and record which host produced any evidence.
+
+`run-fixture.sh` and the fixture's `run` mode fail closed unless `HB_CONFINEMENT_DISPOSABLE_HOST=disposable-host-without-bridge-or-opencode` is set explicitly by the operator for that one invocation. The script also refuses, as an accident guard only, when it sees `/etc/harness-bridge`, `/var/lib/harness-bridge`, `harness-bridge*`/`opencode*` systemd units, or running `harness-bridge*`/`opencode*` processes. Absence of these markers does not prove a host is disposable. CI must never set the acknowledgement; it fails if it is set.
+
 ```sh
 go build ./...
 go vet ./...
 go test ./... -count=1
-HB_CONFINEMENT_INTEGRATION=1 go test ./... -count=1 -v
-HB_CONFINEMENT_INTEGRATION=1 go test -race ./... -count=1 -v
-./run-fixture.sh
+# Privileged, disposable host only:
+HB_CONFINEMENT_DISPOSABLE_HOST=disposable-host-without-bridge-or-opencode HB_CONFINEMENT_INTEGRATION=1 go test ./... -count=1 -v
+HB_CONFINEMENT_DISPOSABLE_HOST=disposable-host-without-bridge-or-opencode HB_CONFINEMENT_INTEGRATION=1 go test -race ./... -count=1 -v
+HB_CONFINEMENT_DISPOSABLE_HOST=disposable-host-without-bridge-or-opencode ./run-fixture.sh
 ```
 
-Ordinary tests deliberately skip the privileged integration test. Explicit integration requests fail if privileges/namespaces are unavailable. Direct invocation of the driver's `run` mode outside its namespaces is refused. The runner builds a static fixture with the installed Go toolchain and standard library; it downloads no packages. Generated directories are removed on normal completion. No service manager operation occurs.
+Ordinary tests deliberately skip the privileged integration test. Explicit integration requests fail if privileges/namespaces are unavailable. Direct invocation of the driver's `run` mode without the acknowledgement or outside its namespaces is refused. The runner builds a static fixture with the installed Go toolchain and standard library under a cleared environment (`env -i`, `GOENV=off`, `GOTOOLCHAIN=local`, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOWORK=off`, `-buildvcs=false` so root never runs git in the checkout, build cache inside its temporary build directory), so it neither downloads packages or toolchains nor inherits the caller's `GOFLAGS`/toolexec. The runner creates the fixture root and build directory and removes both on every shell exit path (success, failure, INT/TERM/HUP); the fixture also removes its root on failed checks and panics. Only SIGKILL of the runner shell can leave them behind. No service manager operation occurs.
+
+Root never writes through a path inside a UID-65534-owned directory: every synthetic entry is created (`O_EXCL|O_NOFOLLOW`, mode/owner via the descriptor) while all directories are still root-owned, and ownership is handed over last, children before parents, through `O_NOFOLLOW` directory descriptors.
 
 ## Actual boundary
 
@@ -27,7 +36,7 @@ The root setup code creates a new, read-only root filesystem and binds only thes
 | `/proc` | private PID namespace, hidepid/subset | new proc mount |
 | all other host paths | absent | no host root bind |
 
-The filter denies mount/namespace manipulation, ptrace and privilege escalation primitives tested here; it is not a complete syscall allowlist or kernel-exploit defense. The host setup process is trusted and privileged. Workspace execution is intentionally permitted. Root-owned runtime files and bindings must never be selected by repository/client input.
+The filter denies mount/namespace manipulation (including the new mount API: `open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`, `open_tree_attr`), ptrace and privilege escalation primitives tested here; it is not a complete syscall allowlist or kernel-exploit defense. The host setup process is trusted and privileged. Workspace execution is intentionally permitted. Root-owned runtime files and bindings must never be selected by repository/client input.
 
 Two variants are actually exercised: `setup` has another private network namespace and cannot reach the synthetic outer TCP/abstract sockets. `setup-compat` shares only the **synthetic outer** network, allows AF_INET/AF_INET6, denies AF_UNIX socket creation, and reaches its synthetic TCP endpoint. Neither connects to the host's actual Docker socket or OpenCode server. The baseline proves the synthetic outside files/programs/sockets would otherwise be accessible.
 
