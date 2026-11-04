@@ -100,6 +100,9 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 		var value any
 		if err == nil {
 			value, err = bridge.call(ctx, name, a)
+		} else if mutating(name) {
+			// Schema-valid but rejected arguments still produce one audit line.
+			bridge.audit(ctx, &auditRecord{tool: name}, a, nil, err)
 		}
 		if err != nil {
 			e := envelope(err)

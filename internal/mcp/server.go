@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -71,9 +70,22 @@ func (s *Server) authorized(ctx context.Context, id string) (opencode.Session, *
 func sessionView(v opencode.Session) Session {
 	return Session{SessionID: "opencode:" + v.ID, NativeID: v.ID, Harness: "opencode", Directory: v.Directory, Title: v.Title, State: "unknown"}
 }
-func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
-	if s.ReadOnly && (name == "send_prompt" || name == "interrupt_execution") {
-		slog.Info("read-only mutation denied")
+func (s *Server) call(ctx context.Context, name string, a args) (out any, err error) {
+	var record *auditRecord
+	if mutating(name) {
+		// One audit line per mutating call outcome, written on every return path.
+		record = &auditRecord{tool: name}
+		defer func() {
+			// A panic is never audited as success; the panic itself continues.
+			if p := recover(); p != nil {
+				s.audit(ctx, record, a, nil, execution.Fail("INTERNAL", "panic during mutating call"))
+				panic(p)
+			}
+			s.audit(ctx, record, a, out, err)
+		}()
+	}
+	if s.ReadOnly && mutating(name) {
+		record.readOnly = true
 		return nil, execution.Fail("FORBIDDEN", "mutations disabled on this bridge")
 	}
 	switch name {
@@ -109,8 +121,8 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 			}
 			return History{Messages: nonnil(msgs), NextCursor: next}, e
 		}
-		x, e := s.Runs.SendWithRunner(ctx, c, id, a.Prompt, a.IdempotencyKey)
-		slog.Info("prompt submission", "accepted", e == nil)
+		x, replay, e := s.Runs.SendWithRunnerOutcome(ctx, c, id, a.Prompt, a.IdempotencyKey)
+		record.replay = replay
 		return x, e
 	case "get_execution_status", "get_execution_result", "interrupt_execution":
 		x, e := s.Runs.Snapshot(ctx, a.ExecutionID)
@@ -136,7 +148,6 @@ func (s *Server) call(ctx context.Context, name string, a args) (any, error) {
 			return Result{Execution: x, Messages: nonnil(msgs)}, e
 		}
 		x, e = s.Runs.Interrupt(ctx, a.ExecutionID)
-		slog.Info("explicit interrupt", "accepted", e == nil)
 		return x, e
 	default:
 		return nil, execution.Fail("INVALID_INPUT", "unknown tool")
@@ -220,6 +231,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			register[ExecutionInput, execution.Execution](server, s, name, name, func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
 		}
 		register[ExecutionInput, Result](server, s, "get_execution_result", "Read correlated execution results and verification evidence; prefer this over copying whole session transcripts", func(a ExecutionInput) args { return args{ExecutionID: a.ExecutionID} })
+		// Audit mutating calls the SDK rejects before their handler (AUDIT-01b).
+		server.AddReceivingMiddleware(s.auditMiddleware)
 		// Remote.Check enforces the exact public Host before replacing the SDK
 		// loopback-only Host rule; proxy headers never grant an exception.
 		transport := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{DisableLocalhostProtection: s.Remote != nil, JSONResponse: true, SessionTimeout: time.Minute, MaxRequestBodyBytes: 1 << 20})

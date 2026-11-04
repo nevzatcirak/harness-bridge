@@ -158,8 +158,17 @@ func (m *Manager) Send(ctx context.Context, session, prompt, key string) (Execut
 
 // SendWithRunner permits a directory-scoped client while keeping one global session guard.
 func (m *Manager) SendWithRunner(ctx context.Context, r Runner, session, prompt, key string) (Execution, error) {
+	x, _, err := m.SendWithRunnerOutcome(ctx, r, session, prompt, key)
+	return x, err
+}
+
+// SendWithRunnerOutcome is SendWithRunner plus the manager's own admission
+// decision for audit: replay is true only when the same session, idempotency key
+// and payload returned the existing accepted execution without a new submission.
+// It adds no other behavior.
+func (m *Manager) SendWithRunnerOutcome(ctx context.Context, r Runner, session, prompt, key string) (Execution, bool, error) {
 	if !opencode.ValidID(session, "ses") || strings.TrimSpace(prompt) == "" || len(prompt) > 32768 || len(key) < 8 || len(key) > 128 {
-		return Execution{}, Fail("INVALID_INPUT", "invalid session, prompt or idempotency key")
+		return Execution{}, false, Fail("INVALID_INPUT", "invalid session, prompt or idempotency key")
 	}
 	k := session + "\x00" + key
 	hash := sha256.Sum256([]byte(prompt))
@@ -167,41 +176,41 @@ retry:
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return Execution{}, Fail("UNKNOWN_OUTCOME", "manager closed")
+		return Execution{}, false, Fail("UNKNOWN_OUTCOME", "manager closed")
 	}
 	if id, ok := m.keys[k]; ok {
 		if m.fingerprints[k] != hash {
 			m.mu.Unlock()
-			return Execution{}, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
+			return Execution{}, false, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
 		}
 		x := m.runs[id]
 		m.mu.Unlock()
 		if scoped, ok := r.(directoryScoped); ok && x.directory != "" && scoped.Directory() != "" && scoped.Directory() != x.directory {
-			return Execution{}, Fail("FORBIDDEN", "execution workspace changed")
+			return Execution{}, false, Fail("FORBIDDEN", "execution workspace changed")
 		}
 		if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
-			return Execution{}, err
+			return Execution{}, false, err
 		}
 		x.mu.Lock()
 		defer x.mu.Unlock()
-		return snapshot(x.view), nil
+		return snapshot(x.view), true, nil
 	}
 	if pending, ok := m.pending[k]; ok {
 		if m.fingerprints[k] != hash {
 			m.mu.Unlock()
-			return Execution{}, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
+			return Execution{}, false, Fail("IDEMPOTENCY_CONFLICT", "idempotency key reused with different payload")
 		}
 		m.mu.Unlock()
 		select {
 		case <-pending:
 			goto retry
 		case <-ctx.Done():
-			return Execution{}, ctx.Err()
+			return Execution{}, false, ctx.Err()
 		}
 	}
 	if m.busy[session] != "" {
 		m.mu.Unlock()
-		return Execution{}, Fail("SESSION_BUSY", "session has an active or uncertain execution")
+		return Execution{}, false, Fail("SESSION_BUSY", "session has an active or uncertain execution")
 	}
 	// Reserve before any network IO, without blocking unrelated sessions.
 	id := token()
@@ -237,7 +246,7 @@ retry:
 	// own slots so admission cannot consume read-side recovery capacity.
 	if err := take(ctx, m.admissionSlots); err != nil {
 		release()
-		return Execution{}, err
+		return Execution{}, false, err
 	}
 	defer give(m.admissionSlots)
 	directory, canonical := "", ""
@@ -247,47 +256,47 @@ retry:
 		meta, err := reader.Get(ctx, session)
 		if err != nil {
 			release()
-			return Execution{}, err
+			return Execution{}, false, err
 		}
 		if meta.ID != session || !filepath.IsAbs(meta.Directory) {
 			release()
-			return Execution{}, Fail("FORBIDDEN", "native session identity mismatch")
+			return Execution{}, false, Fail("FORBIDDEN", "native session identity mismatch")
 		}
 		directory = meta.Directory
 		if scoped, ok := r.(directoryScoped); ok && scoped.Directory() != "" && scoped.Directory() != directory {
 			release()
-			return Execution{}, Fail("FORBIDDEN", "native workspace changed")
+			return Execution{}, false, Fail("FORBIDDEN", "native workspace changed")
 		}
 		resolved, err := filepath.EvalSymlinks(directory)
 		if err != nil || resolved != directory || filepath.Clean(directory) != directory {
 			release()
-			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
+			return Execution{}, false, Fail("FORBIDDEN", "native workspace unavailable")
 		}
 		canonical = resolved
 		workspace, err = os.Stat(canonical)
 		if err != nil || !workspace.IsDir() {
 			release()
-			return Execution{}, Fail("FORBIDDEN", "native workspace unavailable")
+			return Execution{}, false, Fail("FORBIDDEN", "native workspace unavailable")
 		}
 	}
 	statuses, err := r.Status(ctx)
 	if err != nil {
 		release()
-		return Execution{}, err
+		return Execution{}, false, err
 	}
 	if s, ok := statuses[session]; ok && s.Type != "idle" {
 		release()
-		return Execution{}, Fail("SESSION_BUSY", "native session busy")
+		return Execution{}, false, Fail("SESSION_BUSY", "native session busy")
 	}
 	history, err := r.History(ctx, session)
 	if err != nil {
 		release()
-		return Execution{}, err
+		return Execution{}, false, err
 	}
 	for _, msg := range history {
 		if msg.Info.Role == "assistant" && msg.Info.Time.Completed <= 0 {
 			release()
-			return Execution{}, Fail("SESSION_BUSY", "unfinished native assistant message")
+			return Execution{}, false, Fail("SESSION_BUSY", "unfinished native assistant message")
 		}
 	}
 	{
@@ -295,18 +304,18 @@ retry:
 		permissions, e := p.Permissions(ctx)
 		if e != nil {
 			release()
-			return Execution{}, e
+			return Execution{}, false, e
 		}
 		for _, v := range permissions {
 			if v.SessionID == session {
 				release()
-				return Execution{}, Fail("SESSION_BUSY", "native permission pending")
+				return Execution{}, false, Fail("SESSION_BUSY", "native permission pending")
 			}
 		}
 	}
 	if err = ctx.Err(); err != nil {
 		release()
-		return Execution{}, err
+		return Execution{}, false, err
 	}
 	now := time.Now().UTC()
 	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, workspace: workspace, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
@@ -314,7 +323,7 @@ retry:
 	if m.closed {
 		m.mu.Unlock()
 		release()
-		return Execution{}, Fail("UNKNOWN_OUTCOME", "manager closed")
+		return Execution{}, false, Fail("UNKNOWN_OUTCOME", "manager closed")
 	}
 	m.runs[id] = x
 	m.keys[k] = id
@@ -323,7 +332,7 @@ retry:
 	m.mu.Unlock()
 	initial := snapshot(x.view)
 	go m.work(x, prompt)
-	return initial, nil
+	return initial, false, nil
 }
 
 // finalizeUnsubmitted commits local terminal evidence and releases only this run's

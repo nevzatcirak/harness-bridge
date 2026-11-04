@@ -157,6 +157,58 @@ on read-only instances. See ADR-010 for required host ownership configuration,
 nonparticipating native clients and lost restart state. Never interpret a fresh
 process's NOT_FOUND as proof that an earlier prompt was not submitted.
 
+## Mutation audit log (AUDIT-01)
+
+Each `send_prompt` and `interrupt_execution` call writes exactly one structured
+`log/slog` line for its outcome, on every return path (validation failure,
+read-only denial, authorization failure, manager rejection, acceptance, replay).
+Calls that the MCP SDK rejects against the tool input schema (for example a
+`session_id` not matching its pattern, an `idempotency_key` shorter than 8, an
+empty `prompt` or `execution_id`) never reach the tool handler; SDK receiving
+middleware (go-sdk v1.8.0 `Server.AddReceivingMiddleware` on `tools/call`) writes
+their single line with `outcome=rejected` and `error_code=INVALID_INPUT`. The
+client receives the SDK's untyped tool error (`isError: true`, text
+`validating "arguments": …`) rather than a structured `INVALID_INPUT` envelope;
+the audit code names that rejection class. From raw arguments only string
+`session_id`/`execution_id` values that pass the format checks are logged, and
+only a string `idempotency_key` is hashed. Read tools write no audit line. The
+message strings and the `accepted` key of the previous lines are kept for
+existing journal searches, but `prompt submission accepted=false` now also
+counts authorization, argument-validation and schema rejections, which earlier
+builds did not log at all (read-only denials keep their own message), so counts
+from older journal queries are not directly comparable.
+
+| Key | Values | Notes |
+|---|---|---|
+| msg | `prompt submission`, `explicit interrupt`, `read-only mutation denied` | read-only denial replaces the other message for that call |
+| event | `prompt_submission`, `interrupt` | |
+| tool | `send_prompt`, `interrupt_execution` | |
+| outcome | prompt: `new`, `replay`, `rejected`; interrupt: `accepted`, `rejected` | `replay` is the execution manager's decision (`SendWithRunnerOutcome`): same session, key and payload returned the existing accepted execution, including callers that waited on a concurrent identical admission |
+| accepted | `true`, `false` | `true` exactly when outcome is not `rejected` |
+| error_code | typed MCP error code | only when rejected, e.g. `SESSION_BUSY`, `FORBIDDEN`, `IDEMPOTENCY_CONFLICT`, `NOT_FOUND`, `INVALID_INPUT`, `UNKNOWN_OUTCOME`, `UPSTREAM_FAILURE`; `INTERNAL` if the call panicked |
+| session_id | `opencode:ses_…` | omitted when the input was not a well-formed session ID; for interrupt, taken from the execution once found |
+| execution_id | 32 lowercase hex | omitted when unknown; a client-supplied value is logged only if it has the manager's format |
+| idem | 12 lowercase hex | prompt only: first 12 hex characters of sha256(idempotency_key); never the raw key |
+| principal | configured remote principal, or `local` | `local` for loopback-token mode, which has no named principal |
+
+Never logged: prompt text, history, result text, tokens, headers, raw
+idempotency keys or other secrets. Synthetic examples (default handler, timestamp prefix omitted):
+
+```
+INFO prompt submission event=prompt_submission tool=send_prompt outcome=new accepted=true session_id=opencode:ses_example execution_id=0f1e2d3c4b5a69788796a5b4c3d2e1f0 idem=06a48394d463 principal=operator
+INFO prompt submission event=prompt_submission tool=send_prompt outcome=replay accepted=true session_id=opencode:ses_example execution_id=0f1e2d3c4b5a69788796a5b4c3d2e1f0 idem=06a48394d463 principal=operator
+INFO prompt submission event=prompt_submission tool=send_prompt outcome=rejected accepted=false error_code=SESSION_BUSY session_id=opencode:ses_example idem=9c1e4b7a52d0 principal=operator
+INFO explicit interrupt event=interrupt tool=interrupt_execution outcome=accepted accepted=true session_id=opencode:ses_example execution_id=0f1e2d3c4b5a69788796a5b4c3d2e1f0 principal=operator
+INFO read-only mutation denied event=prompt_submission tool=send_prompt outcome=rejected accepted=false error_code=FORBIDDEN session_id=opencode:ses_example idem=3a7d0c1f9e44 principal=operator
+```
+
+Limits: `new` means the manager admitted a new execution, not that the native
+harness accepted or completed it; use execution status/result. Audit state is
+per Bridge process, like idempotency state (ADR-010). `idem` is a 48-bit
+correlator, not a secrecy guarantee: a low-entropy key can be guessed from it, so
+clients should use high-entropy keys. Lines are written before the MCP response
+is returned; a crash between decision and log write loses the line.
+
 ## H3 late-completion contract (ADR-011)
 
 This section supersedes the old frozen-snapshot behavior after monitoring ends.
