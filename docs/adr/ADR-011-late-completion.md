@@ -1,6 +1,9 @@
 # ADR-011 — Bounded read-side reconciliation after monitor expiry
 
 Date: 2026-10-25. Status: accepted in code; deployment NOT performed.
+Status 2026-11-04: accepted within its recorded scope. R3a evidence
+(`docs/evidence/R3A_EVIDENCE_2026-11-03.md`): ADR-011 live late completion
+NOT_EXERCISED (no late native completion occurred).
 Maintains ADR-010's one host-local writer, permissions and process-local records.
 
 ## Incident and boundary

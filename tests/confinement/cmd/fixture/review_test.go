@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -534,11 +535,24 @@ func TestSeccompProgramDeniesMountAPI(t *testing.T) {
 // filter (unprivileged via no_new_privs) and the mount API calls return EPERM.
 // open_tree(AT_FDCWD, "/", 0) needs no privilege, so its unfiltered success
 // proves 428 is open_tree on this architecture.
+//
+// Limitation (R2-PR18-REVIEW R-2): in the caller's namespaces an unfiltered
+// kernel already returns EPERM for fsopen, fsmount, fspick and move_mount (they
+// check CAP_SYS_ADMIN over the mount namespace first), so there the kernel check
+// distinguishes only open_tree, fsconfig, mount_setattr and open_tree_attr (on
+// kernel 6.8: ok, EINVAL, EINVAL, ENOSYS). The other four numbers are covered by
+// TestSeccompProgramDeniesMountAPI (BPF evaluation) and the per-arch table.
+// Where unprivileged user namespaces are allowed, a second pair of children
+// runs in a new user+mount namespace with invalid flags: unfiltered, those four
+// fail with EINVAL after the capability check, so EPERM there can only come
+// from the filter and all eight numbers are distinguished. Where they are not
+// allowed (for example Ubuntu's apparmor_restrict_unprivileged_userns=1), the
+// test logs "userns discriminator unavailable" and the limitation stands.
 const seccompChildEnv = "HB_FIXTURE_SECCOMP_CHILD"
 
 func unsafePointer(p *byte) unsafe.Pointer { return unsafe.Pointer(p) }
 
-func mountAPIProbe() map[string]string {
+func mountAPIProbe(invalidFlags bool) map[string]string {
 	root, _ := syscall.BytePtrFromString("/")
 	empty, _ := syscall.BytePtrFromString("")
 	ext, _ := syscall.BytePtrFromString("ext4")
@@ -553,6 +567,14 @@ func mountAPIProbe() map[string]string {
 		"fspick":         {^uintptr(0), uintptr(unsafePointer(empty)), 0},
 		"mount_setattr":  {^uintptr(0), uintptr(unsafePointer(empty)), 0, 0, 0},
 		"open_tree_attr": {at, uintptr(unsafePointer(root)), 0, 0, 0},
+	}
+	if invalidFlags {
+		// Rejected with EINVAL right after the capability check; nothing is created.
+		const bad = 0x80000000
+		calls["fsopen"] = [6]uintptr{uintptr(unsafePointer(ext)), bad}
+		calls["fsmount"] = [6]uintptr{^uintptr(0), bad, 0}
+		calls["fspick"] = [6]uintptr{^uintptr(0), uintptr(unsafePointer(empty)), bad}
+		calls["move_mount"] = [6]uintptr{^uintptr(0), uintptr(unsafePointer(empty)), ^uintptr(0), uintptr(unsafePointer(empty)), bad}
 	}
 	out := map[string]string{}
 	for name, a := range calls {
@@ -570,7 +592,7 @@ func mountAPIProbe() map[string]string {
 func TestSeccompKernelDeniesMountAPI(t *testing.T) {
 	if mode := os.Getenv(seccompChildEnv); mode != "" {
 		runtime.LockOSThread()
-		if mode == "filtered" {
+		if mode == "filtered" || mode == "userns-filtered" {
 			if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 38, 1, 0); errno != 0 {
 				fmt.Println(`{"error":"no_new_privs"}`)
 				os.Exit(3)
@@ -580,22 +602,36 @@ func TestSeccompKernelDeniesMountAPI(t *testing.T) {
 				os.Exit(3)
 			}
 		}
-		json.NewEncoder(os.Stdout).Encode(mountAPIProbe())
+		json.NewEncoder(os.Stdout).Encode(mountAPIProbe(strings.HasPrefix(mode, "userns-")))
 		os.Exit(0)
 	}
 	nativeArch(t)
-	results := map[string]map[string]string{}
-	for _, mode := range []string{"control", "filtered"} {
+	child := func(mode string, userns bool) (map[string]string, error) {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestSeccompKernelDeniesMountAPI$", "-test.count=1")
 		cmd.Env = append(os.Environ(), seccompChildEnv+"="+mode)
+		if userns {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				Cloneflags:  syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
+				UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
+				GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}},
+			}
+		}
 		out, e := cmd.Output()
 		if e != nil {
-			t.Fatalf("%s child: %v %s", mode, e, out)
+			return nil, fmt.Errorf("%s child: %v %s", mode, e, out)
 		}
 		line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 		r := map[string]string{}
 		if e := json.Unmarshal([]byte(line), &r); e != nil {
-			t.Fatalf("%s child output %q: %v", mode, out, e)
+			return nil, fmt.Errorf("%s child output %q: %v", mode, out, e)
+		}
+		return r, nil
+	}
+	results := map[string]map[string]string{}
+	for _, mode := range []string{"control", "filtered"} {
+		r, e := child(mode, false)
+		if e != nil {
+			t.Fatal(e)
 		}
 		results[mode] = r
 	}
@@ -608,5 +644,35 @@ func TestSeccompKernelDeniesMountAPI(t *testing.T) {
 	if results["control"]["open_tree"] != "ok" {
 		t.Errorf("unfiltered open_tree(AT_FDCWD, \"/\", 0) = %s; syscall number %d unverified on %s", results["control"]["open_tree"], sysOpenTree, runtime.GOARCH)
 	}
+	distinguished := []string{}
+	for name := range mountAPI {
+		if results["control"][name] != eperm {
+			distinguished = append(distinguished, name)
+		}
+	}
+	sort.Strings(distinguished)
 	t.Logf("control=%v filtered=%v", results["control"], results["filtered"])
+
+	// User+mount namespace discriminator for the numbers EPERM hides above.
+	usernsControl, e := child("userns-control", true)
+	if e != nil || usernsControl["fsopen"] == eperm {
+		t.Logf("userns discriminator unavailable (%v, control=%v); kernel-distinguished %d/8: %v; the rest rely on BPF evaluation and the per-arch table", e, usernsControl, len(distinguished), distinguished)
+		return
+	}
+	usernsFiltered, e := child("userns-filtered", true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	einval := syscall.EINVAL.Error()
+	for _, name := range []string{"fsopen", "fsmount", "fspick", "move_mount"} {
+		if usernsControl[name] != einval {
+			t.Errorf("userns unfiltered %s(invalid flags) = %s, want %s; syscall number %d unverified on %s", name, usernsControl[name], einval, mountAPI[name], runtime.GOARCH)
+		}
+	}
+	for name := range mountAPI {
+		if usernsFiltered[name] != eperm {
+			t.Errorf("userns filtered %s = %s (unfiltered %s), want %s", name, usernsFiltered[name], usernsControl[name], eperm)
+		}
+	}
+	t.Logf("userns discriminator: control=%v filtered=%v; kernel-distinguished 8/8", usernsControl, usernsFiltered)
 }
