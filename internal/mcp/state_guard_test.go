@@ -152,6 +152,10 @@ func discoveryUpstream(t *testing.T, root, status, permissions string) *opencode
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/session/status":
+			if status == "error" {
+				w.WriteHeader(500)
+				return
+			}
 			w.Write([]byte(status))
 		case "/permission":
 			if permissions == "error" {
@@ -235,7 +239,7 @@ func TestStateGuardTable(t *testing.T) {
 		"idle":   {"pending": "waiting_for_permission", "none": "idle", "failed": "unknown"},
 		"busy":   {"pending": "waiting_for_permission", "none": "running", "failed": "unknown"},
 		"retry":  {"pending": "waiting_for_permission", "none": "running", "failed": "unknown"},
-		"absent": {"pending": "waiting_for_permission", "none": "unknown", "failed": "unknown"},
+		"absent": {"pending": "waiting_for_permission", "none": "idle", "failed": "unknown"}, // F-4
 	}
 	for mode, row := range held {
 		t.Run("held_"+mode, func(t *testing.T) {

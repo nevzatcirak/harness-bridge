@@ -103,6 +103,16 @@ absent/unrecognized/unavailable status -> unknown. Failed permission reads force
 unknown. Native raw state is optional. This is a non-atomic observation and never
 completion proof; execution correlation remains ADR-011's responsibility.
 
+Amendment (2026-11-04, F-4): OpenCode 1.19.4 lists only non-idle sessions in
+`/session/status`. Absence from a successful read of the session's own directory is
+therefore idle evidence (`native_state: "idle"`, `native_state_inferred_from_absence:
+true`) and yields state idle only with a successful permission read, no pending
+permission and no held guard. Unrecognized or unavailable status remains unknown.
+CONTRACTS.md "Session state and the Bridge guard" is normative.
+Workspace-bound sessions (non-empty `workspaceID`) are excluded (R2-PR16-REVIEW): their
+status may live in a workspace-routed instance the directory read does not see, so
+absence stays unknown. A 2xx `null` status body is an unavailable read.
+
 History optionally uses native limit (1–200) and opaque before cursor (maximum
 2048 URL-safe characters). Preserve the native X-Next-Cursor as next_cursor;
 never interpret it as a message ID, fetch an upstream Link URL, or infer EOF

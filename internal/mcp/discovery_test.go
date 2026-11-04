@@ -81,7 +81,8 @@ func TestRepositoryDiscovery(t *testing.T) {
 	if e != nil || len(all) != 3 {
 		t.Fatal(all, e)
 	}
-	if all[0].State != "unknown" || all[1].State != "running" || all[2].State != "waiting_for_permission" {
+	// ses_a is absent from native status with no pending permission: idle (F-4).
+	if all[0].State != "idle" || !all[0].NativeStateInferredFromAbsence || all[1].State != "running" || all[2].State != "waiting_for_permission" {
 		t.Fatal(all)
 	}
 	if all[0].Repository == nil || all[0].Repository.ID != all[2].Repository.ID || all[0].Workspace.ID == all[2].Workspace.ID || all[0].Workspace.ID != all[1].Workspace.ID {
@@ -171,7 +172,7 @@ func TestStateEvidence(t *testing.T) {
 		permissions string
 		want        string
 	}{
-		{`{}`, `[]`, "unknown"},
+		{`{}`, `[]`, "idle"}, // F-4: OpenCode drops idle sessions from /session/status
 		{`{"ses_a":{"type":"idle"}}`, `[]`, "idle"},
 		{`{"ses_a":{"type":"busy"}}`, `[]`, "running"},
 		{`{"ses_a":{"type":"retry"}}`, `[]`, "running"},
