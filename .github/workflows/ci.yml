@@ -88,14 +88,18 @@ jobs:
             echo 'HB_CONFINEMENT_INTEGRATION must be unset in CI' >&2
             exit 1
           fi
+          if [[ -n "${HB_CONFINEMENT_DISPOSABLE_HOST+set}" ]]; then
+            echo 'HB_CONFINEMENT_DISPOSABLE_HOST must never be set in CI' >&2
+            exit 1
+          fi
 
       - name: Confinement vet and build (amd64, arm64)
         working-directory: tests/confinement
         run: |
           for arch in amd64 arm64; do
             printf '== CGO_ENABLED=0 GOOS=linux GOARCH=%s (fixture has no cgo files)\n' "$arch"
-            env -u HB_CONFINEMENT_INTEGRATION CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go vet ./...
-            env -u HB_CONFINEMENT_INTEGRATION CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build ./...
+            env -u HB_CONFINEMENT_INTEGRATION -u HB_CONFINEMENT_DISPOSABLE_HOST CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go vet ./...
+            env -u HB_CONFINEMENT_INTEGRATION -u HB_CONFINEMENT_DISPOSABLE_HOST CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build ./...
           done
 
       - name: Confinement test
@@ -104,7 +108,7 @@ jobs:
           printf 'native test arch: %s/%s (uname -m: %s)\n' "$(go env GOOS)" "$(go env GOARCH)" "$(uname -m)"
           TEST_LOG_DIR="$RUNNER_TEMP/harness-bridge-ci"
           mkdir -p "$TEST_LOG_DIR"
-          env -u HB_CONFINEMENT_INTEGRATION go test ./... -count=1 -json | tee "$TEST_LOG_DIR/confinement.jsonl"
+          env -u HB_CONFINEMENT_INTEGRATION -u HB_CONFINEMENT_DISPOSABLE_HOST go test ./... -count=1 -json | tee "$TEST_LOG_DIR/confinement.jsonl"
 
       - name: Verify confinement test outcomes
         run: |
