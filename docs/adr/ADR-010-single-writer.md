@@ -1,6 +1,8 @@
 # ADR-010 — One host-local MCP writer, read-only secondary ingress
 
 Date: 2026-10-24. Status: accepted for MVP; deployment migration NOT authorized.
+Status 2026-11-04: accepted within its recorded scope. Real Claude Chat evidence:
+`docs/evidence/R3A_EVIDENCE_2026-11-03.md` (H3 writer `4cb09fb`).
 Supersedes no native permission or H1/H2 lifecycle contract.
 
 ## Audit and decision

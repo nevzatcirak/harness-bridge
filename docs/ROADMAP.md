@@ -534,5 +534,29 @@ recorded as observed or NOT_EXERCISED, never inferred.
 
 Status 2026-11-03: R0 complete except this commit; R1 PR #7 merged (`477180e`); R3a PASS.
 
+Status 2026-11-04 (results only; plan above unchanged):
+
+| Milestone | Status | Record |
+| --- | --- | --- |
+| R1 | Done | PR #7 (`477180e`), PR #13 CI-02 nested-module and amd64/arm64 CI (`abaf482`) |
+| R2 | Done | PR #3 (`200368f`), #4 (`7ac2704`), #10 (`e84397d`), #9 (`eabb148`), #12 F-1 follow-up (`9ed25a3`) |
+| R3a | PASS | `docs/evidence/R3A_EVIDENCE_2026-11-03.md`; ADR-011 live late completion NOT_EXERCISED |
+| R3b | PASS with F-4 | R3b evidence (2026-11-04); F-4 fix in PR #16 (open) |
+| R4 core | Partial | PR #14 CORE-02 merged (`749b08d`); the permission observer is not wired; native E2E NOT_VERIFIED |
+
+PR #10 superseded PR #5 and PR #6. Both were closed unmerged, and their changes
+reached `main` only through #10's merge reconciliation (`877b247`). See
+[D-F1](decisions/D-F1.md) for the PR #4 / F-1 decision and
+[D-MERGE-DELEGATION](decisions/D-MERGE-DELEGATION.md) for the merge gate.
+
+## Backlog (recorded 2026-11-04)
+
+| Item | Phase | Note |
+| --- | --- | --- |
+| P3 audit logging | 3 | Add execution ID, replay flag and error code to the accepted/replay log line |
+| Native "stalled" liveness | 5 (R5) | Detect and report a native execution that stops making progress |
+| Idempotency keys across writer restarts | 2 | Rule: never reuse idempotency keys across writer restarts |
+| H4-A promotion gate | 3 / 7 | F-1 done (PR #12); F-4 (PR #16); F-2; F-3 |
+
 Writer promotion of H4-A/H4-B code remains NO-GO until its own acceptance;
 Phase 6 is limited to a feasibility spike; Phases 7–8 are out of scope.
