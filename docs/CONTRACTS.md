@@ -302,7 +302,11 @@ absent before the prompt is submitted and on terminal executions. Like all
 execution records it is process-local: a restart loses it with the execution
 (NOT_FOUND), and old idempotency keys must still never be reused. The NO_PROGRESS
 threshold (2 minutes) is fixed in this release, so a long native step without
-part updates can be reported as suspected. Recovery from a suspected stall stays
+part updates can be reported as suspected. Native timestamps come from the
+OpenCode clock and are compared with the Bridge clock: a native timestamp later
+than `observed_at` is ignored, so if the OpenCode clock runs ahead of the Bridge
+clock, real progress can be ignored and a false `NO_PROGRESS` suspicion can appear
+(advisory only, like every suspicion). Recovery from a suspected stall stays
 the ADR-010 fenced procedure; ADR-017 §4 lists what the R5 supervisor records,
 and the supervisor may surface suspicion to a human but must not act on it.
 
