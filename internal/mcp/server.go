@@ -62,10 +62,25 @@ func (s *Server) authorized(ctx context.Context, id string) (opencode.Session, *
 	if e != nil {
 		return v, nil, e
 	}
-	if v.ID != id || !s.Policy.Allows(id, v.Directory) {
+	if v.ID != id {
+		return v, nil, execution.Fail("FORBIDDEN", "workspace not authorized")
+	}
+	allowed, e := s.Policy.AllowsContext(ctx, id, v.Directory)
+	if e != nil {
+		return v, nil, workspaceCheckUnavailable()
+	}
+	if !allowed {
 		return v, nil, execution.Fail("FORBIDDEN", "workspace not authorized")
 	}
 	return v, s.Client.WithDirectory(v.Directory), nil
+}
+
+// workspaceCheckUnavailable is returned when the workspace authorization check
+// could not complete (H4-A F-3, e.g. a hung NFS/FUSE mount). The session is not
+// authorized for this request; the outcome is unknown, so it is retryable and
+// never a FORBIDDEN denial. Nothing was submitted to the native harness.
+func workspaceCheckUnavailable() error {
+	return &execution.Error{Code: "UPSTREAM_TIMEOUT", Message: "workspace authorization check did not complete; storage unavailable", Retryable: true}
 }
 func sessionView(v opencode.Session) Session {
 	return Session{SessionID: "opencode:" + v.ID, NativeID: v.ID, Harness: "opencode", Directory: v.Directory, Title: v.Title, State: "unknown"}
