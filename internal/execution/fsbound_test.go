@@ -101,7 +101,7 @@ func wantTimeout(t *testing.T, err error, what string) {
 	}
 }
 
-func guardHeld(m *Manager) bool {
+func fsGuardHeld(m *Manager) bool {
 	held, _ := m.SessionGuard("ses_test")
 	return held
 }
@@ -120,7 +120,7 @@ func TestAdmissionFSTimeoutReleasesAndSendsNothing(t *testing.T) {
 				_, _, err = m.SendWithRunnerOutcome(context.Background(), f, "ses_test", "prompt", "admission-key")
 			})
 			wantTimeout(t, err, "admission")
-			if guardHeld(m) {
+			if fsGuardHeld(m) {
 				t.Fatal("guard reservation kept after an admission timeout")
 			}
 			f.mu.Lock()
@@ -190,7 +190,7 @@ func TestPreSubmitFSTimeoutFinalizesUnsubmitted(t *testing.T) {
 	if v.LocalFailure == nil || v.LocalFailure.Code != "PRE_SUBMISSION_UNAVAILABLE" {
 		t.Fatalf("want PRE_SUBMISSION_UNAVAILABLE, got %+v", v)
 	}
-	if guardHeld(m) {
+	if fsGuardHeld(m) {
 		t.Fatal("guard kept for a provably unsubmitted run")
 	}
 	f.mu.Lock()
@@ -254,8 +254,8 @@ func TestInterruptFSTimeoutSendsNoAbort(t *testing.T) {
 		t.Fatalf("Abort sent %d times without a completed identity check", aborts)
 	}
 	v, _ := m.Snapshot(context.Background(), x.ID)
-	if terminal(v.State) || !guardHeld(m) {
-		t.Fatalf("interrupt timeout changed state or released the guard: %+v held=%v", v, guardHeld(m))
+	if terminal(v.State) || !fsGuardHeld(m) {
+		t.Fatalf("interrupt timeout changed state or released the guard: %+v held=%v", v, fsGuardHeld(m))
 	}
 }
 
@@ -272,7 +272,7 @@ func TestReadPathFSTimeout(t *testing.T) {
 	wantTimeout(t, err, "Get/refresh (V5)")
 	within(t, fsBound, "Result", func() { _, _, err = m.Result(context.Background(), x.ID) })
 	wantTimeout(t, err, "Result/refresh (V5)")
-	if !guardHeld(m) {
+	if !fsGuardHeld(m) {
 		t.Fatal("read-path timeout released the guard")
 	}
 }
@@ -339,8 +339,8 @@ func TestProbeIdentityFSTimeoutNeverPromotes(t *testing.T) {
 			g := blockFS(t, func(op, path string, nth int32) bool { return op == "evalsymlinks" && path == "/" && nth == tc.nth })
 			proofWithCwd(f, x.MessageID, "/")
 			v := waitReason(t, m, x.ID, "OBSERVATION_UNAVAILABLE", 2*fsBound)
-			if v.State != "unknown" || !guardHeld(m) {
-				t.Fatalf("probe timeout: %+v held=%v", v, guardHeld(m))
+			if v.State != "unknown" || !fsGuardHeld(m) {
+				t.Fatalf("probe timeout: %+v held=%v", v, fsGuardHeld(m))
 			}
 			// Pin the identity re-check itself, not a later check that joins the
 			// same blocked call.
@@ -378,8 +378,8 @@ func TestProbeCwdFSTimeoutDoesNotHoldRunLock(t *testing.T) {
 		}
 	})
 	v := waitReason(t, m, x.ID, "OBSERVATION_UNAVAILABLE", 2*fsBound)
-	if v.State != "unknown" || !guardHeld(m) {
-		t.Fatalf("cwd timeout: %+v held=%v", v, guardHeld(m))
+	if v.State != "unknown" || !fsGuardHeld(m) {
+		t.Fatalf("cwd timeout: %+v held=%v", v, fsGuardHeld(m))
 	}
 	if !strings.Contains(v.Error, "correlated assistant workspace check did not complete") {
 		t.Fatalf("cwd timeout not reported by the cwd check: %q", v.Error)
