@@ -421,9 +421,37 @@ tools (`list_sessions`, `find_sessions`, repository tools) return the same error
 and a parent link whose check does not complete is not shown. For
 `send_prompt` and `interrupt_execution` this happens before admission, so nothing
 is submitted to the native harness and the call may be retried. A check stuck in
-a call that never returns keeps its slot as described above. Synchronous
-filesystem calls inside the execution manager (send_prompt admission and
-reconciliation) are not covered by this bound.
+a call that never returns keeps its slot as described above.
+
+Execution manager workspace checks (EXEC-FS-BOUND-IMPL, 2026-11-05;
+docs/design/EXEC_FS_BOUNDING.md). The `EvalSymlinks`/`Stat` identity checks inside
+the execution manager run through their own bounded group: 2 s per call or the
+caller's deadline, at most 8 running, one in-flight call per operation and path,
+no caching. A check that does not complete is never a pass and never an identity
+mismatch:
+
+- **`send_prompt` admission:** the session reservation is released, nothing is
+  submitted, the key is not accepted. `UPSTREAM_TIMEOUT`, `retryable:true`. A retry
+  with the same key is a new admission.
+- **`send_prompt` replay (same key and payload):** `UPSTREAM_TIMEOUT`,
+  `retryable:true`, and no execution snapshot. Retrying later replays the
+  original execution.
+- **Accepted, before the native prompt call:** the run ends `failed` with
+  `local_failure.code = PRE_SUBMISSION_UNAVAILABLE` and the guard is released
+  (the prompt was provably not invoked). The key stays bound to that failed run;
+  a replay returns it and never resubmits.
+- **`interrupt_execution`:** no native abort is sent. `UPSTREAM_TIMEOUT`,
+  `retryable:true`. State and guard are unchanged.
+- **Execution status and result** (and the MCP binding check before them):
+  `UPSTREAM_TIMEOUT`, `retryable:true`, nothing exposed.
+- **Observation after submission:** the execution stays or becomes `unknown`
+  with `unresolved.reason = OBSERVATION_UNAVAILABLE`. It is never promoted and
+  the guard is kept. The check of a correlated assistant message's working
+  directory runs outside the execution's lock, so status reads, the session
+  guard and discovery never wait on it.
+
+`retryable:true` is set only where nothing was or will be submitted to the native
+harness.
 
 
 ## ADR-014 execution identity and bounded admission (isolated review proposal)

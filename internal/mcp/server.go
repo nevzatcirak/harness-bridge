@@ -152,7 +152,7 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		if e != nil {
 			return nil, e
 		}
-		if e = s.Runs.ValidateSession(a.ExecutionID, meta); e != nil {
+		if e = s.Runs.ValidateSession(ctx, a.ExecutionID, meta); e != nil {
 			return nil, e
 		}
 		if name == "get_execution_status" {

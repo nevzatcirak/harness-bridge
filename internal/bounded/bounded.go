@@ -53,6 +53,12 @@ func NewGroup[K comparable, V any](limit int, timeout time.Duration) *Group[K, V
 // fail closed.
 func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) V) (V, error) {
 	var zero V
+	// An already-cancelled caller always gets ErrTimeout and starts or joins no
+	// call. Without this check the select below could pick a call that finished
+	// immediately and hand a cancelled caller a real result (R3-PR55-REVIEW P3-3).
+	if ctx.Err() != nil {
+		return zero, ErrTimeout
+	}
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 	g.mu.Lock()

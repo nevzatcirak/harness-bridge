@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -188,7 +189,11 @@ retry:
 		if scoped, ok := r.(directoryScoped); ok && x.directory != "" && scoped.Directory() != "" && scoped.Directory() != x.directory {
 			return Execution{}, false, Fail("FORBIDDEN", "execution workspace changed")
 		}
-		if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+		if err := validateSession(ctx, x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			if errors.Is(err, errFSTimeout) {
+				// V1: identity unverified, so no snapshot; nothing new is submitted.
+				return Execution{}, false, fsUnavailable("workspace filesystem check did not complete; replay not verified, nothing submitted")
+			}
 			return Execution{}, false, err
 		}
 		x.mu.Lock()
@@ -267,13 +272,23 @@ retry:
 			release()
 			return Execution{}, false, Fail("FORBIDDEN", "native workspace changed")
 		}
-		resolved, err := filepath.EvalSymlinks(directory)
+		// P1/P2: bounded. A check that does not complete releases the reservation
+		// through the existing path; nothing is sent and the key is not accepted.
+		resolved, err := evalSymlinks(ctx, directory)
+		if errors.Is(err, errFSTimeout) {
+			release()
+			return Execution{}, false, fsUnavailable("workspace filesystem check did not complete; nothing submitted")
+		}
 		if err != nil || resolved != directory || filepath.Clean(directory) != directory {
 			release()
 			return Execution{}, false, Fail("FORBIDDEN", "native workspace unavailable")
 		}
 		canonical = resolved
-		workspace, err = os.Stat(canonical)
+		workspace, err = stat(ctx, canonical)
+		if errors.Is(err, errFSTimeout) {
+			release()
+			return Execution{}, false, fsUnavailable("workspace filesystem check did not complete; nothing submitted")
+		}
 		if err != nil || !workspace.IsDir() {
 			release()
 			return Execution{}, false, Fail("FORBIDDEN", "native workspace unavailable")
@@ -382,7 +397,9 @@ func (m *Manager) work(x *run, prompt string) {
 	// detects observed replacements, not an atomic lease on native path lookup.
 	meta, err := x.runner.Get(ctx, x.native)
 	if err == nil {
-		err = validateSession(x, meta)
+		// V2: any failure, including a check that does not complete, finalizes the
+		// run as never submitted (Prompt is not invoked before this point).
+		err = validateSession(ctx, x, meta)
 	}
 	if err != nil || ctx.Err() != nil {
 		m.finalizeUnsubmitted(x)
@@ -580,7 +597,11 @@ func (m *Manager) Interrupt(ctx context.Context, id string) (Execution, error) {
 		return Execution{}, err
 	}
 	if !requested {
-		if err = validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+		if err = validateSession(bounded, x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+			if errors.Is(err, errFSTimeout) {
+				// V3: no Abort without a completed identity check; state and guard unchanged.
+				return Execution{}, fsUnavailable("workspace filesystem check did not complete; interruption not submitted")
+			}
 			return Execution{}, err
 		}
 		if err = x.runner.Abort(bounded, x.native); err != nil {

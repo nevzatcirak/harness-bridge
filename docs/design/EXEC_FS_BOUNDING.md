@@ -1,6 +1,7 @@
 # Bounding synchronous filesystem calls in `internal/execution` (PROPOSAL)
 
-Status: **PROPOSAL** (design only; no code). Task EXEC-FS-BOUND-DESIGN, issue #51.
+Status: **PROPOSAL**, implemented by EXEC-FS-BOUND-IMPL (issue #63); CONTRACTS.md
+is normative for the behaviour. Task EXEC-FS-BOUND-DESIGN, issue #51.
 Date 2026-11-05, Worker C. Base `main` `7adbff6` (includes #41 and #50).
 
 ADR-010 and ADR-011 (accepted) bind this design; ADR-017 (PROPOSED) is checked
