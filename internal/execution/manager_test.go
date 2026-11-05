@@ -18,9 +18,21 @@ type fake struct {
 	mid                                     string
 	entered, release                        chan struct{}
 	nativeStatus                            *opencode.Status // overrides status when set
+	// Native read counters (ADR-017 §3(a): liveness adds no native read).
+	gets, statusReads, historyReads, permissionReads int
+}
+
+// reads returns the native read counters.
+func (f *fake) reads() [4]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return [4]int{f.gets, f.statusReads, f.historyReads, f.permissionReads}
 }
 
 func (f *fake) Get(ctx context.Context, id string) (opencode.Session, error) {
+	f.mu.Lock()
+	f.gets++
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return opencode.Session{}, err
 	}
@@ -29,6 +41,7 @@ func (f *fake) Get(ctx context.Context, id string) (opencode.Session, error) {
 func (f *fake) History(context.Context, string) ([]opencode.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.historyReads++
 	if f.disconnected {
 		return nil, errors.New("offline")
 	}
@@ -37,6 +50,7 @@ func (f *fake) History(context.Context, string) ([]opencode.Message, error) {
 func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statusReads++
 	if f.disconnected {
 		return nil, errors.New("offline")
 	}
@@ -51,6 +65,7 @@ func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 func (f *fake) Permissions(context.Context) ([]opencode.Permission, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.permissionReads++
 	if f.permission {
 		return []opencode.Permission{{SessionID: "ses_test"}}, nil
 	}

@@ -626,24 +626,47 @@ func TestLivenessNeverChangesStateOrGuard(t *testing.T) {
 			locked(f, func() { f.missing = true; f.permission = true })
 			assistant(f, mid, ms(now), ms(now), "", "")
 		}},
+		{"reads_fail", func(f *fake, mid string, now time.Time) {
+			// Failed native reads: liveness is set after the probe's own
+			// unresolved/updated_at write, so this shape exposes any liveness
+			// write into the view on that path.
+			locked(f, func() { f.disconnected = true })
+		}},
 		{"completed", func(f *fake, mid string, now time.Time) {
 			locked(f, func() { f.missing = true })
 			assistant(f, mid, ms(now), ms(now), "stop", "")
 		}},
 	}
+	// comparable strips what legitimately differs between two runs (random IDs)
+	// and the liveness block itself; everything else, including updated_at,
+	// must be identical (CONTRACTS.md: liveness never changes state, error,
+	// unresolved, ended_at or updated_at).
+	comparable := func(v Execution) Execution {
+		v.ID, v.MessageID, v.Liveness = "", "", nil
+		return v
+	}
+	type observation struct {
+		Before, After Execution
+		Held          bool
+		GuardState    string
+		Reads         [4]int // Get, Status, History, Permissions
+		Sends, Aborts int
+	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				type observation struct {
-					State, Error, Reason string
-					Ended                bool
-					Held                 bool
-					GuardState           string
-				}
-				observe := func(report bool) (observation, *Liveness) {
+			// Each run gets its own synctest bubble, so both start at the same
+			// virtual instant and every timestamp is deterministic.
+			observe := func(report bool) (o observation, liveness *Liveness) {
+				synctest.Test(t, func(t *testing.T) {
 					f := &fake{status: "idle"}
-					m := NewWithTiming(f, 300*time.Second, time.Second)
+					// The monitor deadline is off the 1 s tick grid, so the last
+					// tick and the deadline never race inside the bubble.
+					m := NewWithTiming(f, 300*time.Second+500*time.Millisecond, time.Second)
 					m.noLiveness = !report
+					// A liveness clock distinct from the probe clock makes any
+					// write of a liveness time into the view (for example
+					// updated_at) visible in the comparison below.
+					m.clock = func() time.Time { return time.Now().Add(time.Second) }
 					defer m.Close()
 					x, err := m.Send(context.Background(), "ses_test", "controlled fixture", "late-key")
 					if err != nil {
@@ -655,29 +678,76 @@ func TestLivenessNeverChangesStateOrGuard(t *testing.T) {
 					time.Sleep(10 * time.Second)
 					synctest.Wait()
 					before, _ := m.Snapshot(context.Background(), x.ID)
-					time.Sleep(300 * time.Second)
+					time.Sleep(301 * time.Second)
 					synctest.Wait()
 					got, err := m.Get(context.Background(), x.ID)
 					if err != nil {
 						t.Fatal(err)
 					}
-					o := observation{State: before.State + "/" + got.State, Error: before.Error + "/" + got.Error, Ended: got.Ended != nil}
-					if got.Unresolved != nil {
-						o.Reason = got.Unresolved.Reason
-					}
+					o.Before, o.After = comparable(before), comparable(got)
 					o.Held, o.GuardState = m.SessionGuard("ses_test")
-					return o, got.Liveness
+					o.Reads = f.reads()
+					f.mu.Lock()
+					o.Sends, o.Aborts = f.sends, f.aborts
+					f.mu.Unlock()
+					liveness = got.Liveness
+				})
+				return o, liveness
+			}
+			with, liveness := observe(true)
+			without, none := observe(false)
+			if none != nil {
+				t.Fatalf("report switched off but liveness %+v", none)
+			}
+			if !reflect.DeepEqual(with, without) {
+				t.Fatalf("liveness changed the outcome:\nwith    %+v (liveness %+v)\nwithout %+v", with, liveness, without)
+			}
+			if shape.name != "completed" && (liveness == nil || !with.Held) {
+				t.Fatalf("expected a held guard and a liveness block: %+v %+v", with, liveness)
+			}
+		})
+	}
+}
+
+// ADR-017 §3(a) "More native reads per probe: none": every on-demand probe
+// makes exactly one Get, Status, History and Permissions read, with or
+// without the report, and no write.
+func TestLivenessAddsNoNativeReads(t *testing.T) {
+	for _, report := range []bool{true, false} {
+		t.Run(fmt.Sprintf("liveness=%v", report), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := &fake{missing: true}
+				m := NewWithTiming(f, 300*time.Second, time.Second)
+				m.noLiveness = !report
+				defer m.Close()
+				x, err := m.Send(context.Background(), "ses_test", "controlled fixture", "late-key")
+				if err != nil {
+					t.Fatal(err)
 				}
-				with, liveness := observe(true)
-				without, none := observe(false)
-				if none != nil {
-					t.Fatalf("report switched off but liveness %+v", none)
+				synctest.Wait()
+				time.Sleep(300 * time.Second)
+				synctest.Wait()
+				now := time.Now()
+				assistant(f, x.MessageID, ms(now), ms(now), "", "")
+				before := f.reads()
+				const probes = 5
+				for i := 0; i < probes; i++ {
+					got, err := m.Get(context.Background(), x.ID)
+					if err != nil || (report && (got.Liveness == nil || !got.Liveness.StallSuspected)) {
+						t.Fatal(got, err)
+					}
+					time.Sleep(time.Second) // past the probe cooldown
 				}
-				if with != without {
-					t.Fatalf("liveness changed the outcome:\nwith    %+v (liveness %+v)\nwithout %+v", with, liveness, without)
+				after := f.reads()
+				for i, name := range []string{"Get", "Status", "History", "Permissions"} {
+					if d := after[i] - before[i]; d != probes {
+						t.Errorf("%s reads = %d over %d probes, want exactly one per probe", name, d, probes)
+					}
 				}
-				if shape.name != "completed" && (liveness == nil || !with.Held) {
-					t.Fatalf("expected a held guard and a liveness block: %+v %+v", with, liveness)
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				if f.sends != 1 || f.aborts != 0 {
+					t.Fatalf("native writes: sends=%d aborts=%d", f.sends, f.aborts)
 				}
 			})
 		})
