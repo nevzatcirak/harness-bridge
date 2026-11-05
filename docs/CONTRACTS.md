@@ -300,9 +300,12 @@ Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,
 `list_repositories`, `get_repository`, `get_session`, `get_harness_capabilities`)
 can make OpenCode load (bootstrap) the instance of any ACL'd session directory,
 also on a `BRIDGE_READ_ONLY=1` Bridge. Every ACL lookup (`GET /session/:id`) is
-routed to the session's own directory (or, for a workspace-bound session, to its
-workspace target), and the directory-scoped status, permission, `/agent` and
-`/doc` reads target that directory too. OpenCode v1.19.4
+routed to the session's own directory, also for a workspace-bound session: OpenCode
+keeps every `GET /session…` request on the local control plane and forwards only
+other session calls (prompt, abort) and `/session/status`/`/permission` with
+`?workspace=` to a workspace target (corrected 2026-11-05, see
+docs/design/F2_WORKSPACE_ROUTING.md). The directory-scoped status, permission,
+`/agent` and `/doc` reads target that directory too. OpenCode v1.19.4
 (`anomalyco/opencode` `148842ef`) boots each directory once and caches it
 (`project/instance-store.ts:108-124`). Bootstrap merges every `opencode.json(c)`
 and `.opencode` directory from that directory up to the worktree root (`/` for a

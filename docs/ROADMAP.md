@@ -701,5 +701,19 @@ decides whether to inspect that key.
    `OPENCODE_DISABLE_PROJECT_CONFIG` if project-level config is not wanted.
    This changes OpenCode behaviour for all users of that instance.
 
+#### F-2 correction and workspace routing (F2-WORKSPACE-ROUTE-VERIFY, 2026-11-05, Worker C)
+
+The note above says `/session/:id` routes a workspace-bound session to its
+workspace target, and it calls H4-A's `?directory=` reads the one new bootstrap
+case. **Both claims are corrected here.** OpenCode v1.19.4 keeps every
+`GET /session…` request on the local control plane
+(`packages/opencode/src/server/shared/workspace-routing.ts:5-18`;
+`…/middleware/workspace-routing.ts:177-184`). The ACL lookup and the history
+reads therefore already load `session.directory` for workspace-bound sessions,
+as they have since H2. PR #45 does not change the bootstrap surface. It removes
+reads that may describe an instance that does not serve the session.
+Classification, `?workspace=` routing and the proposed design for discovery and
+the `send_prompt` preflight are in `docs/design/F2_WORKSPACE_ROUTING.md`.
+
 Writer promotion of H4-A/H4-B code remains NO-GO until its own acceptance;
 Phase 6 is limited to a feasibility spike; Phases 7–8 are out of scope.
