@@ -717,3 +717,72 @@ the `send_prompt` preflight are in `docs/design/F2_WORKSPACE_ROUTING.md`.
 
 Writer promotion of H4-A/H4-B code remains NO-GO until its own acceptance;
 Phase 6 is limited to a feasibility spike; Phases 7–8 are out of scope.
+
+## Status 2026-11-05
+
+Recorded against `main` `da0fbd99372f3e8bf86c55ec2b4723727143a7dd` (DOC-STATUS-02,
+issue #69). Append only: the earlier status tables and quoted texts above are
+unchanged. Merge SHAs come from `gh api repos/nevzatcirak/harness-bridge/pulls/<n>`
+(`merge_commit_sha`). Gate records are the Planning Desk merge-record comments on
+each PR.
+
+### Merged since the 2026-11-04 status
+
+| PR | Task | Merge SHA |
+| --- | --- | --- |
+| #16 | FIX-STATE-01, F-4 (idle inferred from absence) | `0499a23055d480718796b443c97cd378c0867f46` |
+| #22 | FIX-FIXTURE-03 (setup/probe mode guards) | `34541b1933b845f66a47f39eb16d40c1b9b4791a` |
+| #23 | AUDIT-01 (structured audit line per mutating call) | `692992dbf78d72861db989ee7b4b1c580795b1c5` |
+| #29 | ADR-017 PROPOSED (native stall liveness, report-only) | `b27b606574d52e0501f9800beb8ff24bad53101c` |
+| #31 | FIX-FIXTURE-04 (fd-3 close test, guard wording, userns skip) | `4699d16aec0053d55b3ddf234176703b41a32d57` |
+| #39 | DOC-AUDIT-NOTE (SDK unmarshal rejection path) | `8f55637000724bf3eebfe595e59374288361d0ad` |
+| #40 | H4A-F2-VERIFY (F-2 verification note) | `8b88ee1dcbc76d34c4a309d1322632af856db8d4` |
+| #41 | H4-A F-3 part 1 (`repository.Inspect` non-blocking) | `7adbff6a2c8ca5b3001523d89528c2f65c065e45` |
+| #45 | H4A-F2-FOLLOWUP (skip directory reads for workspace-bound sessions) | `1ac24366bd705cb5ae552a10602f1c9f69bc63e7` |
+| #50 | F2-WORKSPACE-ROUTE-VERIFY (workspace routing note) | `5b1efdb8b96d9dde9e47914bce76481e5945375c` |
+| #53 | EXEC-FS-BOUND-DESIGN (design proposal) | `5201217cb9a58963d9bf57e0cd97bb4bf6c34a01` |
+| #55 | H4-A F-3 part 2 (`Policy.AllowsContext`, `internal/bounded`) | `1c0d2d36256b95694010f003e4b6ed40fbdb652d` |
+| #56 | ADR-017 option (a) ACCEPTED and implemented (D-ADR017-A) | `5758c4d4e60185d97e2d8e5edbf8227d636de673` |
+| #57 | TEST-HARDENING-01 | `f95865efae375f914c4f86f04b12891400ad09fa` |
+| #65 | TEST-HARDENING-02 | `da0fbd99372f3e8bf86c55ec2b4723727143a7dd` |
+
+**Open:** PR #67 EXEC-FS-BOUND-IMPL (head `2e7d42dfe24066f8dc5cd5f36606e59e64baccc7`
+when this was written; review R5-PR67-REVIEW, issue #68).
+
+### H4-A promotion gate
+
+| Item | Status | Record |
+| --- | --- | --- |
+| F-1 | Done | PR #12 (`9ed25a377cd6af768ed2947d44df8642c2324a30`) |
+| F-2 | Mechanism confirmed; workspace-bound reads skipped; closed for the R5 test instance; general residual stays | Mechanism: #40. Workspace-bound directory reads skipped: #45. Closed for the R5 test instance by the operator listing ([issue #35](https://github.com/nevzatcirak/harness-bridge/issues/35#issuecomment-6653237061)). General residual: discovery bootstraps ACL'd workspaces, so the ACL must hold only trusted workspaces (CONTRACTS.md, "Discovery bootstraps native instances") |
+| F-3 | Closed for `internal/mcp` and `internal/security`; execution part open | #41 and #55 ([merge record #55](https://github.com/nevzatcirak/harness-bridge/pull/55#issuecomment-6654139993)); the `internal/execution` part is PR #67 (open) |
+| F-4 | Done | PR #16 (`0499a23`); confirmed live in R5 Step 2 preflight ([issue #35](https://github.com/nevzatcirak/harness-bridge/issues/35#issuecomment-6654185502)) |
+
+### R5
+
+**IN PROGRESS. The MVP is not accepted.**
+
+| Step | Status | Record |
+| --- | --- | --- |
+| 1. Operator gate: writer candidate `692992d` installed | Done | [issue #35 operator records](https://github.com/nevzatcirak/harness-bridge/issues/35#issuecomment-6653237061): sha256 `d9837334…63b7`, `vcs.revision=692992dbf78d72861db989ee7b4b1c580795b1c5`, `vcs.modified=false` |
+| 2. Read-only preflight | PASS (F-4 live) | [issue #35 preflight](https://github.com/nevzatcirak/harness-bridge/issues/35#issuecomment-6654185502) |
+| 3. Acceptance run | Passed except the interrupt, which was re-run and passed (D′) | As stated by the Planning Desk in issue #69. No GitHub record of the run had been posted when this was written. |
+| 4. Connection loss | Pending | — |
+| Corroboration | Pending | — |
+
+### Backlog (P3 items still open from gate records)
+
+Copied from the Planning Desk merge records and the review they cite. Items
+closed since are listed below the table.
+
+| Sev | Item | Source |
+| --- | --- | --- |
+| P2 | F-2 residual: `send_prompt` preflight (`internal/execution`) still does directory-scoped Status/Permissions reads for workspace-bound sessions. A candidate fix is `?workspace=<id>` routing (unverified). | [#45 merge record](https://github.com/nevzatcirak/harness-bridge/pull/45#issuecomment-6651375298); design in `docs/design/F2_WORKSPACE_ROUTING.md` (#50) |
+| P3 | Local-worktree workspace sessions are served by the directory instance, so `unknown` drops correct state there (safe direction). Qualify the premise to "remote or moved workspace sessions", or move to `?workspace=`. | [#45 merge record](https://github.com/nevzatcirak/harness-bridge/pull/45#issuecomment-6651375298) |
+| P3 | `bounded` select: check `ctx.Err()` first, because an already-cancelled caller can randomly get a real result (not fail-open). This explains a rare flake in `TestWorktreeIdentityAndBounds`. | [#55 merge record](https://github.com/nevzatcirak/harness-bridge/pull/55#issuecomment-6654139993) item 3; addressed in PR #67 (open) |
+| P3 | `//go:linkname` references evade the identifier lint (hostile code only). | [#57 merge record](https://github.com/nevzatcirak/harness-bridge/pull/57#issuecomment-6653576816); review [#60](https://github.com/nevzatcirak/harness-bridge/issues/60#issuecomment-6653338641) P3-1 |
+| P3 | The CI reason match runs per output event, so a reason split across events would fail CI even though nothing is wrong. It never passes silently; note only. | [#57 merge record](https://github.com/nevzatcirak/harness-bridge/pull/57#issuecomment-6653576816) ("one more P3 on the CI assertion"); review [#60](https://github.com/nevzatcirak/harness-bridge/issues/60#issuecomment-6653338641) P3-2 |
+
+**Closed since recorded:**
+- #45's "no test for a workspace-bound session with a held guard (mutant M5 survives)" was closed by #57 ([merge record](https://github.com/nevzatcirak/harness-bridge/pull/57#issuecomment-6653576816)).
+- #55's P3 items 1, 2 and 4 were closed by #65 ([merge record](https://github.com/nevzatcirak/harness-bridge/pull/65#issuecomment-6656228007)).
