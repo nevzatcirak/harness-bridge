@@ -12,6 +12,7 @@ earlier one only by an explicit new record.
 | [D-K2](D-K2.md) | 2026-11-03 | Canonical phase numbering (quoted from Roadmap v1.4) |
 | [D-K4](D-K4.md) | 2026-11-03 | R3a on the accepted H3 writer (quoted from Roadmap v1.4) |
 | [D-MERGE-DELEGATION](D-MERGE-DELEGATION.md) | 2026-11-04 | Merge authority delegated to the Planning Desk under a gate |
+| [D-ADR017-A](D-ADR017-A.md) | 2026-11-05 | ADR-017 option (a) accepted (report-only liveness); (b) and (c) not accepted |
 
 D-K1, D-K2 and D-K4 are Planning Desk labels for maintainer decisions recorded in
 `docs/ROADMAP.md`; their records quote the roadmap text verbatim.

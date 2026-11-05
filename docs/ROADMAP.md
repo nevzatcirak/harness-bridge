@@ -558,7 +558,7 @@ reached `main` only through #10's merge reconciliation (`877b247`). See
 | Item | Phase | Note |
 | --- | --- | --- |
 | P3 audit logging | 3 | Add execution ID, replay flag and error code to the accepted/replay log line; PR #23 AUDIT-01 open |
-| Native "stalled" liveness | 5 (R5) | Detect and report a native execution that stops making progress |
+| Native "stalled" liveness | 5 (R5) | Detect and report a native execution that stops making progress. ADR-017 option (a) accepted 2026-11-05 (D-ADR017-A): report-only `liveness` on execution status/result (CONTRACTS.md); R5 records the block per ADR-017 §4 and never acts on it automatically. Option (b) needs a live-evidence amendment; (c) rejected |
 | Idempotency keys across writer restarts | 2 | Rule: never reuse idempotency keys across writer restarts |
 | H4-A promotion gate | 3 / 7 | F-1 done (PR #12); F-4 done (PR #16); F-2 and F-3 open (below) |
 

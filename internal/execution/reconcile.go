@@ -48,6 +48,7 @@ func snapshot(v Execution) Execution {
 		u.LastCheckedAt = copyTime(u.LastCheckedAt)
 		v.Unresolved = &u
 	}
+	v.Liveness = copyLiveness(v.Liveness)
 	return v
 }
 
@@ -205,6 +206,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			if reconciling {
 				x.view.Unresolved.LastCheckedAt = &now
 			}
+			m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
 		}
 		return err
 	}
@@ -280,6 +282,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	x.messages = nil
 	userFound, unfinished := false, false
 	var proof *opencode.Message
+	var assistants []opencode.Message
 	for _, msg := range msgs {
 		if msg.Info.SessionID != x.native {
 			continue
@@ -299,10 +302,12 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 				if reconciling {
 					x.view.Unresolved.LastCheckedAt = &now
 				}
+				m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
 				return Fail("FORBIDDEN", "correlated assistant workspace differs")
 			}
 		}
 		x.messages = append(x.messages, msg)
+		assistants = append(assistants, msg)
 		if msg.Info.Time.Completed <= 0 {
 			unfinished = true
 			continue
@@ -312,9 +317,24 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			proof = &v
 		}
 	}
+	status, exists := statuses[x.native]
+	pending := false
+	for _, p := range permissions {
+		if p.SessionID == x.native {
+			pending = true
+		}
+	}
+	// ADR-017 option (a): report-only. Computed from the reads above (no extra
+	// native call) and assigned only through setLiveness, which never touches
+	// state, error, unresolved, ended_at or the guard.
+	liveness := assessLiveness(m.clock().UTC(), m.stallThreshold, livenessEvidence{
+		status: status, statusExists: exists, userFound: userFound, assistants: assistants,
+		unfinished: unfinished, proof: proof != nil, permissionPending: pending, started: x.view.Started,
+	})
 	// Pending/unknown permission state prevents a terminal promotion and admission.
 	for _, p := range permissions {
 		if p.SessionID == x.native {
+			m.setLiveness(x, liveness)
 			if x.monitorDone {
 				unresolved(x, "MONITOR_EXPIRED", "native permission pending after tracking stopped", now, true)
 				x.view.Unresolved.LastCheckedAt = &now
@@ -327,8 +347,9 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			return nil
 		}
 	}
-	status, exists := statuses[x.native]
 	if userFound && !unfinished && proof != nil && (!exists || status.Type == "idle") {
+		// A terminal execution carries no liveness report.
+		m.setLiveness(x, nil)
 		x.view.State = terminalState(*proof)
 		x.view.Updated = now
 		ended := time.UnixMilli(proof.Info.Time.Completed).UTC()
@@ -348,6 +369,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		m.mu.Unlock()
 		return nil
 	}
+	m.setLiveness(x, liveness)
 	if x.monitorDone {
 		unresolved(x, "MONITOR_EXPIRED", "native terminal evidence remains inconclusive", now, true)
 		x.view.Unresolved.LastCheckedAt = &now
