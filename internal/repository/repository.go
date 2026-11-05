@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -67,6 +69,7 @@ func (s *storage) stat(path string) (os.FileInfo, error) {
 	if s.ctx.Err() != nil {
 		return nil, unavailable
 	}
+	fsHook(path)
 	root, rel, e := s.policy.OpenStorage(s.session, path)
 	if e != nil {
 		return nil, unavailable
@@ -83,6 +86,7 @@ func (s *storage) read(path string, limit int) (string, error) {
 	if s.ctx.Err() != nil {
 		return "", unavailable
 	}
+	fsHook(path)
 	root, rel, e := s.policy.OpenStorage(s.session, path)
 	if e != nil {
 		return "", unavailable
@@ -129,16 +133,99 @@ func validRef(ref string) bool {
 	return strings.HasPrefix(ref, "refs/") && !strings.Contains(ref, "..") && !strings.ContainsAny(ref, "\\\x00\r\n :~^?*[") && filepath.Clean(ref) == ref && len(ref) <= 1024
 }
 
+// inspectTimeout bounds one inspection and every caller's wait for it.
+const inspectTimeout = 2 * time.Second
+
+// inspectLimit bounds inspections still running across all callers. Only an
+// inspection stuck in a blocking filesystem call can outlive its callers, so
+// this is also the bound on goroutines a hung NFS/FUSE mount can hold (F-3).
+const inspectLimit = 16
+
+type inspectKey struct {
+	policy             *security.Policy
+	session, directory string
+}
+
+type inspectCall struct {
+	done chan struct{}
+	r    Repository
+	w    Workspace
+	err  error
+}
+
+var inflight = struct {
+	sync.Mutex
+	calls map[inspectKey]*inspectCall
+}{calls: map[inspectKey]*inspectCall{}}
+
+// testFSHook, when set by tests, runs before each confined stat/read so a test
+// can simulate a filesystem call that blocks. It is nil in production.
+var testFSHook atomic.Pointer[func(path string)]
+
+func fsHook(path string) {
+	if hook := testFSHook.Load(); hook != nil {
+		(*hook)(path)
+	}
+}
+
+// SetFSHookForTesting installs fn as the filesystem hook and returns a function
+// that removes it. For tests only; production code never calls it.
+func SetFSHookForTesting(fn func(path string)) (restore func()) {
+	testFSHook.Store(&fn)
+	return func() { testFSHook.Store(nil) }
+}
+
 // Inspect requires the authoritative session policy before opening any storage.
 // Unsupported layouts or unsafe/unavailable storage produce no metadata.
+//
+// The inspection runs in its own goroutine, so a filesystem call that blocks
+// (a hung NFS/FUSE mount) cannot hold the caller past ctx or inspectTimeout:
+// the caller then gets unavailable, never a partial or fabricated identity (F-3).
+// Concurrent callers for the same policy, session and directory share one
+// in-flight inspection. At most inspectLimit inspections run at once; beyond
+// that Inspect fails closed without starting another. A result that arrives
+// after every caller has left is dropped, not cached.
 func Inspect(ctx context.Context, directory string, policy *security.Policy, session string) (Repository, Workspace, error) {
+	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	key := inspectKey{policy, session, directory}
+	inflight.Lock()
+	call, ok := inflight.calls[key]
+	if !ok {
+		if len(inflight.calls) >= inspectLimit {
+			inflight.Unlock()
+			return Repository{}, Workspace{}, unavailable
+		}
+		call = &inspectCall{done: make(chan struct{})}
+		inflight.calls[key] = call
+		go func() {
+			// Detached from any one caller, so a joined caller is not failed by
+			// another caller's cancellation; still bounded by inspectTimeout
+			// between filesystem calls.
+			work, stop := context.WithTimeout(context.Background(), inspectTimeout)
+			call.r, call.w, call.err = inspect(work, directory, policy, session)
+			stop()
+			inflight.Lock()
+			delete(inflight.calls, key)
+			inflight.Unlock()
+			close(call.done)
+		}()
+	}
+	inflight.Unlock()
+	select {
+	case <-call.done:
+		return call.r, call.w, call.err
+	case <-ctx.Done():
+		return Repository{}, Workspace{}, unavailable
+	}
+}
+
+func inspect(ctx context.Context, directory string, policy *security.Policy, session string) (Repository, Workspace, error) {
 	var r Repository
 	var w Workspace
 	if !policy.Allows(session, directory) {
 		return r, w, unavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
 	s := storage{policy, session, ctx, map[string]os.FileInfo{}}
 	root := directory
 	gd := ""
