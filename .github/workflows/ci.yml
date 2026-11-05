@@ -137,6 +137,32 @@ jobs:
               exit 1
             fi
           done
+          # userns discriminator (#31 gate P3-2): a SKIP must carry its logged
+          # reason, a PASS must have logged "kernel-distinguished 8/8"; a silent
+          # PASS, FAIL or missing outcome fails CI.
+          ut='TestSeccompKernelDeniesMountAPI/userns_discriminator'
+          got=$(outcome "$ut")
+          said=$(jq -r --arg t "$ut" 'select(.Test == $t and .Action == "output") | .Output' "$log")
+          printf '%s=%s\n' "$ut" "${got:-missing}"
+          printf '%s\n' "$said" | grep -E 'not creatable here|grants no mount capability|kernel-distinguished 8/8' || true
+          case "$got" in
+            skip)
+              if ! grep -qE 'not creatable here|grants no mount capability' <<<"$said"; then
+                echo "$ut skipped without its logged reason" >&2
+                exit 1
+              fi
+              ;;
+            pass)
+              if ! grep -q 'kernel-distinguished 8/8' <<<"$said"; then
+                echo "$ut passed without the 8/8 log line (silent PASS)" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "$ut must skip with its reason or pass with 8/8, got ${got:-missing}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Report skipped tests
         if: ${{ always() }}

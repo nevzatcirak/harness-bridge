@@ -69,3 +69,23 @@ func TestStateNullStatusBodyUnknown(t *testing.T) {
 	wantWire(t, workspaceServer(t, "", `null`, `[]`), "unknown", "", false)
 	wantWire(t, workspaceServer(t, "", ` null `, `[]`), "unknown", "", false)
 }
+
+// TEST-HARDENING-01 (#45 gate P3-2): a workspace-bound session with a held
+// Bridge guard is reported unknown on every discovery surface (CONTRACTS.md,
+// "Session state and the Bridge guard"). Discovery makes no permission read for
+// it, so the guard maps as for a failed permission read. The directory
+// instance's status and pending permission must not leak into the result.
+func TestStateWorkspaceBoundHeldGuardUnknown(t *testing.T) {
+	for _, mode := range []string{"reserved", "submitting", "running", "waiting_for_permission", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, upstream := range []struct{ status, permissions string }{
+				{`{}`, `[]`},
+				{`{"ses_a":{"type":"busy"}}`, `[{"sessionID":"ses_a"}]`},
+			} {
+				s := workspaceServer(t, "wrk_1", upstream.status, upstream.permissions)
+				s.Runs = heldManager(t, t.TempDir(), mode)
+				wantWire(t, s, "unknown", "", false)
+			}
+		})
+	}
+}
