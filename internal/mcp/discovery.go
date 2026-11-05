@@ -50,26 +50,38 @@ type directoryEvidence struct {
 	workspace     *repository.Workspace
 }
 
+// workspaceBound reports whether OpenCode routes the session's own requests by
+// its workspaceID rather than by its directory (H4A-F2-FOLLOWUP).
+func workspaceBound(v opencode.Session) bool { return v.WorkspaceID != "" }
+
 func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, members ...string) directoryEvidence {
-	c := s.Client.WithDirectory(v.Directory)
-	status, se := c.Status(ctx)
-	permissions, pe := c.Permissions(ctx)
-	// A 2xx JSON null decodes to a nil map without error; it is not an empty
-	// status map and must not support absence inference (R2-PR16-REVIEW).
-	d := directoryEvidence{status: map[string]opencode.Status{}, statusOK: se == nil && status != nil, permissions: map[string]bool{}, permissionsOK: pe == nil}
-	if len(members) == 0 {
-		members = []string{v.ID}
-	}
-	allowed := map[string]bool{}
-	for _, id := range members {
-		allowed[id] = true
-		if value, ok := status[id]; ok {
-			d.status[id] = value
+	d := directoryEvidence{status: map[string]opencode.Status{}, permissions: map[string]bool{}}
+	if !workspaceBound(v) {
+		// Directory-scoped native reads load (bootstrap) the OpenCode instance for
+		// v.Directory. A workspace-bound session lives in its workspace's instance,
+		// so these reads would boot a local instance that is otherwise not needed
+		// and prove nothing about the session (R2-PR16-REVIEW, H4A-F2-VERIFY). They
+		// are skipped; statusOK and permissionsOK stay false, so state is unknown.
+		c := s.Client.WithDirectory(v.Directory)
+		status, se := c.Status(ctx)
+		permissions, pe := c.Permissions(ctx)
+		// A 2xx JSON null decodes to a nil map without error; it is not an empty
+		// status map and must not support absence inference (R2-PR16-REVIEW).
+		d.statusOK, d.permissionsOK = se == nil && status != nil, pe == nil
+		if len(members) == 0 {
+			members = []string{v.ID}
 		}
-	}
-	for _, p := range permissions {
-		if allowed[p.SessionID] {
-			d.permissions[p.SessionID] = true
+		allowed := map[string]bool{}
+		for _, id := range members {
+			allowed[id] = true
+			if value, ok := status[id]; ok {
+				d.status[id] = value
+			}
+		}
+		for _, p := range permissions {
+			if allowed[p.SessionID] {
+				d.permissions[p.SessionID] = true
+			}
 		}
 	}
 	// Retain only this directory's authorized members, not the full native inventory.
@@ -213,7 +225,13 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	}
 	authorized := map[string]bool{}
 	directories := []opencode.Session{}
-	directoryIndex := map[string]int{}
+	// Workspace-bound sessions form their own groups: their evidence comes from
+	// no native call, and they must not share a directory's native reads.
+	type groupKey struct {
+		directory      string
+		workspaceBound bool
+	}
+	directoryIndex := map[groupKey]int{}
 	groups := [][]string{}
 	for i, id := range ids {
 		if errs[i] != nil {
@@ -225,12 +243,13 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 		}
 		authorized[id] = true
 		v := metadata[i]
-		if _, ok := directoryIndex[v.Directory]; !ok {
-			directoryIndex[v.Directory] = len(directories)
+		key := groupKey{v.Directory, workspaceBound(v)}
+		if _, ok := directoryIndex[key]; !ok {
+			directoryIndex[key] = len(directories)
 			directories = append(directories, v)
 			groups = append(groups, nil)
 		}
-		groups[directoryIndex[v.Directory]] = append(groups[directoryIndex[v.Directory]], id)
+		groups[directoryIndex[key]] = append(groups[directoryIndex[key]], id)
 	}
 	evidence := make([]directoryEvidence, len(directories))
 	parallel(ctx, len(directories), func(i int) { evidence[i] = s.inspectDirectory(ctx, directories[i], groups[i]...) })
@@ -247,7 +266,7 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	for i, id := range ids {
 		if authorized[id] {
 			v := metadata[i]
-			out = append(out, s.view(v, evidence[directoryIndex[v.Directory]], authorized[v.ParentID]))
+			out = append(out, s.view(v, evidence[directoryIndex[groupKey{v.Directory, workspaceBound(v)}]], authorized[v.ParentID]))
 		}
 	}
 	return out, nil
@@ -258,9 +277,14 @@ func (s *Server) discoveryCall(ctx context.Context, name string, a args) (any, e
 		if e != nil {
 			return nil, e
 		}
-		_, c, e := s.authorized(ctx, id)
+		v, c, e := s.authorized(ctx, id)
 		if e != nil {
 			return nil, e
+		}
+		if workspaceBound(v) {
+			// /agent and /doc are directory-scoped and would boot a local instance
+			// that does not serve this session (H4A-F2-FOLLOWUP).
+			return nil, execution.Fail("INVALID_INPUT", "get_harness_capabilities is unavailable for workspace-bound sessions (native_workspace_id set); their native instance is not reachable by directory")
 		}
 		agents, e := c.Agents(ctx)
 		if e != nil {

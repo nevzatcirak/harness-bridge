@@ -75,6 +75,12 @@ BRIDGE_ALLOWED_SESSIONS=<EXACT_EXISTING_NATIVE_SESSION_ID>
 OPENCODE_URL=http://127.0.0.1:4097
 ```
 
+The ACL (`BRIDGE_ALLOWED_ROOTS`, `BRIDGE_ALLOWED_SESSIONS`) must name only
+sessions in workspaces whose `.opencode` content (up to the worktree root) the
+operator trusts: read-only discovery can make OpenCode bootstrap those
+directories and execute their plugins, also with `BRIDGE_READ_ONLY=1`
+(CONTRACTS.md, "Discovery bootstraps native instances").
+
 Set `BRIDGE_TOKEN` to a fresh cryptographically random secret (e.g. 32 random
 bytes encoded as hex), and `BRIDGE_TOKEN_EXPIRES` to an RFC3339 UTC timestamp
 within the next 24 hours. Supply existing `OPENCODE_SERVER_USERNAME` and

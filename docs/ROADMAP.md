@@ -573,5 +573,133 @@ PR #4 head `0b3c319c96b0da0f921d63e8be6e5b063c66b0fc`, reviewed delta
 | F-2 | P3 | writer promotion | internal/adapters/opencode/client.go (Agents, Status, Permissions via WithDirectory); discovery.go:54–56, :224 | Hypothesis, not verified: OpenCode bootstraps its per-directory instance on `?directory=`, which loads that repo's .opencode config, agents and plugins. The Bridge executes nothing itself, and the base already sent `directory` for get_session/history. H4-A adds directory-scoped /agent, status and permission calls for every ACL'd directory on each discovery. Verify before promotion. |
 | F-3 | P3 | writer promotion | internal/repository/repository.go:140; storage_linux.go | The 2 s Inspect deadline is checked between syscalls, but a blocking stat/open (hung NFS/FUSE) is not interruptible. One worker stalls the discovery past its 10 s deadline. |
 
+#### F-2 verification note (H4A-F2-VERIFY, 2026-11-05, Worker C)
+
+Static source reading only; OpenCode was not run and no Bridge or OpenCode call
+was made. Upstream `anomalyco/opencode` tag v1.19.4 = commit
+`148842ef7cb1bc34192b3fff57d0f9721ab9c801`; paths below are under
+`packages/opencode/src/` unless prefixed `core/` (`packages/core/src/`).
+
+**Mechanism: confirmed.**
+
+- Routing. `?directory=` (or `x-opencode-directory`, else the server cwd)
+  selects the instance directory for requests without a session ID
+  (`server/routes/instance/httpapi/middleware/workspace-routing.ts:86-88`,
+  `:160-184`); a `/session/:id…` request uses the stored `session.directory`
+  instead (`:182`, `:212-236`), or its workspace target when the session has a
+  `workspaceID` (`:150-157`). `/session/status` never resolves a session
+  (`server/shared/workspace-routing.ts:20-21`).
+- Instance load. `InstanceContextMiddleware` calls `InstanceStore.load` for that
+  directory (`…/middleware/instance-context.ts:23-35`). It is attached to the
+  session (including `/session/status`), permission and instance (including
+  `/agent`) groups (`…/groups/session.ts:452`, `…/groups/permission.ts:51`,
+  `…/groups/instance.ts:196`). `load` boots once per resolved directory and
+  caches the result until the instance is disposed
+  (`project/instance-store.ts:108-124`, boot `:45-63`).
+- Bootstrap (`project/bootstrap.ts:30-43`): `config.get()`, then
+  `plugin.init()`, then `lsp`, `format`, `vcs`, `snapshot` and `project` init.
+- Config (`config/config.ts:420-478`, `config/paths.ts:10-41`,
+  `core/fs-util.ts:168-182`). It walks from the directory up to the worktree,
+  inclusive, merging every `opencode.json(c)`, and also uses every `.opencode`
+  directory on that path plus `~/.config/opencode`, `~/.opencode` and
+  `OPENCODE_CONFIG_DIR`. For each such directory it:
+  - writes a `.gitignore` if absent (`config.ts:309-324`);
+  - starts a background npm install of `@opencode-ai/plugin` and the
+    directory's declared dependencies, using that directory's npm config
+    (`config.ts:452-472`, `core/npm.ts:88-101`, `:147-196`). Arborist runs
+    with `ignoreScripts: true`, so no lifecycle scripts run, but packages are
+    fetched and `node_modules` is written when the directory is writable;
+  - loads agents and commands, and globs `{plugin,plugins}/*.{ts,js}` as
+    plugins (`config/plugin.ts:18-29`). `OPENCODE_DISABLE_PROJECT_CONFIG`
+    skips the project-level walk (`config.ts:420`, `paths.ts:27`).
+- **Plugins execute at bootstrap, not on first use.** `Plugin.init` forces the
+  per-instance state (`plugin/index.ts:304-306`). That state imports each
+  configured or auto-discovered plugin module (`plugin/loader.ts:135-140`) and
+  calls its `server(input)` factory, then its `config` hook
+  (`plugin/index.ts:114-124`, `:181-253`). The runtime flag `pure` skips
+  external plugins (`:181`).
+- Worktree. For a non-git directory OpenCode uses the `global` project with
+  worktree `/` (`project/project.ts:217`, `:309`). The search for the R5 test
+  directory therefore covers `/opt/harness-bridge-test/workspace`,
+  `/opt/harness-bridge-test`, `/opt` and `/`. H4_A_EVIDENCE.md recorded
+  `id=global, worktree=/` for that directory.
+- Other bootstrap work:
+  - VCS state is forked at init; for git projects it runs branch queries
+    (`project/vcs.ts:305-341`).
+  - The snapshot state starts an hourly cleanup loop (`snapshot/index.ts:760-766`).
+  - LSP servers are configured at init but spawned only when a file is used
+    (`lsp/lsp.ts:145-205`, `:309-311`).
+  - MCP is not part of bootstrap.
+  - **UNVERIFIED:** whether a native recursive file watcher is started per
+    instance at bootstrap, whether anything reached from `/agent`, `/permission`
+    or `/session/status` initializes MCP state, and whether 1.19.4 disposes idle
+    instances (which would cause a re-bootstrap on the next call).
+
+**What H4-A adds: no new class of trigger, but more calls.**
+
+- H3 (`4cb09fb`) `list_sessions` already called `authorized()`, and therefore
+  `GET /session/:id`, for every ACL'd session (`internal/mcp/server.go:71-86`
+  @`4cb09fb`). That request is routed to `session.directory` and boots that
+  instance. `send_prompt` preflight already sent directory-scoped
+  `/session/status` and `/permission` (`internal/execution/manager.go:236`,
+  `:258` @`4cb09fb`).
+- H4-A discovery calls `authorized()` for every ACL'd session first
+  (`internal/mcp/discovery.go:210`). Its directory-scoped status, permission and
+  `/agent` calls then go to the same `session.directory`, whose instance is
+  already loaded and cached.
+- H4-A adds frequency and reach rather than a new trigger: `find_sessions`,
+  `list_repositories`, `get_repository` and `get_harness_capabilities` also
+  reach it, including on a `BRIDGE_READ_ONLY=1` Bridge (as pre-H4
+  `list_sessions` already did). So a read-only listing still runs that
+  workspace's plugins whenever the instance is not yet loaded, for example
+  after an OpenCode restart.
+- One narrow new case: for a workspace-bound session (non-empty `workspaceID`),
+  `/session/:id` routes to the workspace target, while H4-A's `?directory=`
+  calls load a local instance for `session.directory` that may not otherwise
+  exist. H3 `send_prompt` preflight already did this for the prompted session
+  only.
+
+**Risk for the R5 test instance (only ACL'd directory
+`/opt/harness-bridge-test/workspace`).** It is low **if** none of the searched
+paths holds a plugin or a config declaring one. Confirming this needs the
+following path listings, run by the operator as the OpenCode service user. They
+list names only and do not read file contents:
+
+```sh
+for d in /opt/harness-bridge-test/workspace /opt/harness-bridge-test /opt /; do
+  ls -ld "$d/.opencode" "$d/opencode.json" "$d/opencode.jsonc" 2>/dev/null
+  ls -la "$d/.opencode/plugin" "$d/.opencode/plugins" 2>/dev/null
+done
+ls -la ~/.config/opencode ~/.config/opencode/plugin ~/.config/opencode/plugins ~/.opencode 2>/dev/null
+systemctl show -p Environment <opencode-unit> | tr ' ' '\n' | grep -E '^OPENCODE_CONFIG(_DIR|_CONTENT)?=' | cut -d= -f1
+```
+
+Expected result: no `.opencode`, `opencode.json` or `opencode.jsonc` at the four
+levels; only the operator's own global config; no `*.ts`/`*.js` in any `plugin`
+or `plugins` directory. A config file's `plugin` array cannot be checked by
+listing alone. Whether the operator's global `opencode.jsonc` (R3a hash
+`9f3b7417…5457`) declares plugins is therefore **UNVERIFIED**; the operator
+decides whether to inspect that key.
+
+**Verdict: F-2 mechanism confirmed. It is mitigated, not closed.**
+
+- Not a new H4-A trigger. The same code already runs when that workspace is
+  opened in OpenCode or reached by pre-H4 `list_sessions`/`get_session`.
+- R5 promotion may proceed once the listing above is clean. Until then, F-2
+  stays open for R5.
+- Discovery must be documented as able to bootstrap, and so run plugins of,
+  every ACL'd workspace, including on read-only Bridges. ACL entries should be
+  limited to workspaces whose `.opencode` content the operator trusts.
+
+**Proposed follow-ups (not implemented here):**
+
+1. Document this boundary in CONTRACTS.md and the operator runbook.
+2. Optionally skip directory-scoped status, permission and `/agent` calls for
+   workspace-bound sessions. Their state is already `unknown` (FIX-STATE-01b),
+   so this removes the one new bootstrap case.
+3. Operator choice: run the test OpenCode with
+   `OPENCODE_DISABLE_PROJECT_CONFIG` if project-level config is not wanted.
+   This changes OpenCode behaviour for all users of that instance.
+
 Writer promotion of H4-A/H4-B code remains NO-GO until its own acceptance;
 Phase 6 is limited to a feasibility spike; Phases 7–8 are out of scope.
