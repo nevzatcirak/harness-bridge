@@ -346,6 +346,16 @@ No remote URL is exposed. Confined metadata reads replace Git subprocesses; unsa
 storage leaves repository/workspace absent. See H4_A_REVIEW_FIXES for exact Git
 layout limits, installed history ordering, authorization separation and rollback.
 
+H4-A F-3 (blocking storage): repository/workspace inspection runs off the request
+path. If a storage call blocks (for example a hung NFS or FUSE mount), the caller
+stops waiting at the request deadline or after 2 s, whichever is first, and the
+session is returned with repository/workspace absent, exactly as for unavailable
+storage; no partial or fabricated identity is reported. Concurrent requests for
+the same session policy and directory share one in-flight inspection; at most 16
+inspections run at once per Bridge process, and further ones are treated as
+unavailable without touching storage. A result that completes after every waiting
+request has returned is discarded, not cached; the next request inspects again.
+
 
 ## ADR-014 execution identity and bounded admission (isolated review proposal)
 
