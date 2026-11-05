@@ -17,6 +17,11 @@ BRIDGE_ALLOWED_ROOTS=/opt/harness-bridge-test/workspace
 BRIDGE_ALLOWED_SESSIONS=ses_e9329c0b4ffebOlm7GRyKxbMQ5
 ```
 
+Both lists must name only sessions in workspaces whose `.opencode` content
+(up to the worktree root) the operator trusts: read-only discovery can make
+OpenCode bootstrap those directories and execute their plugins, also with
+`BRIDGE_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
+
 The native OpenCode server on 4097 is nonroot with Basic Auth and verified session survival across restart; current original root server at 4096 is **not** an approved remote target.
 
 ## Quality gates
