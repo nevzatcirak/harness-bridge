@@ -167,10 +167,15 @@ func TestReplayFSTimeoutReturnsNoSnapshot(t *testing.T) {
 
 func TestPreSubmitFSTimeoutFinalizesUnsubmitted(t *testing.T) {
 	f := &fake{status: "idle"}
-	m := setup(t, f)
+	// R5-PR67-REVIEW P2-1: the work ctx must outlive fsTimeout, otherwise the
+	// work ctx expires first and the ctx.Err() branch, not the filesystem
+	// timeout, finalizes the run (setup() uses a 1 s work ctx).
+	m := NewWithTiming(f, 30*time.Second, 2*time.Millisecond)
+	t.Cleanup(m.Close)
 	// Admission performs the first EvalSymlinks; the work goroutine's recheck,
 	// immediately before Prompt, performs the second.
 	g := blockFS(t, func(op, _ string, nth int32) bool { return op == "evalsymlinks" && nth >= 2 })
+	sent := time.Now()
 	x, err := m.Send(context.Background(), "ses_test", "prompt", "presubmit-key")
 	if err != nil {
 		t.Fatal(err)
@@ -189,6 +194,10 @@ func TestPreSubmitFSTimeoutFinalizesUnsubmitted(t *testing.T) {
 	}
 	if v.LocalFailure == nil || v.LocalFailure.Code != "PRE_SUBMISSION_UNAVAILABLE" {
 		t.Fatalf("want PRE_SUBMISSION_UNAVAILABLE, got %+v", v)
+	}
+	// The filesystem bound, not an earlier ctx expiry, finalized the run.
+	if took := time.Since(sent); took < fsTimeout-200*time.Millisecond {
+		t.Fatalf("finalized after %v, before fsTimeout %v: not the filesystem-timeout path", took, fsTimeout)
 	}
 	if fsGuardHeld(m) {
 		t.Fatal("guard kept for a provably unsubmitted run")
@@ -331,12 +340,21 @@ func waitReason(t *testing.T, m *Manager, id, reason string, d time.Duration) Ex
 
 func TestProbeIdentityFSTimeoutNeverPromotes(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		nth  int32 // which EvalSymlinks of the next probe blocks: 1 = V6, 2 = V7
-	}{{"V6", 1}, {"V7", 2}} {
+		name  string
+		block func(nth int32) bool
+	}{
+		// V6: the first EvalSymlinks of the next probe. Later probes join that
+		// stuck call (same key), so the run stays unknown until release.
+		{"V6", func(nth int32) bool { return nth == 1 }},
+		// V7: the first probe's V6 passes and its V7 (the second EvalSymlinks)
+		// blocks. V7 starts its own call (fresh key), so later probes would not
+		// join it; block every later EvalSymlinks too, so the run stays unknown
+		// long enough to observe, instead of completing on the next probe.
+		{"V7", func(nth int32) bool { return nth >= 2 }},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, m, x := runningWithMonitor(t)
-			g := blockFS(t, func(op, path string, nth int32) bool { return op == "evalsymlinks" && path == "/" && nth == tc.nth })
+			g := blockFS(t, func(op, path string, nth int32) bool { return op == "evalsymlinks" && path == "/" && tc.block(nth) })
 			proofWithCwd(f, x.MessageID, "/")
 			v := waitReason(t, m, x.ID, "OBSERVATION_UNAVAILABLE", 2*fsBound)
 			if v.State != "unknown" || !fsGuardHeld(m) {
@@ -449,4 +467,51 @@ func TestFSLimitFailsClosedAndBoundsGoroutines(t *testing.T) {
 		t.Fatalf("%d calls in flight, limit %d", fsInFlight(), fsLimit)
 	}
 	wg.Wait()
+}
+
+// R5-PR67-REVIEW P3-1: the re-validation after the native reads (V7) and the
+// correlated cwd check must not join a bounded call that started BEFORE those
+// reads, or they would report an observation older than the reads. A stale
+// EvalSymlinks of the workspace is started (and kept blocked) while the probe is
+// still before its native reads, at V6's Stat; V7 and the cwd check must start
+// their own calls and complete instead of joining it.
+func TestPostReadChecksDoNotJoinEarlierCalls(t *testing.T) {
+	for _, tc := range []struct{ name, cwd string }{
+		{"V7", ""},   // no cwd: only V7 could join the stale call
+		{"cwd", "/"}, // the cwd check resolves the same path as V7
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, m, x := monitorEnded(t)
+			proofWithCwd(f, x.MessageID, tc.cwd)
+			staleEntered := make(chan struct{})
+			var injected atomic.Bool
+			// Get → refresh: V5 (EvalSymlinks #1, Stat #1), then the probe:
+			// V6 (EvalSymlinks #2, Stat #2), native reads, V7, cwd.
+			g := blockFS(t, func(op, path string, nth int32) bool {
+				if op == "stat" && path == "/" && nth == 2 && injected.CompareAndSwap(false, true) {
+					go evalSymlinks(context.Background(), "/") // stale: started before the reads
+					<-staleEntered
+					return false
+				}
+				if op == "evalsymlinks" && path == "/" && nth == 3 {
+					close(staleEntered)
+					return true // the stale call stays in flight
+				}
+				return false
+			})
+			var v Execution
+			var err error
+			start := time.Now()
+			within(t, fsBound, "Get with a stale in-flight call", func() { v, err = m.Get(context.Background(), x.ID) })
+			if err != nil || v.State != "completed" {
+				t.Fatalf("post-read check joined a call that started before the native reads: %+v %v (after %v)", v, err, time.Since(start))
+			}
+			if time.Since(start) >= fsTimeout {
+				t.Fatalf("waited %v: a post-read check waited on the stale call", time.Since(start))
+			}
+			if !injected.Load() || g.n("evalsymlinks") < 4 {
+				t.Fatalf("stale call injected=%v, EvalSymlinks calls=%d: the scenario did not run", injected.Load(), g.n("evalsymlinks"))
+			}
+		})
+	}
 }

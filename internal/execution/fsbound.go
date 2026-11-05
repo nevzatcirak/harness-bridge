@@ -29,7 +29,16 @@ const (
 // mismatch. Each call site maps it to its own fail-closed result.
 var errFSTimeout = errors.New("workspace filesystem check did not complete")
 
-type fsKey struct{ op, path string }
+// fsKey identifies one shareable call. A non-zero fresh nonce makes the key
+// unique, so the caller always starts its own call and never joins one that
+// started earlier (used by checks that must observe the filesystem after a
+// given point, such as the re-validation after native reads).
+type fsKey struct {
+	op, path string
+	fresh    uint64
+}
+
+var fsFresh atomic.Uint64
 
 type fsResult struct {
 	path string
@@ -62,7 +71,18 @@ func fsHook(op, path string) {
 // evalSymlinks is filepath.EvalSymlinks bounded by ctx and fsTimeout. It returns
 // errFSTimeout when the call does not complete.
 func evalSymlinks(ctx context.Context, path string) (string, error) {
-	r, e := fsChecks.Do(ctx, fsKey{"evalsymlinks", path}, func(context.Context) fsResult {
+	return evalSymlinksKey(ctx, fsKey{op: "evalsymlinks", path: path})
+}
+
+// evalSymlinksFresh is evalSymlinks that never joins an in-flight call: the
+// result always comes from a call that started after this one was made.
+func evalSymlinksFresh(ctx context.Context, path string) (string, error) {
+	return evalSymlinksKey(ctx, fsKey{op: "evalsymlinks", path: path, fresh: fsFresh.Add(1)})
+}
+
+func evalSymlinksKey(ctx context.Context, key fsKey) (string, error) {
+	path := key.path
+	r, e := fsChecks.Do(ctx, key, func(context.Context) fsResult {
 		fsHook("evalsymlinks", path)
 		resolved, err := filepath.EvalSymlinks(path)
 		return fsResult{path: resolved, err: err}
@@ -76,7 +96,17 @@ func evalSymlinks(ctx context.Context, path string) (string, error) {
 // stat is os.Stat bounded by ctx and fsTimeout. It returns errFSTimeout when the
 // call does not complete.
 func stat(ctx context.Context, path string) (os.FileInfo, error) {
-	r, e := fsChecks.Do(ctx, fsKey{"stat", path}, func(context.Context) fsResult {
+	return statKey(ctx, fsKey{op: "stat", path: path})
+}
+
+// statFresh is stat that never joins an in-flight call.
+func statFresh(ctx context.Context, path string) (os.FileInfo, error) {
+	return statKey(ctx, fsKey{op: "stat", path: path, fresh: fsFresh.Add(1)})
+}
+
+func statKey(ctx context.Context, key fsKey) (os.FileInfo, error) {
+	path := key.path
+	r, e := fsChecks.Do(ctx, key, func(context.Context) fsResult {
 		fsHook("stat", path)
 		info, err := os.Stat(path)
 		return fsResult{info: info, err: err}

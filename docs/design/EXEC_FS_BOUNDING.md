@@ -140,6 +140,9 @@ For `internal/execution`:
 - **Key** = (operation, path), e.g. `("evalsymlinks", "/w")` and `("stat", "/w")`.
   Joiners share one in-flight result. The result is dropped once the last
   caller has left; it is not cached.
+  *Implementation note (R5-PR67-REVIEW P3-1):* checks that must observe the
+  filesystem after the native reads (V7 and the P5 cwd check) use a per-call
+  nonce in the key, so they never join a call that started before the reads.
 - **Two thin wrappers**, `evalSymlinks(ctx, path)` and `stat(ctx, path)`, used by
   `SendWithRunnerOutcome`, `validateSession` (which gains a `ctx` parameter) and
   the pre-resolution step for P5.

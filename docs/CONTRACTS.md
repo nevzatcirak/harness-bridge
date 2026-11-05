@@ -487,6 +487,10 @@ mismatch:
   the guard is kept. The check of a correlated assistant message's working
   directory runs outside the execution's lock, so status reads, the session
   guard and discovery never wait on it.
+  The re-validation after the native reads and that working-directory check
+  never join a check that started earlier (R5-PR67-REVIEW P3-1): they always
+  start their own call, so they observe the filesystem after the reads. Checks
+  before the reads may share an in-flight call of the same operation and path.
 
 `retryable:true` is set only where nothing was or will be submitted to the native
 harness.
