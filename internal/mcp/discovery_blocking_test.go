@@ -75,6 +75,12 @@ func TestDiscoveryNotStalledByBlockedRepositoryStorage(t *testing.T) {
 			t.Fatalf("discovery %d while blocked: %+v", i, out)
 		}
 	}
+	// Poll: discovery's own worker goroutines may still be exiting right after
+	// discover returns; blocked inspections never exit, so a leak still fails.
+	settle := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine()-before > 4 && time.Now().Before(settle) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if grown := runtime.NumGoroutine() - before; grown > 4 {
 		t.Fatalf("goroutines grew by %d after 5 discoveries over one blocked directory", grown)
 	}

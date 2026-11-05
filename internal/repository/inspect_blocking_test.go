@@ -58,6 +58,22 @@ func waitIdle(t *testing.T) {
 	}
 }
 
+// goroutinesSettle polls until runtime.NumGoroutine() <= limit or a deadline
+// passes, and returns the last count. Goroutines that already called
+// wg.Done() in a defer may not have exited yet when wg.Wait() returns, so a
+// single sample right after it can overcount (R3-PR41-REVIEW P2-1). Leaked or
+// blocked goroutines do not exit, so polling cannot hide a real leak.
+func goroutinesSettle(limit int) int {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n := runtime.NumGoroutine()
+		if n <= limit || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func gitRepo(t *testing.T) (string, *security.Policy) {
 	t.Helper()
 	root := t.TempDir()
@@ -127,7 +143,7 @@ func TestInspectSharesOneBlockedCallPerDirectory(t *testing.T) {
 	if n := hits.Load(); n != 1 {
 		t.Fatalf("%d blocking filesystem calls for one directory, want 1 shared inspection", n)
 	}
-	if grown := runtime.NumGoroutine() - before; grown > 2 {
+	if grown := goroutinesSettle(before+2) - before; grown > 2 {
 		t.Fatalf("goroutines grew by %d after 50 inspections of one blocked directory", grown)
 	}
 }
@@ -155,7 +171,62 @@ func TestInspectBoundsBlockedInspectionsAcrossDirectories(t *testing.T) {
 	if n := hits.Load(); n > inspectLimit {
 		t.Fatalf("%d blocked inspections started, want at most %d", n, inspectLimit)
 	}
-	if grown := runtime.NumGoroutine() - before; grown > inspectLimit+2 {
+	if grown := goroutinesSettle(before+inspectLimit+2) - before; grown > inspectLimit+2 {
 		t.Fatalf("goroutines grew by %d with %d blocked directories, bound %d", grown, len(dirs), inspectLimit)
+	}
+}
+
+// R3-PR41-REVIEW P3-2: the shared inspection runs detached from any one
+// caller, so a caller that gives up must not fail another caller still waiting
+// on the same inspection.
+func TestInspectJoinedCallerSurvivesLeaderCancellation(t *testing.T) {
+	root, policy := gitRepo(t)
+	release, hits := blockUnder(t, root)
+
+	leaderCtx, leaderCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer leaderCancel()
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, _, e := Inspect(leaderCtx, root, policy, "ses_test")
+		leaderDone <- e
+	}()
+	waitHits(t, hits, 1)
+
+	type result struct {
+		r Repository
+		w Workspace
+		e error
+	}
+	joinedDone := make(chan result, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		r, w, e := Inspect(ctx, root, policy, "ses_test")
+		joinedDone <- result{r, w, e}
+	}()
+
+	if e := <-leaderDone; e == nil {
+		t.Fatal("leader succeeded while storage was blocked")
+	}
+	// Both callers share the one blocked inspection; none other reached storage.
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("%d blocked inspections, want 1 shared by both callers", n)
+	}
+	// The leader has given up; storage now recovers while the joined caller waits.
+	release()
+	got := <-joinedDone
+	if got.e != nil || got.r.ID == "" || got.w.Root != root {
+		t.Fatalf("joined caller failed after the leader cancelled: %+v %+v %v", got.r, got.w, got.e)
+	}
+}
+
+func waitHits(t *testing.T, hits *atomic.Int64, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for hits.Load() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("inspection never reached storage (%d hits)", hits.Load())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
