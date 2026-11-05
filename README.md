@@ -25,6 +25,10 @@ go build -o /tmp/harness-bridge ./cmd/bridge
 `BRIDGE_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
 `BRIDGE_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
 required. The single bearer token represents the local principal with that ACL.
+Both lists must name only sessions in workspaces whose `.opencode` content
+(up to the worktree root) the operator trusts: read-only discovery can make
+OpenCode bootstrap those directories and execute their plugins, also with
+`BRIDGE_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
 `OPENCODE_SERVER_USERNAME` defaults to `opencode`. Listener defaults to
 `127.0.0.1:8080`, endpoint `/mcp`; `BRIDGE_LISTEN` must remain loopback.
 Keep tokens in the environment; do not commit them or enable shell tracing.

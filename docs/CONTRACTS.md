@@ -284,12 +284,42 @@ operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 spec
   subagents, native_delegation (`unknown`), child_session_inspection and
   native_session_creation (installed endpoint declarations), bridge_session_creation
   (`false`), evidence and conditional guidance. This tool requires session ACL and
-  workspace authorization before reading the native inventory/specification.
+  workspace authorization before reading the native inventory/specification. For a
+  workspace-bound session (non-empty `native_workspace_id`) it returns
+  `INVALID_INPUT` (`retryable:false`, message "unavailable for workspace-bound
+  sessions") without any `/agent` or `/doc` request (H4A-F2-FOLLOWUP).
 - `read_session_history` retains session_id and messages; optional limit (1–200)
   and before (opaque native cursor, <=2048 URL-safe characters) enable bounded
   native pages; optional next_cursor comes from X-Next-Cursor. Omit both inputs
   for old behavior. No promised numeric total, snapshot consistency or synthetic
   cursor; an upstream server ignoring the limit fails closed.
+
+### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
+
+Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,
+`list_repositories`, `get_repository`, `get_session`, `get_harness_capabilities`)
+can make OpenCode load (bootstrap) the instance of any ACL'd session directory,
+also on a `BRIDGE_READ_ONLY=1` Bridge. Every ACL lookup (`GET /session/:id`) is
+routed to the session's own directory (or, for a workspace-bound session, to its
+workspace target), and the directory-scoped status, permission, `/agent` and
+`/doc` reads target that directory too. OpenCode v1.19.4
+(`anomalyco/opencode` `148842ef`) boots each directory once and caches it
+(`project/instance-store.ts:108-124`). Bootstrap merges every `opencode.json(c)`
+and `.opencode` directory from that directory up to the worktree root (`/` for a
+non-git directory), writes `.gitignore`, starts a background npm install with
+scripts disabled, and **imports and executes the plugins** found there
+(`project/bootstrap.ts:30-43`, `config/config.ts:420-478`,
+`config/plugin.ts:18-29`, `plugin/loader.ts:135-140`, `plugin/index.ts:114-124`,
+`:181-253`). Details are in docs/ROADMAP.md, "F-2 verification note".
+
+Therefore `BRIDGE_ALLOWED_SESSIONS` and `BRIDGE_ALLOWED_ROOTS` must contain only
+sessions in workspaces whose `.opencode` content, along the whole path up to the
+worktree root, the operator trusts. Listing sessions is not side-effect free in
+OpenCode even though the Bridge itself executes nothing. A workspace-bound session
+(non-empty `native_workspace_id`) is served by its workspace's instance, so the
+Bridge makes no directory-scoped discovery request for it. `send_prompt` preflight
+is unchanged and still reads directory-scoped status and permission for the
+prompted session.
 
 Session fields gain optional repository/workspace objects, parent_session_id,
 harness_instance_id, native_project_id, native_workspace_id, native_state and
@@ -329,8 +359,11 @@ read gives `unknown`; otherwise a pending native permission for the session give
   `?directory=` instance, so a session with a non-empty `workspaceID` can be busy in
   its workspace instance and still be absent from the map the Bridge reads. For such a
   session absence gives `state: "unknown"` with `native_state` and
-  `native_state_inferred_from_absence` omitted; an explicit status entry is mapped as
-  above.
+  `native_state_inferred_from_absence` omitted. Since H4A-F2-FOLLOWUP (2026-11-05)
+  discovery makes no directory-scoped status or permission request for such a
+  session at all, so it is always reported `unknown` without `native_state`
+  (a held Bridge guard maps as for a failed permission read: `unknown`). Its
+  repository/workspace objects still come from local filesystem inspection.
 
 The guard is per Bridge process: another Bridge or native client is not visible
 (ADR-010). The guard is read without native I/O. Session state is a non-atomic

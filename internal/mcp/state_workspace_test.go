@@ -45,14 +45,18 @@ func workspaceServer(t *testing.T, workspaceID, status, permissions string) *Ser
 // Finding 1: workspace-bound + absent + successful reads -> unknown, no inference.
 func TestStateAbsenceWorkspaceBoundUnknown(t *testing.T) {
 	wantWire(t, workspaceServer(t, "wrk_1", `{}`, `[]`), "unknown", "", false)
-	// A pending permission still wins; absence still infers nothing.
-	wantWire(t, workspaceServer(t, "wrk_1", `{}`, `[{"sessionID":"ses_a"}]`), "waiting_for_permission", "", false)
+	// H4A-F2-FOLLOWUP: no directory-scoped permission read is made for a
+	// workspace-bound session, so a permission pending in the directory
+	// instance is not evidence either.
+	wantWire(t, workspaceServer(t, "wrk_1", `{}`, `[{"sessionID":"ses_a"}]`), "unknown", "", false)
 }
 
-// Finding 1: an explicit entry for a workspace-bound session is unchanged.
+// H4A-F2-FOLLOWUP: directory-scoped status is not read for a workspace-bound
+// session, so even an explicit entry in the directory instance's map is not
+// reported (it describes an instance that does not serve the session).
 func TestStateWorkspaceBoundExplicitBusy(t *testing.T) {
-	wantWire(t, workspaceServer(t, "wrk_1", `{"ses_a":{"type":"busy"}}`, `[]`), "running", "busy", false)
-	wantWire(t, workspaceServer(t, "wrk_1", `{"ses_a":{"type":"idle"}}`, `[]`), "idle", "idle", false)
+	wantWire(t, workspaceServer(t, "wrk_1", `{"ses_a":{"type":"busy"}}`, `[]`), "unknown", "", false)
+	wantWire(t, workspaceServer(t, "wrk_1", `{"ses_a":{"type":"idle"}}`, `[]`), "unknown", "", false)
 }
 
 // Finding 1: a session without a workspace still infers idle from absence.
