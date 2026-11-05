@@ -250,8 +250,14 @@ func TestLivenessNoProgressThreshold(t *testing.T) {
 				setStatus(f, &opencode.Status{Type: "retry", Attempt: json.RawMessage(`1`), Next: json.RawMessage(fmt.Sprint(ms(start.Add(-time.Second))))})
 			}
 			assistant(f, x.MessageID, ms(start), 0, "", "", textPart(start))
+			// Only observations of the busy/retry status with the assistant in
+			// history count: a probe before the switch correctly sees an idle
+			// session without an assistant (NO_CORRELATED_ASSISTANT).
 			observed := func(after time.Time) func(Execution) bool {
-				return func(x Execution) bool { return x.Liveness != nil && !x.Liveness.ObservedAt.Before(after) }
+				return func(x Execution) bool {
+					l := x.Liveness
+					return l != nil && !l.ObservedAt.Before(after) && l.NativeStatus != "absent" && l.LastNativeProgressAt != nil
+				}
 			}
 			got := waitLiveness(t, m, x.ID, observed(start))
 			if got.Liveness.StallSuspected {
