@@ -1,6 +1,9 @@
 # ADR-017: Native stall liveness (report-only)
 
-Date: 2026-11-04. Status: **PROPOSED** (design only; no code).
+Date: 2026-11-04. Status: **ACCEPTED (option (a) only), 2026-11-05, maintainer
+decision recorded by the Planning Desk** ([D-ADR017-A](../decisions/D-ADR017-A.md)).
+Options (b) and (c) are not accepted: (b) needs a later amendment with live
+evidence; (c) stays rejected.
 Amends nothing yet. Must preserve ADR-010 and ADR-011 as accepted.
 
 ## Problem

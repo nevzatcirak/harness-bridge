@@ -272,6 +272,44 @@ Restart still loses IDs/keys/results; NOT_FOUND after restart is not proof of
 non-delivery or successful completion. Reconcile native history using the private
 operator ledger before any writer restart or new prompt, as ADR-010/ADR-011 specify.
 
+## ADR-017 report-only liveness (option (a), accepted 2026-11-05)
+
+`get_execution_status`, `get_execution_result` and the replay response of
+`send_prompt` may carry an optional, additive `liveness` object on the
+execution. Tools and input schemas are unchanged; clients that ignore unknown
+fields are unaffected (the execution schema already allows additional
+properties). The object is **advisory only**: it never changes `state`,
+`error`, `unresolved`, `ended_at` or `updated_at`, never releases the session
+guard, never triggers Abort, a resubmission or a new idempotency key, and
+`stall_suspected` is never a terminal state and never success.
+
+| Field | Meaning |
+| --- | --- |
+| `liveness.native_status` | `busy`, `retry`, `absent` (no native status entry, or an explicit `idle` entry, which OpenCode 1.19.4 does not keep) or `unavailable` (this probe's native reads did not all succeed, the observation failed identity checks, or the native type is unrecognized) |
+| `liveness.retry_attempt` | Native retry attempt; only with `retry` and a well-formed non-negative integer |
+| `liveness.retry_next_at` | Native next retry time (from epoch ms); only with `retry` and a well-formed value |
+| `liveness.last_native_progress_at` | Latest native timestamp among the correlated assistant messages' `time.created`/`time.completed` and recognized parts (text/reasoning `time.start/end`, tool `state.time.start/end`); never after `observed_at`. Unknown, malformed or over-1-MiB parts are ignored |
+| `liveness.stall_suspected` | `true` only with a `stall_reason`; always present in the object |
+| `liveness.stall_reason` | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (correlated assistant completed, no `finish` stop/end_turn or named error, native status absent, no pending permission), `NO_CORRELATED_ASSISTANT` (user message present, no correlated assistant, status absent) or `NO_PROGRESS` (`busy`, or `retry` whose `next` is past, and no native progress, nor submission, for longer than 2 minutes) |
+| `liveness.observed_at` | Bridge time of the probe that produced the object |
+
+The object is computed from the native reads the background monitor and the
+bounded on-demand reconcile already make (metadata, status, history,
+permissions); no native read or write is added. It is refreshed by each such
+probe, so between probes it may be up to one probe interval old (see
+`observed_at`). A pending native permission never produces suspicion. It is
+absent before the prompt is submitted and on terminal executions. Like all
+execution records it is process-local: a restart loses it with the execution
+(NOT_FOUND), and old idempotency keys must still never be reused. The NO_PROGRESS
+threshold (2 minutes) is fixed in this release, so a long native step without
+part updates can be reported as suspected. Native timestamps come from the
+OpenCode clock and are compared with the Bridge clock: a native timestamp later
+than `observed_at` is ignored, so if the OpenCode clock runs ahead of the Bridge
+clock, real progress can be ignored and a false `NO_PROGRESS` suspicion can appear
+(advisory only, like every suspicion). Recovery from a suspected stall stays
+the ADR-010 fenced procedure; ADR-017 §4 lists what the R5 supervisor records,
+and the supervisor may surface suspicion to a human but must not act on it.
+
 ## H4-A additive discovery contracts (not deployed)
 
 - `list_repositories {}` -> `{repositories:[{repository_id,common_directory}]}`.

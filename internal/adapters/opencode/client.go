@@ -48,6 +48,11 @@ type Message struct {
 }
 type Status struct {
 	Type string `json:"type"`
+	// Attempt and Next accompany type "retry" (attempt count; next attempt as
+	// epoch milliseconds). They are kept raw so an unexpected value never fails
+	// the whole status read; execution parses them leniently (ADR-017).
+	Attempt json.RawMessage `json:"attempt,omitempty"`
+	Next    json.RawMessage `json:"next,omitempty"`
 }
 type Permission struct {
 	SessionID string `json:"sessionID"`

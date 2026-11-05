@@ -62,6 +62,7 @@ type Execution struct {
 	MonitorEndedAt *time.Time    `json:"monitor_ended_at,omitempty"`
 	ReconciledAt   *time.Time    `json:"reconciled_at,omitempty"`
 	LocalFailure   *LocalFailure `json:"local_failure,omitempty"`
+	Liveness       *Liveness     `json:"liveness,omitempty"`
 }
 type run struct {
 	mu             sync.Mutex
@@ -98,12 +99,19 @@ type Manager struct {
 	reconcileTimeout  time.Duration
 	reconcileSlots    chan struct{}
 	admissionSlots    chan struct{}
+	// ADR-017 option (a): report-only liveness. stallThreshold is the NO_PROGRESS
+	// report threshold; clock is the liveness observation clock (tests replace it
+	// before the first Send). noLiveness disables the report for comparison tests
+	// only; it is never set outside this package.
+	stallThreshold time.Duration
+	clock          func() time.Time
+	noLiveness     bool
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4)}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
