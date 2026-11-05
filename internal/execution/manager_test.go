@@ -17,6 +17,7 @@ type fake struct {
 	sends, aborts                           int
 	mid                                     string
 	entered, release                        chan struct{}
+	nativeStatus                            *opencode.Status // overrides status when set
 }
 
 func (f *fake) Get(ctx context.Context, id string) (opencode.Session, error) {
@@ -41,6 +42,9 @@ func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 	}
 	if f.missing {
 		return map[string]opencode.Status{}, nil
+	}
+	if f.nativeStatus != nil {
+		return map[string]opencode.Status{"ses_test": *f.nativeStatus}, nil
 	}
 	return map[string]opencode.Status{"ses_test": {Type: f.status}}, nil
 }
