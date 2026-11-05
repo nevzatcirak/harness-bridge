@@ -142,3 +142,21 @@ func TestDoDoesNotCacheResults(t *testing.T) {
 		t.Fatalf("second call reused a result: %d then %d", a, b)
 	}
 }
+
+// R3-PR55-REVIEW P3-3: a caller whose context is already cancelled always gets
+// ErrTimeout, even when the call would finish immediately, and starts nothing.
+func TestDoCancelledCallerAlwaysTimesOut(t *testing.T) {
+	g := NewGroup[int, int](4, time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	for i := 0; i < 2000; i++ {
+		v, e := g.Do(ctx, i%3, func(context.Context) int { calls++; return 7 })
+		if e != ErrTimeout || v != 0 {
+			t.Fatalf("iteration %d: got (%d, %v), want (0, ErrTimeout)", i, v, e)
+		}
+	}
+	if calls != 0 || g.InFlight() != 0 {
+		t.Fatalf("cancelled callers started %d calls, %d in flight", calls, g.InFlight())
+	}
+}

@@ -107,7 +107,7 @@ func TestTerminalCacheRejectsReplacedWorkspace(t *testing.T) {
 			t.Fatal(v, err)
 		}
 		replaceWorkspace(t, f.directory, false)
-		denied(t, m.ValidateSession(x.ID, opencode.Session{ID: "ses_test", Directory: f.directory}))
+		denied(t, m.ValidateSession(context.Background(), x.ID, opencode.Session{ID: "ses_test", Directory: f.directory}))
 		_, msgs, err = m.Result(context.Background(), x.ID)
 		denied(t, err)
 		if len(msgs) != 0 {

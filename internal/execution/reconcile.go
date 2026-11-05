@@ -3,8 +3,8 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
@@ -72,15 +72,39 @@ func unresolved(x *run, reason, message string, now time.Time, preserve bool) {
 	x.view.Updated = now
 }
 
-func validateSession(x *run, meta opencode.Session) error {
+// validateSession re-checks the accepted workspace identity. Its filesystem
+// calls are bounded; errFSTimeout means the check did not complete, which every
+// caller maps to its own fail-closed outcome (never a pass, never a mismatch).
+func validateSession(ctx context.Context, x *run, meta opencode.Session) error {
+	return checkSession(ctx, x, meta, false)
+}
+
+// revalidateSession is validateSession for a check that must observe the
+// filesystem after a given point (V7, after the native reads): it never joins
+// a bounded call that started earlier (R5-PR67-REVIEW P3-1).
+func revalidateSession(ctx context.Context, x *run, meta opencode.Session) error {
+	return checkSession(ctx, x, meta, true)
+}
+
+func checkSession(ctx context.Context, x *run, meta opencode.Session, fresh bool) error {
 	if meta.ID != x.native || meta.Directory != x.directory {
 		return Fail("FORBIDDEN", "execution session or workspace changed")
 	}
-	canonical, err := filepath.EvalSymlinks(meta.Directory)
+	resolve, inspect := evalSymlinks, stat
+	if fresh {
+		resolve, inspect = evalSymlinksFresh, statFresh
+	}
+	canonical, err := resolve(ctx, meta.Directory)
+	if errors.Is(err, errFSTimeout) {
+		return errFSTimeout
+	}
 	if err != nil || canonical != x.canonicalDirectory || canonical != meta.Directory {
 		return Fail("FORBIDDEN", "execution workspace identity changed")
 	}
-	info, err := os.Stat(canonical)
+	info, err := inspect(ctx, canonical)
+	if errors.Is(err, errFSTimeout) {
+		return errFSTimeout
+	}
 	if err != nil || x.workspace == nil || !os.SameFile(x.workspace, info) {
 		return Fail("FORBIDDEN", "execution workspace replaced")
 	}
@@ -88,13 +112,18 @@ func validateSession(x *run, meta opencode.Session) error {
 }
 
 // ValidateSession binds the already authorized MCP metadata to the acceptance
-// snapshot, including terminal cached results. No native I/O occurs here.
-func (m *Manager) ValidateSession(id string, meta opencode.Session) error {
+// snapshot, including terminal cached results. No native I/O occurs here; the
+// workspace filesystem re-check is bounded and a check that does not complete
+// returns a retryable UPSTREAM_TIMEOUT without exposing the execution.
+func (m *Manager) ValidateSession(ctx context.Context, id string, meta opencode.Session) error {
 	x, err := m.find(id)
 	if err != nil {
 		return err
 	}
-	return validateSession(x, meta)
+	if err = validateSession(ctx, x, meta); errors.Is(err, errFSTimeout) {
+		return fsUnavailable("workspace filesystem check did not complete; execution not exposed")
+	}
+	return err
 }
 
 func (m *Manager) beginRead() bool {
@@ -116,7 +145,10 @@ func (m *Manager) readContext(ctx context.Context) (context.Context, context.Can
 // result during the interval cooldown. No reconciliation worker survives a call.
 func (m *Manager) refresh(ctx context.Context, x *run) error {
 	// Cached terminal results also belong to the original workspace identity.
-	if err := validateSession(x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+	if err := validateSession(ctx, x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
+		if errors.Is(err, errFSTimeout) {
+			return fsUnavailable("workspace filesystem check did not complete; execution not exposed")
+		}
 		return err
 	}
 	if !m.beginRead() {
@@ -174,6 +206,7 @@ func (m *Manager) refresh(ctx context.Context, x *run) error {
 func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	x.mu.Lock()
 	already := terminal(x.view.State) || !x.submissionAttempted
+	messageID := x.view.MessageID
 	x.mu.Unlock()
 	if already {
 		return nil
@@ -196,7 +229,11 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	if err != nil {
 		return failed("OBSERVATION_UNAVAILABLE", "native metadata unavailable", nil)
 	}
-	if err = validateSession(x, meta); err != nil {
+	if err = validateSession(ctx, x, meta); err != nil {
+		if errors.Is(err, errFSTimeout) {
+			// V6: unknown, never a mismatch; no promotion, the guard is kept.
+			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", nil)
+		}
 		x.mu.Lock()
 		x.messages = nil
 		x.mu.Unlock()
@@ -216,7 +253,12 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	}
 	// Native reads are not atomic. Detect observed replacement during those reads
 	// before exposing content, committing terminal proof or permitting interruption.
-	if err = validateSession(x, meta); err != nil {
+	if err = revalidateSession(ctx, x, meta); err != nil {
+		if errors.Is(err, errFSTimeout) {
+			// V7: as V6. The re-check starts its own call, so it observes the
+			// filesystem after the native reads.
+			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", nil)
+		}
 		x.mu.Lock()
 		x.messages = nil
 		x.mu.Unlock()
@@ -224,6 +266,28 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	}
 	if ctx.Err() != nil || m.ctx.Err() != nil {
 		return failed("OBSERVATION_UNAVAILABLE", "native observation canceled or expired", nil)
+	}
+	// P5: resolve the correlated assistant cwds BEFORE taking run.mu, so a
+	// blocked filesystem call never holds the run lock (Snapshot, SessionGuard
+	// and discovery would wait on it). A resolution that does not complete is
+	// unknown, not a mismatch; a completed one that differs stays a mismatch.
+	cwds := map[string]string{}
+	for _, msg := range msgs {
+		if msg.Info.SessionID != x.native || msg.Info.ParentID != messageID || msg.Info.Role != "assistant" || msg.Info.Path.Cwd == "" {
+			continue
+		}
+		if _, seen := cwds[msg.Info.Path.Cwd]; seen {
+			continue
+		}
+		// Also after the native reads, so it starts its own call (as V7).
+		resolved, err := evalSymlinksFresh(ctx, msg.Info.Path.Cwd)
+		if errors.Is(err, errFSTimeout) {
+			return failed("OBSERVATION_UNAVAILABLE", "correlated assistant workspace check did not complete", nil)
+		}
+		if err != nil {
+			resolved = ""
+		}
+		cwds[msg.Info.Path.Cwd] = resolved
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -248,8 +312,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			continue
 		}
 		if msg.Info.Path.Cwd != "" {
-			cwd, err := filepath.EvalSymlinks(msg.Info.Path.Cwd)
-			if err != nil || cwd != x.canonicalDirectory {
+			if cwd, resolved := cwds[msg.Info.Path.Cwd]; !resolved || cwd == "" || cwd != x.canonicalDirectory {
 				x.messages = nil
 				x.observationValid = false
 				unresolved(x, "IDENTITY_MISMATCH", "correlated assistant workspace differs", now, x.monitorDone)
