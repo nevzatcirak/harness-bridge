@@ -445,6 +445,24 @@ once 16 such inspections are stuck every repository/workspace lookup in that
 Bridge process is unavailable (fail closed). Recovery from a permanently hung
 mount may therefore require a Bridge restart.
 
+H4-A F-3 (workspace authorization check): every session-scoped tool and discovery
+check that the session's directory is canonical and under an approved root
+(`EvalSymlinks`, root `Stat`). That check now runs through the same bounded
+mechanism as repository inspection (`internal/bounded`): it stops waiting at the
+request deadline or after 2 s, concurrent checks of one policy and directory
+share one in-flight check, at most 16 checks run per Bridge process, and no
+result is cached. A check that does not complete is never treated as allowed.
+The tool returns `{code: "UPSTREAM_TIMEOUT", retryable: true}` ("workspace
+authorization check did not complete; storage unavailable") instead of
+`FORBIDDEN`, because the outcome is unknown rather than a denial; discovery
+tools (`list_sessions`, `find_sessions`, repository tools) return the same error,
+and a parent link whose check does not complete is not shown. For
+`send_prompt` and `interrupt_execution` this happens before admission, so nothing
+is submitted to the native harness and the call may be retried. A check stuck in
+a call that never returns keeps its slot as described above. Synchronous
+filesystem calls inside the execution manager (send_prompt admission and
+reconciliation) are not covered by this bound.
+
 
 ## ADR-014 execution identity and bounded admission (isolated review proposal)
 

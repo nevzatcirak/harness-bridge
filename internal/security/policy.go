@@ -2,10 +2,16 @@
 package security
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/nevzatcirak/harness-bridge/internal/bounded"
 )
 
 type Policy struct {
@@ -44,10 +50,53 @@ func New(roots, sessions []string) (*Policy, error) {
 	}
 	return p, nil
 }
+
+// Allows reports whether session id may use directory. It performs blocking
+// filesystem calls synchronously; request paths use AllowsContext instead.
 func (p *Policy) Allows(id, directory string) bool {
 	if p == nil || !p.Sessions[id] || !filepath.IsAbs(directory) {
 		return false
 	}
+	return p.directoryAllowed(directory)
+}
+
+// ErrCheckUnavailable means the workspace check could not complete in time
+// (for example storage on a hung NFS/FUSE mount). The directory must then be
+// treated as not allowed; the outcome is unknown, not a denial.
+var ErrCheckUnavailable = errors.New("workspace authorization check unavailable")
+
+// allowKey shares one in-flight filesystem check per policy and directory. The
+// session part of the decision is a map lookup done before the check.
+type allowKey struct {
+	policy    *Policy
+	directory string
+}
+
+// allowChecks bounds the filesystem half of AllowsContext across the process:
+// at most 16 checks still running, each bounded by 2 s for every caller's wait
+// (H4-A F-3). Results are not cached beyond one in-flight check.
+var allowChecks = bounded.NewGroup[allowKey, bool](16, 2*time.Second)
+
+// AllowsContext is Allows for request paths. A check that does not complete
+// before ctx ends, within 2 s, or because 16 checks are already stuck returns
+// (false, ErrCheckUnavailable): never allowed by default. Concurrent callers for
+// the same policy and directory share one check.
+func (p *Policy) AllowsContext(ctx context.Context, id, directory string) (bool, error) {
+	if p == nil || !p.Sessions[id] || !filepath.IsAbs(directory) {
+		return false, nil
+	}
+	ok, e := allowChecks.Do(ctx, allowKey{p, directory}, func(context.Context) bool { return p.directoryAllowed(directory) })
+	if e != nil {
+		return false, fmt.Errorf("%w: %w", ErrCheckUnavailable, e)
+	}
+	return ok, nil
+}
+
+// directoryAllowed is the filesystem half of the decision: the directory is its
+// own canonical path and lies under an approved root that is still the same
+// directory as at startup.
+func (p *Policy) directoryAllowed(directory string) bool {
+	fsHook(directory)
 	real, e := filepath.EvalSymlinks(directory)
 	if e != nil || filepath.Clean(directory) != directory || real != directory {
 		return false
@@ -55,12 +104,33 @@ func (p *Policy) Allows(id, directory string) bool {
 	for i, root := range p.Roots {
 		rel, e := filepath.Rel(root, real)
 		if e == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			fsHook(root)
 			info, e := os.Stat(root)
 			return e == nil && i < len(p.rootInfo) && os.SameFile(info, p.rootInfo[i])
 		}
 	}
 	return false
 }
+
+// testFSHook, when set by tests, runs before each filesystem call of the
+// workspace check so a test can simulate a call that blocks. Nil in production.
+var testFSHook atomic.Pointer[func(path string)]
+
+func fsHook(path string) {
+	if hook := testFSHook.Load(); hook != nil {
+		(*hook)(path)
+	}
+}
+
+// SetFSHookForTesting installs fn as the workspace-check filesystem hook and
+// returns a function that removes it. For tests only.
+func SetFSHookForTesting(fn func(path string)) (restore func()) {
+	testFSHook.Store(&fn)
+	return func() { testFSHook.Store(nil) }
+}
+
+// AllowsInFlightForTesting reports how many workspace checks are still running.
+func AllowsInFlightForTesting() int { return allowChecks.InFlight() }
 
 // OpenStorage returns a confined handle only for an existing session's approved
 // workspace storage. It is not a new read grant or a prompt authorization API.
