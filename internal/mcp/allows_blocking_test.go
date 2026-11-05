@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +20,11 @@ import (
 // session-scoped tool performs must not block past its deadline on a hung
 // NFS/FUSE mount. It fails closed with a retryable UPSTREAM_TIMEOUT, submits
 // nothing to the native harness, keeps goroutines bounded and recovers.
+//
+// Every blocked call waits the check's own 2 s bound, so the three calls of a
+// round run concurrently (TEST-HARDENING-02): one run takes about 8 s instead
+// of 24 s. `go test -race -count=20 ./internal/mcp` then fits the default
+// 10 m test timeout; pass -timeout explicitly for larger -count values.
 func TestWorkspaceCheckNotStalledByBlockedStorage(t *testing.T) {
 	client, f, bridge, _ := integration(t, true)
 	gate := make(chan struct{})
@@ -32,27 +38,36 @@ func TestWorkspaceCheckNotStalledByBlockedStorage(t *testing.T) {
 	defer restore()
 	defer release()
 
-	// invoke's 2 s client timeout would race the check's own 2 s bound.
-	call := func(name string, args any, wantError bool) *sdk.CallToolResult {
-		t.Helper()
+	// invoke's 2 s client timeout would race the check's own 2 s bound. These
+	// helpers run in goroutines, so they report with t.Errorf, not t.Fatalf.
+	callTool := func(name string, args any, wantError bool) (*sdk.CallToolResult, bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 		r, e := client.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: args})
 		if e != nil {
-			t.Fatalf("%s: %v", name, e)
+			t.Errorf("%s: %v", name, e)
+			return nil, false
 		}
 		if r.IsError != wantError {
-			t.Fatalf("%s error=%v content=%v", name, r.IsError, r.Content)
+			t.Errorf("%s error=%v content=%v", name, r.IsError, r.Content)
+			return nil, false
+		}
+		return r, true
+	}
+	call := func(name string, args any, wantError bool) *sdk.CallToolResult {
+		t.Helper()
+		r, ok := callTool(name, args, wantError)
+		if !ok {
+			t.FailNow()
 		}
 		return r
 	}
 	wantTimeout := func(name string, start time.Time, failure execution.Error) {
-		t.Helper()
 		if elapsed := time.Since(start); elapsed > 4*time.Second {
-			t.Fatalf("%s took %v while storage was blocked", name, elapsed)
+			t.Errorf("%s took %v while storage was blocked", name, elapsed)
 		}
 		if failure.Code != "UPSTREAM_TIMEOUT" || !failure.Retryable {
-			t.Fatalf("%s: got %+v, want retryable UPSTREAM_TIMEOUT", name, failure)
+			t.Errorf("%s: got %+v, want retryable UPSTREAM_TIMEOUT", name, failure)
 		}
 	}
 
@@ -71,20 +86,46 @@ func TestWorkspaceCheckNotStalledByBlockedStorage(t *testing.T) {
 			// and starts the one blocked check per key that later rounds share.
 			before = runtime.NumGoroutine()
 		}
-		start := time.Now()
-		r := call("get_session", SessionInput{"opencode:ses_existing"}, true)
-		wantTimeout("get_session", start, decode[execution.Error](t, r))
-
-		start = time.Now()
-		r = call("send_prompt", PromptInput{"opencode:ses_existing", "blocked storage prompt", "allows-block-key-" + string(rune('a'+i))}, true)
-		wantTimeout("send_prompt", start, decode[execution.Error](t, r))
-
-		start = time.Now()
-		_, e := discovery.discover(context.Background())
-		if e == nil {
-			t.Fatal("discovery succeeded while the workspace check was blocked")
+		// The three calls of a round run concurrently; each one still has to
+		// return within its own bound with the fail-closed error.
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			if r, ok := callTool("get_session", SessionInput{"opencode:ses_existing"}, true); ok {
+				wantTimeout("get_session", start, toolError(t, "get_session", r))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			if r, ok := callTool("send_prompt", PromptInput{"opencode:ses_existing", "blocked storage prompt", "allows-block-key-" + string(rune('a'+i))}, true); ok {
+				wantTimeout("send_prompt", start, toolError(t, "send_prompt", r))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			_, e := discovery.discover(context.Background())
+			if e == nil {
+				t.Error("discovery succeeded while the workspace check was blocked")
+				return
+			}
+			wantTimeout("discovery", start, *envelope(e))
+		}()
+		// Watchdog: a call that never returns fails the test instead of
+		// hanging it until the go test timeout.
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: a call did not return within 10 s while storage was blocked", i)
 		}
-		wantTimeout("discovery", start, *envelope(e))
+		if t.Failed() {
+			t.FailNow()
+		}
 	}
 	f.mu.Lock()
 	posts := f.posts
@@ -114,4 +155,18 @@ func TestWorkspaceCheckNotStalledByBlockedStorage(t *testing.T) {
 	if got := decode[Session](t, r); got.NativeID != "ses_existing" || got.Directory != f.root {
 		t.Fatalf("get_session after recovery: %+v", got)
 	}
+}
+
+// toolError decodes a tool's structured error without t.Fatal, so it can run
+// in the goroutines above.
+func toolError(t *testing.T, name string, r *sdk.CallToolResult) execution.Error {
+	var v execution.Error
+	b, e := json.Marshal(r.StructuredContent)
+	if e == nil {
+		e = json.Unmarshal(b, &v)
+	}
+	if e != nil {
+		t.Errorf("%s: undecodable error result: %v", name, e)
+	}
+	return v
 }
