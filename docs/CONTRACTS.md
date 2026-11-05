@@ -209,6 +209,14 @@ correlator, not a secrecy guarantee: a low-entropy key can be guessed from it, s
 clients should use high-entropy keys. Lines are written before the MCP response
 is returned; a crash between decision and log write loses the line.
 
+The SDK has a second pre-handler rejection path: arguments that pass the input
+schema but fail to unmarshal into the tool's argument type (go-sdk v1.8.0
+`mcp/server.go:412-415`) return the raw decoder error text as the untyped tool
+error, and the audit records them the same way, as one line with
+`outcome=rejected` and `error_code=INVALID_INPUT`. Requests whose JSON-RPC params
+cannot be decoded at all never reach the audit middleware (the tool name is
+unknown), so they write no audit line; this path is untested.
+
 ## H3 late-completion contract (ADR-011)
 
 This section supersedes the old frozen-snapshot behavior after monitoring ends.
