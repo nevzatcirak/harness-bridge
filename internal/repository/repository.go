@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
 
+	"github.com/nevzatcirak/harness-bridge/internal/bounded"
 	"github.com/nevzatcirak/harness-bridge/internal/security"
 )
 
@@ -146,17 +146,15 @@ type inspectKey struct {
 	session, directory string
 }
 
-type inspectCall struct {
-	done chan struct{}
-	r    Repository
-	w    Workspace
-	err  error
+type inspectResult struct {
+	r   Repository
+	w   Workspace
+	err error
 }
 
-var inflight = struct {
-	sync.Mutex
-	calls map[inspectKey]*inspectCall
-}{calls: map[inspectKey]*inspectCall{}}
+// inspections runs every inspection through the shared bounded mechanism
+// (internal/bounded, also used by security.Policy.AllowsContext).
+var inspections = bounded.NewGroup[inspectKey, inspectResult](inspectLimit, inspectTimeout)
 
 // testFSHook, when set by tests, runs before each confined stat/read so a test
 // can simulate a filesystem call that blocks. It is nil in production.
@@ -186,38 +184,17 @@ func SetFSHookForTesting(fn func(path string)) (restore func()) {
 // that Inspect fails closed without starting another. A result that arrives
 // after every caller has left is dropped, not cached.
 func Inspect(ctx context.Context, directory string, policy *security.Policy, session string) (Repository, Workspace, error) {
-	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
-	defer cancel()
-	key := inspectKey{policy, session, directory}
-	inflight.Lock()
-	call, ok := inflight.calls[key]
-	if !ok {
-		if len(inflight.calls) >= inspectLimit {
-			inflight.Unlock()
-			return Repository{}, Workspace{}, unavailable
-		}
-		call = &inspectCall{done: make(chan struct{})}
-		inflight.calls[key] = call
-		go func() {
-			// Detached from any one caller, so a joined caller is not failed by
-			// another caller's cancellation; still bounded by inspectTimeout
-			// between filesystem calls.
-			work, stop := context.WithTimeout(context.Background(), inspectTimeout)
-			call.r, call.w, call.err = inspect(work, directory, policy, session)
-			stop()
-			inflight.Lock()
-			delete(inflight.calls, key)
-			inflight.Unlock()
-			close(call.done)
-		}()
-	}
-	inflight.Unlock()
-	select {
-	case <-call.done:
-		return call.r, call.w, call.err
-	case <-ctx.Done():
+	// The work context is detached from every caller, so a joined caller is not
+	// failed by another caller's cancellation; it is still bounded by
+	// inspectTimeout between filesystem calls.
+	res, e := inspections.Do(ctx, inspectKey{policy, session, directory}, func(work context.Context) inspectResult {
+		r, w, err := inspect(work, directory, policy, session)
+		return inspectResult{r, w, err}
+	})
+	if e != nil {
 		return Repository{}, Workspace{}, unavailable
 	}
+	return res.r, res.w, res.err
 }
 
 func inspect(ctx context.Context, directory string, policy *security.Policy, session string) (Repository, Workspace, error) {

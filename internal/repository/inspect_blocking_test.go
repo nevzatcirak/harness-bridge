@@ -45,9 +45,7 @@ func waitIdle(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		inflight.Lock()
-		n := len(inflight.calls)
-		inflight.Unlock()
+		n := inspections.InFlight()
 		if n == 0 {
 			return
 		}

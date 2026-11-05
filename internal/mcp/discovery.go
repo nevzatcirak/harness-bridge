@@ -259,7 +259,14 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	// Revalidate all paths before projecting either sessions or parent links.
 	// This remains a best-effort observation, not an atomic filesystem snapshot.
 	for i, id := range ids {
-		if authorized[id] && !s.Policy.Allows(id, metadata[i].Directory) {
+		if !authorized[id] {
+			continue
+		}
+		allowed, e := s.Policy.AllowsContext(ctx, id, metadata[i].Directory)
+		if e != nil {
+			return nil, workspaceCheckUnavailable()
+		}
+		if !allowed {
 			delete(authorized, id)
 		}
 	}
