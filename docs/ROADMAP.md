@@ -786,3 +786,32 @@ closed since are listed below the table.
 **Closed since recorded:**
 - #45's "no test for a workspace-bound session with a held guard (mutant M5 survives)" was closed by #57 ([merge record](https://github.com/nevzatcirak/harness-bridge/pull/57#issuecomment-6653576816)).
 - #55's P3 items 1, 2 and 4 were closed by #65 ([merge record](https://github.com/nevzatcirak/harness-bridge/pull/65#issuecomment-6656228007)).
+
+## R5 result 2026-11-06
+
+Source: [`docs/evidence/R5_EVIDENCE_2026-11-05.md`](evidence/R5_EVIDENCE_2026-11-05.md)
+(sha256 `c9e6ba73fbbee5e075e8376cc08f3252467409273727dd16a48e7f46f605c972`); runbook
+[`docs/evidence/R5_RUNBOOK.md`](evidence/R5_RUNBOOK.md)
+(sha256 `b94ff69477082888791e2173b853d676852bb58c708da4604c8de662577ab1bb`).
+Results per criterion are in the evidence file's "Verdict (Planning Desk)" table.
+
+Verdict table row headings (quoted verbatim):
+
+- Real Claude Chat, authenticated connector, pre-existing session, recorded revision
+- Discovery, history (incl. pagination), identity, cwd
+- Prompt 1 with meaningful completion, result and evidence; acceptance criteria evaluated
+- Prompt 2 in the same session; marker recall without the marker in the prompt
+- Unchanged history prefix and working directory
+- Duplicate submission → same IDs, zero new native prompts
+- Busy session
+- Unauthorized access
+- Interrupted execution
+- Uncertain execution and connection loss
+- Timeout
+- Accurate final reports
+- Permission wait detected and reported (fail-closed native fallback)
+- ADR-011 live late completion
+
+Final verdict (quoted verbatim):
+
+> **R5: PASS. MVP accepted on revision `692992d`, with ONE recorded gap:** live permission-wait detection was not exercised. Closing that gap needs a short supplementary run (R5b): configure the test instance with `permission.bash: ask`, send one prompt, observe `waiting_for_permission`, and have the human reject it natively. The maintainer decides whether R5b is required before the MVP is declared, or is tracked as a follow-up.
