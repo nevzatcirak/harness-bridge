@@ -815,3 +815,44 @@ Verdict table row headings (quoted verbatim):
 Final verdict (quoted verbatim):
 
 > **R5: PASS. MVP accepted on revision `692992d`, with ONE recorded gap:** live permission-wait detection was not exercised. Closing that gap needs a short supplementary run (R5b): configure the test instance with `permission.bash: ask`, send one prompt, observe `waiting_for_permission`, and have the human reject it natively. The maintainer decides whether R5b is required before the MVP is declared, or is tracked as a follow-up.
+
+## R5b result 2026-11-06 — MVP accepted incl. R5b
+
+Source: [`docs/evidence/R5B_EVIDENCE_2026-11-06.md`](evidence/R5B_EVIDENCE_2026-11-06.md)
+(sha256 `ccf834ceb6fbb870ff455d4b02fd5fddfa06e4173140e88c73b057764b49c785`); runbook
+[`docs/evidence/R5B_RUNBOOK.md`](evidence/R5B_RUNBOOK.md)
+(sha256 `36280fe4ba9851a6403d5d365bec2594e1f0697277d0827fe6567f37448fa5fe`).
+Results per criterion are in the evidence file's "Verdict" table.
+
+Verdict table criteria (quoted verbatim):
+
+- `waiting_for_permission` observed on the execution while pending
+- `waiting_for_permission` observed on the session (`get_session`)
+- The Bridge made no approval
+- The human rejected natively
+- Post-rejection state is terminal or `unknown`, never success
+- `R5B-PERM-PROBE` never produced
+- Guard consistent with the state
+- Journal corroborates
+- Native DB corroborates
+
+Final verdict (quoted verbatim):
+
+> **R5b: PASS. MVP accepted on revision `692992d`, including R5b.** The single R5 gap, live permission-wait detection, is closed, and every pass criterion is corroborated by the journal and by native records.
+
+Findings (rows quoted verbatim from the evidence file's findings table):
+
+| ID | Finding | Severity |
+|---|---|---|
+| F-5 | Discovery reports `idle` while admission refuses with `SESSION_BUSY: unfinished native assistant message`. Discovery does not consider unfinished assistant messages. | P2 |
+| F-6 | An OpenCode restart during a tool call leaves an orphan assistant message. Native abort cannot clear it, and the only recovery is native `DELETE /session/:id/message/:messageID`. | P2 |
+| F-7 | A native permission rejection is not mapped to a terminal state. The execution stays `unknown` (`OBSERVATION_UNAVAILABLE` → `MONITOR_EXPIRED`) and the guard stays held. Upstream signals must be verified before a typed terminal outcome (e.g. `failed` / `PERMISSION_REJECTED`) is proposed. | P2 |
+| P3-perm | Bridge status does not expose which permission is pending (tool, pattern). | P3 |
+
+Follow-ups (none decided here; every ADR below stays PROPOSED until the
+maintainer decides):
+
+- F-5: issue [#77](https://github.com/nevzatcirak/harness-bridge/issues/77), PR [#82](https://github.com/nevzatcirak/harness-bridge/pull/82).
+- F-6: issue [#79](https://github.com/nevzatcirak/harness-bridge/issues/79), PR [#84](https://github.com/nevzatcirak/harness-bridge/pull/84).
+- F-7: issue [#78](https://github.com/nevzatcirak/harness-bridge/issues/78), PR [#83](https://github.com/nevzatcirak/harness-bridge/pull/83) (ADR-018, PROPOSED).
+- Connector token lifetime: issue [#80](https://github.com/nevzatcirak/harness-bridge/issues/80), PR [#81](https://github.com/nevzatcirak/harness-bridge/pull/81) (ADR-019, PROPOSED).
