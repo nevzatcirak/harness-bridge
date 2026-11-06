@@ -59,7 +59,8 @@ Do every step here before considering Step 3. None of them change state.
    - the Bridge: `read_session_history` for the session (read-only; any authorized client may do this); or
    - native, on the host:
      `GET /session/<SESSION_ID>/message?directory=<SESSION_DIRECTORY>`.
-     Authenticate as described in "Credential handling" below.
+     Authenticate as in the Step 3 command shape (credential via curl's stdin
+     config, never on the command line).
 
    Select assistant messages without completion:
    ```sh
@@ -77,6 +78,13 @@ Do every step here before considering Step 3. None of them change state.
      with `time.created`. A runner exists only in the process that started the
      turn. If the current process started before the message was created, it
      may still own the turn: stop.
+   - No process from before that restart survives in the unit's cgroup. Run
+     `systemctl status <OPENCODE_UNIT>` and check the processes in its CGroup
+     tree, with `ps -o pid,lstart,args -p <PID>` for each one. Every one must have
+     started after the latest OpenCode restart. A tool child process of the
+     interrupted turn (for example a long `sleep` or a build) can survive a
+     restart when the unit's `KillMode` is not `control-group`, and it can keep
+     writing files. If one exists: stop.
    - The OpenCode journal since that start shows no activity for the session,
      and the native client UI (if used) shows nothing running.
    - No `GET /permission?directory=<SESSION_DIRECTORY>` entry exists for the
@@ -109,6 +117,9 @@ What the source does:
 - The `message.removed` projection deletes the message row, adjusting session
   usage. Its parts are removed by `ON DELETE CASCADE`
   (`core/src/session/projector.ts:274-292`, `core/src/session/sql.ts:82-90`).
+  SQLite enforces the cascade only with foreign keys enabled; OpenCode enables
+  them on every connection (`core/src/database/database.ts:31`,
+  `PRAGMA foreign_keys = ON`).
 - The route description says: "Permanently delete a specific message and all of
   its parts from a session without reverting file changes"
   (`groups/session.ts:418-419`).
@@ -119,17 +130,31 @@ What the source does:
 Delete **only** the one assistant message ID confirmed in Step 2. Never delete
 the user message that preceded it, and never delete in bulk.
 
-Command shape, run by the maintainer on the host. Every `<…>` is a placeholder:
+**Immediately before the DELETE**, re-check, because Step 2 may be minutes old
+and the 409 check only sees this instance's own runner:
+1. Repeat the Step 2.2 reads: `GET /session/status?directory=<SESSION_DIRECTORY>`
+   (no entry, or `idle`) and `GET /permission?directory=<SESSION_DIRECTORY>` (no
+   entry for the session).
+2. Confirm that no other native client (an OpenCode TUI or the web UI) is
+   attached to the session and that no one will start a turn in it while you
+   delete. Close or detach any that are.
+3. If anything differs from Step 2, stop and start again at Step 2.
 
-```sh
-set +o history
+Command shape, run by the maintainer on the host. **Run in bash.** Every `<…>`
+is a placeholder:
+
+```bash
+set +o history   # keep the commands out of shell history
+set +x           # no xtrace: a traced printf line would print the password
 PWFILE=<OPENCODE_SERVER_PASSWORD_FILE>   # as configured for the Bridge; see CREDENTIAL_FILES.md
 SESSION=<SESSION_ID>                     # ses_…
 MESSAGE=<ORPHAN_MESSAGE_ID>              # msg_… from Step 2
 DIR=<SESSION_DIRECTORY>                  # the session's own directory
-# curl reads the credential from stdin config, so it is not in argv or history.
+# The bash builtin printf and $(<file) run in the shell itself, so the password
+# never appears in any process's argv (/proc/*/cmdline), and with xtrace off it
+# is not echoed to stderr. curl reads it from its stdin config.
 # (A password containing " or \ must be escaped for curl's config syntax.)
-printf 'user = "%s:%s"\n' "${OPENCODE_SERVER_USERNAME:-opencode}" "$(cat "$PWFILE")" \
+builtin printf 'user = "%s:%s"\n' "${OPENCODE_SERVER_USERNAME:-opencode}" "$(<"$PWFILE")" \
   | curl --silent --show-error --fail-with-body --config - \
       --get --data-urlencode "directory=$DIR" \
       -X DELETE "http://127.0.0.1:<OPENCODE_PORT>/session/$SESSION/message/$MESSAGE"
