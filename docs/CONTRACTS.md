@@ -327,6 +327,60 @@ clock, real progress can be ignored and a false `NO_PROGRESS` suspicion can appe
 the ADR-010 fenced procedure; ADR-017 §4 lists what the R5 supervisor records,
 and the supervisor may surface suspicion to a human but must not act on it.
 
+## ADR-018 report-only permission rejection (option (d) on (a), accepted 2026-11-06)
+
+`get_execution_status`, `get_execution_result` and the replay response of
+`send_prompt` may carry an optional, additive `permission_rejection` object on
+the execution. Tools and input schemas are unchanged. The object is
+**report-only and never proof of an outcome**: it never changes `state`,
+`error`, `unresolved`, `ended_at` or `updated_at`, never releases the session
+guard, never triggers Abort, a native permission reply, a resubmission or a new
+idempotency key. **The supervisor must not act on it automatically**; it may
+show it to a human. After a native rejection the execution stays as option (a)
+decides (`unknown`, guard held; ADR-010 fenced recovery).
+
+| Field | Meaning |
+| --- | --- |
+| `permission_rejection.observed_at` | Bridge time of the probe that produced the object |
+| `permission_rejection.tool` | Native tool name of the rejected tool part (`[A-Za-z0-9_.:-]{1,64}`) |
+| `permission_rejection.tool_call_id` | Native `callID` of that tool part (`[A-Za-z0-9_.:-]{1,128}`) |
+| `permission_rejection.basis` | `native_event` or `persisted_text_only` (below) |
+
+The object is present only when the persisted native evidence matches
+ADR-018 §3(b) items 2-3, all of which must hold:
+- the latest correlated assistant message is completed, has `finish:
+  "tool-calls"` and no error;
+- no other correlated assistant is as late, completed later or unfinished;
+- it has exactly one tool part with `state.status: "error"`, whose
+  `state.error` is byte-equal to OpenCode's `RejectedError` text ("The user
+  rejected permission to use this specific tool call."). A `CorrectedError`
+  text never matches;
+- no tool part is `pending` or `running`.
+
+It is absent when any of these fails or is unparseable, while a native
+permission is pending (`waiting_for_permission`), when the probe's reads fail,
+and on terminal executions.
+
+- **`basis: "native_event"`**: additionally, this Bridge process's in-memory
+  permission observer saw the request asked with a verified binding to this
+  execution and resolved by a native `reject` reply for the same assistant
+  message and tool call, with no gap, fence, conflict or unattributed state
+  (§3(b) item 4). It is still not a terminal state and still not proof that a
+  human rejected this request: a cascade-rejected request also gets a `reject`
+  reply.
+- **`basis: "persisted_text_only"`: untrusted.** Only the persisted message
+  shape matched. The same text can come from instance disposal, a cascade
+  reject, or any tool, plugin or MCP server error with that message.
+
+**Current limitation:** the permission observer is not wired into the running
+Bridge, so production reports only `persisted_text_only`.
+
+The object is computed from the native reads the monitor and the bounded
+on-demand reconcile already make, plus the observer's memory; no native read or
+write is added. Like all execution records it is process-local: a restart loses
+it with the execution. Pending-permission detail (ADR-018 §5) is PROPOSED and
+not implemented.
+
 ## H4-A additive discovery contracts (not deployed)
 
 - `list_repositories {}` -> `{repositories:[{repository_id,common_directory}]}`.
