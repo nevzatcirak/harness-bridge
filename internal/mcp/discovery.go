@@ -176,7 +176,7 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.C
 		visible = e == nil
 	}
 	d := s.inspectDirectory(ctx, v)
-	if wouldBeIdle(v, d) {
+	if s.needsHistory(v, d) {
 		// Full history, as admission reads it: get_session is authoritative.
 		check, cancel := context.WithTimeout(ctx, unfinishedBudget)
 		d.history[v.ID] = s.checkUnfinished(check, v, 0)
@@ -275,12 +275,12 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	// F-5: sessions whose state would be idle get a bounded latest-page history
+	// F-5: unguarded sessions whose state would be idle get a bounded latest-page history
 	// check, at most four at once, within one phase budget. A check that does
 	// not complete leaves the session unknown; it does not fail the listing.
 	pending := []int{}
 	for i, id := range ids {
-		if authorized[id] && wouldBeIdle(metadata[i], evidence[directoryIndex[groupKey{metadata[i].Directory, workspaceBound(metadata[i])}]]) {
+		if authorized[id] && s.needsHistory(metadata[i], evidence[directoryIndex[groupKey{metadata[i].Directory, workspaceBound(metadata[i])}]]) {
 			pending = append(pending, i)
 		}
 	}
