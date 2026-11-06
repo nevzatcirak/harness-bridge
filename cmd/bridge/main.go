@@ -21,9 +21,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if len(token) < 32 {
-		log.Fatal("BRIDGE_TOKEN must be at least 32 characters")
-	}
 	base := os.Getenv("OPENCODE_URL")
 	if base == "" {
 		base = "http://127.0.0.1:4096"
@@ -36,7 +33,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cfg, err := readIngress(os.Getenv)
+	cfg, err := loadIngress(os.Getenv, token)
 	if err != nil {
 		log.Fatal(err)
 	}

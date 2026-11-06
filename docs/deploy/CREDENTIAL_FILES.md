@@ -8,7 +8,7 @@ PR branch `feat/h3-secure-claude-remote-connector`. Credential-file input is opt
 - Alternative legacy environment variables continue to work, but cannot be combined with file variables.
 - A normal file must be a direct regular file (no final symlink), private permissions (no group/other permission bits), 1–16384 bytes. Linux additionally accepts verified systemd root-owned read-only credential mounts with exact service-UID ACLs; the apparent 0440 mode is an ACL mask, not general group access. Arbitrary 0640/0440 files remain rejected. One final LF or CRLF is accepted. Embedded line breaks/NUL and empty content fail closed.
 - For systemd `LoadCredential`, use the service's actual `CREDENTIALS_DIRECTORY` path in an `ExecStart` wrapper or a supported expansion of `%d` in `Environment=`. Do not copy secrets to command-line arguments. Inspect the resolved environment keys, never their values.
-- `BRIDGE_TOKEN` (from either source) must remain at least 32 characters.
+- `BRIDGE_TOKEN` (from either source) must remain at least 32 characters, or at least 43 characters when `BRIDGE_TOKEN_MAX_LIFETIME` is above `24h` (ADR-019).
 
 ## Operator's sandboxed test target
 ```text
