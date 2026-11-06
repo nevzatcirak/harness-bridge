@@ -1,8 +1,10 @@
 # ADR-018: Native permission rejection outcome
 
-Date: 2026-11-06. Status: **PROPOSED**. Not accepted; no production behavior
-changes with this ADR. Must preserve ADR-010, ADR-011 and ADR-017 (option (a))
-as accepted.
+Date: 2026-11-06. Status: **ACCEPTED: option (d) built on (a)** (maintainer,
+2026-11-06, via Planning Desk; issue #97). Option (b) is deferred and option (c)
+is rejected. §5 (P3, pending permission detail) was not decided and stays
+**PROPOSED**. Must preserve ADR-010, ADR-011 and ADR-017 (option (a)) as
+accepted. Implementation: see "Implementation (option (d))" below.
 
 ADR numbering: ADR-015 and ADR-016 are referenced in `docs/ROADMAP.md` as
 PROPOSED but are not in the repository. ADR-018 is the next unused number.
@@ -76,8 +78,8 @@ The cases:
 |---|---|---|
 | `reject` without message, `continue_loop_on_deny` unset (R5b) | stops | completed, `finish: "tool-calls"`, no error |
 | `reject` without message, `continue_loop_on_deny: true` | continues; the model sees the rejection text as the tool result | a later message ends with the model's own finish (e.g. `"stop"`) |
-| `reject` with message (`CorrectedError`) | always continues; the feedback goes to the model | as above |
-| config `deny` (`DeniedError`) | always continues | as above |
+| `reject` with message (`CorrectedError`) | continues; the feedback goes to the model. Exception: the reply still cascade-rejects every other pending request of the session with plain `RejectedError` (`index.ts:129-138`); if one of those belongs to a tool call in the same step, `failToolCall` sets `blocked` (`processor.ts:200-201`) and the loop stops | as above, unless a cascade-rejected request stops the loop |
+| config `deny` (`DeniedError`) | continues, unless another pending request of the session is cascade-rejected in the same step (as in the row above) | as above |
 
 - `prompt.ts:1111-1130`: on a later loop iteration, the loop exits only when
   `finish` is not `"tool-calls"` or `"unknown"`. A rejected message therefore
@@ -210,6 +212,9 @@ unreadable or contradictory element means no promotion; the result stays
    - for the same `tool.messageID` and `tool.callID` as the part in item 3.
    The observer must also show no gap, fence, stale or `observation_uncertain`
    status between the ask and the probe.
+   Note: a request rejected by cascade (`index.ts:129-138`) also gets its own
+   `permission.replied` with `reply: "reject"`, so an observed reject reply
+   does not by itself show that a human rejected that request directly.
 5. **The native loop has ended.** Items 1 and 2 must be read after item 4,
    and the reads must show status idle or absent and no newer assistant
    message.
@@ -261,10 +266,12 @@ The block is computed from reads already made, plus the observer's in-memory
 view. It never changes state or the guard, and the supervisor never acts on
 it automatically. It answers F-7 for the human without inferring an outcome.
 
-## 4. Recommendation (PROPOSED, maintainer decision)
+## 4. Decision (ACCEPTED 2026-11-06: (d) built on (a))
 
-**Recommend (d)**, built on (a). Defer (b) to a later amendment that requires
-live evidence; reject (c).
+**Accepted: (d)**, built on (a) (maintainer, 2026-11-06, via Planning Desk).
+(b) is deferred to a later amendment that requires live evidence; (c) is
+rejected. This section was the recommendation; the reasons below are why it was
+accepted.
 
 Why:
 - §1 d shows that persisted data cannot prove a rejection.
@@ -289,7 +296,9 @@ Evidence needed before (b) is reconsidered: an R-run in which the observer
 captures `asked` → `replied(reject)` → stop for one execution, with the
 correlation in item 4, and a negative run with `continue_loop_on_deny: true`.
 
-## 5. Separate decision point: P3, pending permission detail in status
+## 5. Separate decision point: P3, pending permission detail in status (PROPOSED)
+
+**Status: PROPOSED, not decided (2026-11-06). Not implemented.**
 
 Today `waiting_for_permission` does not say what is pending. Proposal: when
 the state is `waiting_for_permission`, expose the `ObservedPermission` safe
@@ -318,11 +327,34 @@ It is report-only and grants no ability to reply. Decide it independently of
 - The block never triggers an Abort or a reply; replay is unchanged.
 - No extra native reads beyond the observer stream.
 
+## Implementation (option (d))
+
+- `internal/execution/rejection.go`: `PermissionRejection` (`observed_at`,
+  `tool`, `tool_call_id`, `basis`) on the execution view of
+  `get_execution_status` and `get_execution_result`. It is computed in the
+  probe from the reads already made (items 2-3) plus an optional in-memory
+  `RejectionWitness` (item 4). It is assigned only to that field.
+- `basis: "native_event"` requires the witness to confirm the exact
+  (session, execution, assistant message, tool call). With no witness, or a
+  witness that answers false, the basis is `persisted_text_only`. When items
+  2-3 do not hold, or a permission is pending, or the execution is terminal,
+  there is no block.
+- `internal/adapters/opencode`: `PermissionObserver.VerifiedRejection` is the
+  witness view. It reads only the observer's memory and answers true only for
+  one verified, reject-resolved, conflict-free entry while the observer is
+  unfenced, not streaming and `available`.
+- **Limitation:** the observer is not wired into the running Bridge, and its
+  attribution cannot be `verified` while `PermissionScope.NativeEpoch` is
+  empty. Until both change, production reports only `persisted_text_only`.
+  Wiring the observer is a separate task: it adds the observer's own `/event`
+  and snapshot reads.
+
 ## Out of scope
 
 - Any native permission reply or approval by the Bridge.
 - Any guard release without terminal proof.
 - Any change to ADR-010, ADR-011 or ADR-017.
 - The `idle`-without-proof `running` report in §2. That state comes from
-  `reconcile.go:393-399` and is unreachable with OpenCode 1.19.4 status
+  `reconcile.go:396-399` at `fb298ed` (405-410 after the option (d) change)
+  and is unreachable with OpenCode 1.19.4 status
   semantics; it is recorded only as a finding.

@@ -64,6 +64,8 @@ type Execution struct {
 	ReconciledAt   *time.Time    `json:"reconciled_at,omitempty"`
 	LocalFailure   *LocalFailure `json:"local_failure,omitempty"`
 	Liveness       *Liveness     `json:"liveness,omitempty"`
+	// PermissionRejection is the ADR-018 (d) report-only block; see rejection.go.
+	PermissionRejection *PermissionRejection `json:"permission_rejection,omitempty"`
 }
 type run struct {
 	mu             sync.Mutex
@@ -107,6 +109,8 @@ type Manager struct {
 	stallThreshold time.Duration
 	clock          func() time.Time
 	noLiveness     bool
+	// ADR-018 (d): optional in-memory witness for basis native_event.
+	witness rejectionWitness
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }

@@ -49,6 +49,7 @@ func snapshot(v Execution) Execution {
 		v.Unresolved = &u
 	}
 	v.Liveness = copyLiveness(v.Liveness)
+	v.PermissionRejection = copyRejection(v.PermissionRejection)
 	return v
 }
 
@@ -222,6 +223,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 				x.view.Unresolved.LastCheckedAt = &now
 			}
 			m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
+			x.view.PermissionRejection = nil
 		}
 		return err
 	}
@@ -320,6 +322,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 					x.view.Unresolved.LastCheckedAt = &now
 				}
 				m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
+				x.view.PermissionRejection = nil
 				return Fail("FORBIDDEN", "correlated assistant workspace differs")
 			}
 		}
@@ -348,10 +351,15 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		status: status, statusExists: exists, userFound: userFound, assistants: assistants,
 		unfinished: unfinished, proof: proof != nil, permissionPending: pending, started: x.view.Started,
 	})
+	// ADR-018 (d): report-only, from the reads above plus the in-memory witness.
+	// It is assigned only to x.view.PermissionRejection and never consulted for
+	// state, error, unresolved, ended_at, the guard or idempotency.
+	rejection := m.assessRejection(x, assistants, unfinished, m.clock().UTC())
 	// Pending/unknown permission state prevents a terminal promotion and admission.
 	for _, p := range permissions {
 		if p.SessionID == x.native {
 			m.setLiveness(x, liveness)
+			x.view.PermissionRejection = nil
 			if x.monitorDone {
 				unresolved(x, "MONITOR_EXPIRED", "native permission pending after tracking stopped", now, true)
 				x.view.Unresolved.LastCheckedAt = &now
@@ -365,8 +373,9 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		}
 	}
 	if userFound && !unfinished && proof != nil && (!exists || status.Type == "idle") {
-		// A terminal execution carries no liveness report.
+		// A terminal execution carries no liveness or rejection report.
 		m.setLiveness(x, nil)
+		x.view.PermissionRejection = nil
 		x.view.State = terminalState(*proof)
 		x.view.Updated = now
 		ended := time.UnixMilli(proof.Info.Time.Completed).UTC()
@@ -387,6 +396,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		return nil
 	}
 	m.setLiveness(x, liveness)
+	x.view.PermissionRejection = rejection
 	if x.monitorDone {
 		unresolved(x, "MONITOR_EXPIRED", "native terminal evidence remains inconclusive", now, true)
 		x.view.Unresolved.LastCheckedAt = &now

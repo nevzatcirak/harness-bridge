@@ -238,6 +238,35 @@ func (o *PermissionObserver) View(ctx context.Context) (PermissionObservationBat
 	return o.viewLocked(), nil
 }
 
+// VerifiedRejection reports, from in-memory state only (no I/O, no authority
+// call), whether exactly one retained request for this tool call was asked
+// with a verified binding to executionID and then resolved by an observed
+// native "reject" reply, while the observer is unfenced and its latest status
+// is "available" (a successful snapshot after any stream gap). Every other
+// case, including a gap, conflict, disappearance, unattributed reply or a
+// second matching request, is false. It is ADR-018 §3(b) item 4 for the
+// report-only permission_rejection block and never proof of an outcome.
+func (o *PermissionObserver) VerifiedRejection(session, executionID, toolMessageID, toolCallID string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.fenced || o.streaming || o.status != "available" || session != o.scope.SessionID || executionID == "" || toolMessageID == "" || toolCallID == "" {
+		return false
+	}
+	match := false
+	for _, e := range o.entries {
+		if e.view.ToolMessageID != toolMessageID || e.view.ToolCallID != toolCallID {
+			continue
+		}
+		if match || e.conflict || e.disappeared || e.conflictingIdentity != nil || e.binding == nil ||
+			e.binding.executionID != executionID || e.view.ExecutionID != executionID || e.view.Attribution != "verified" ||
+			e.view.State != "resolved_externally" || e.view.ObservedReply != "reject" {
+			return false
+		}
+		match = true
+	}
+	return match
+}
+
 func (o *PermissionObserver) executions(ctx context.Context) ([]KnownPermissionExecution, error) {
 	known, err := o.authority.PermissionExecutions(ctx, o.scope)
 	if err != nil {
