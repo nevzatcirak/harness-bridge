@@ -59,6 +59,23 @@ func wouldBeIdle(v opencode.Session, d directoryEvidence) bool {
 	return !listed || native.Type == "idle"
 }
 
+// needsHistory reports whether v's state depends on a history check: native
+// evidence alone would make it idle and this Bridge holds no guard for it. A
+// held guard decides the state anyway (view), so its history is not read. If
+// the guard is released between this check and view, the session has no
+// completed check and is reported unknown (fail closed).
+func (s *Server) needsHistory(v opencode.Session, d directoryEvidence) bool {
+	if !wouldBeIdle(v, d) {
+		return false
+	}
+	if s.Runs != nil {
+		if held, _ := s.Runs.SessionGuard(v.ID); held {
+			return false
+		}
+	}
+	return true
+}
+
 // checkUnfinished reads v's history (the latest page when limit > 0) through
 // unfinishedChecks. ok is false when the read failed, timed out or was refused.
 func (s *Server) checkUnfinished(ctx context.Context, v opencode.Session, limit int) historyEvidence {

@@ -423,7 +423,9 @@ read gives `unknown`; otherwise a pending native permission for the session give
   `native_state` and `native_state_inferred_from_absence` are reported as before. A
   held Bridge guard still wins (state follows the guard). Pending-permission,
   busy/retry and workspace-bound sessions are not idle, so their history is not read
-  for state and their state is unchanged. History reads go through the F-3
+  for state and their state is unchanged. A session for which this Bridge holds the
+  guard is not read either (the guard decides its state), so it never carries
+  `native_unfinished_message`. History reads go through the F-3
   `internal/bounded` policy: one in-flight read per (endpoint, directory, session,
   page size), at most 8 running, each bounded to 3 s.
   - **`get_session` is authoritative:** it reads the full history, exactly as
