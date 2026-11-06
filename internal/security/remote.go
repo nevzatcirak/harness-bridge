@@ -2,6 +2,7 @@ package security
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,17 +17,83 @@ import (
 type Remote struct {
 	origin, host, principal string
 	expires                 time.Time
+	maxLifetime             time.Duration
 }
 
+// ADR-019 option (2), accepted 2026-11-06: the connector token's maximum
+// lifetime is operator-configurable up to a compiled-in ceiling.
+const (
+	// DefaultTokenMaxLifetime applies when BRIDGE_TOKEN_MAX_LIFETIME is unset.
+	DefaultTokenMaxLifetime = 24 * time.Hour
+	// TokenMaxLifetimeCeiling is the hard upper bound for any configuration.
+	TokenMaxLifetimeCeiling = 720 * time.Hour
+	// MinTokenLength applies at or below DefaultTokenMaxLifetime.
+	MinTokenLength = 32
+	// MinLongLivedTokenLength (about 256 bits as base64url) applies above it.
+	MinLongLivedTokenLength = 43
+)
+
+// ParseTokenMaxLifetime reads BRIDGE_TOKEN_MAX_LIFETIME. An empty value is the
+// default. Anything that is not a Go duration in (0, ceiling] is rejected, so a
+// typo never silently changes the bound.
+func ParseTokenMaxLifetime(v string) (time.Duration, error) {
+	if v == "" {
+		return DefaultTokenMaxLifetime, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, errors.New("BRIDGE_TOKEN_MAX_LIFETIME must be a Go duration such as 168h")
+	}
+	if err := validMaxLifetime(d); err != nil {
+		return 0, err
+	}
+	return d, nil
+}
+
+func validMaxLifetime(d time.Duration) error {
+	if d <= 0 || d > TokenMaxLifetimeCeiling {
+		return errors.New("BRIDGE_TOKEN_MAX_LIFETIME must be greater than 0 and at most 720h")
+	}
+	return nil
+}
+
+// TokenMinLength is the minimum bearer token length for a maximum lifetime.
+func TokenMinLength(maxLifetime time.Duration) int {
+	if maxLifetime > DefaultTokenMaxLifetime {
+		return MinLongLivedTokenLength
+	}
+	return MinTokenLength
+}
+
+// NewRemote applies the default 24 h maximum token lifetime.
 func NewRemote(origin, principal string, expires time.Time) (*Remote, error) {
+	return NewRemoteWithMaxLifetime(origin, principal, expires, DefaultTokenMaxLifetime)
+}
+
+// NewRemoteWithMaxLifetime rejects an expiry that is not in the future or that
+// is more than maxLifetime from now. This is a startup check; Check still
+// refuses every request once the expiry has passed.
+func NewRemoteWithMaxLifetime(origin, principal string, expires time.Time, maxLifetime time.Duration) (*Remote, error) {
+	if err := validMaxLifetime(maxLifetime); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.ForceQuery || strings.ContainsAny(u.Host, "\\\r\n") {
 		return nil, errors.New("public origin must be an HTTPS origin without path or credentials")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(principal) || !expires.After(time.Now()) || expires.After(time.Now().Add(24*time.Hour)) {
-		return nil, errors.New("named principal and future token expiry within 24 hours required")
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(principal) || !expires.After(time.Now()) || expires.After(time.Now().Add(maxLifetime)) {
+		if maxLifetime == DefaultTokenMaxLifetime {
+			return nil, errors.New("named principal and future token expiry within 24 hours required")
+		}
+		return nil, fmt.Errorf("named principal and future token expiry within BRIDGE_TOKEN_MAX_LIFETIME (%s) required", maxLifetime)
 	}
-	return &Remote{origin: origin, host: u.Host, principal: principal, expires: expires}, nil
+	return &Remote{origin: origin, host: u.Host, principal: principal, expires: expires, maxLifetime: maxLifetime}, nil
+}
+
+// LogConfig records the configured expiry and maximum lifetime once at
+// startup. Remote holds no token, so none can be logged here.
+func (p *Remote) LogConfig() {
+	slog.Info("remote token lifetime", "principal", p.principal, "token_expires", p.expires.UTC().Format(time.RFC3339), "token_max_lifetime", p.maxLifetime.String())
 }
 
 func (p *Remote) Check(w http.ResponseWriter, r *http.Request) bool {

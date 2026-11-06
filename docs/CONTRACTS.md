@@ -136,6 +136,23 @@ no query string, a single Authorization header and an unexpired credential.
 and oversized POST 413. The principal is configured with its immutable ACL,
 never supplied by request headers. This is fixed-header auth, not OAuth.
 
+Token lifetime (ADR-019 option (2), accepted 2026-11-06):
+- `BRIDGE_TOKEN_EXPIRES` (RFC3339) must be in the future and at most
+  `BRIDGE_TOKEN_MAX_LIFETIME` from startup.
+- `BRIDGE_TOKEN_MAX_LIFETIME` is a Go duration (for example `24h`, `168h`).
+  Unset or empty means `24h`, the previous fixed cap, with unchanged behavior
+  and error text. The compiled-in ceiling is `720h`.
+- A value that is unparsable, `<= 0` or above `720h` fails startup in every mode,
+  including local mode.
+- `BRIDGE_TOKEN` must be at least 32 characters up to `24h`, and at least 43
+  characters (about 256 bits as base64url) above `24h`.
+- Remote mode logs one startup line, `remote token lifetime`, with the
+  principal, `token_expires` and `token_max_lifetime`. It never logs the token or
+  any part or hash of it.
+- Expiry is still enforced on every request (`401`,
+  `error="invalid_token"`), and the expiry or lifetime cannot change without a
+  Bridge restart.
+
 
 Optional `BRIDGE_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
 send_prompt and interrupt_execution before native mutation. Default/0 preserves

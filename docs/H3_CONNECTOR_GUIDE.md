@@ -83,7 +83,8 @@ directories and execute their plugins, also with `BRIDGE_READ_ONLY=1`
 
 Set `BRIDGE_TOKEN` to a fresh cryptographically random secret (e.g. 32 random
 bytes encoded as hex), and `BRIDGE_TOKEN_EXPIRES` to an RFC3339 UTC timestamp
-within the next 24 hours. Supply existing `OPENCODE_SERVER_USERNAME` and
+within the next 24 hours, or within `BRIDGE_TOKEN_MAX_LIFETIME` if you set it
+(see "Token lifetime and revocation" below). Supply existing `OPENCODE_SERVER_USERNAME` and
 `OPENCODE_SERVER_PASSWORD` securely. Do not print secrets, paste them in chat,
 put them in URLs/command arguments or enable shell tracing. Token rotation or
 revocation requires restarting the bridge (a restart loses in-memory execution
@@ -147,6 +148,33 @@ TLS to backend and same-origin Origin. TLS errors: verify both certificate chain
 and DNS names; never disable verification. OAuth screen/no Request headers:
 stop and obtain beta availability or implement a reviewed OAuth path. Native
 permission waits are expected states, not authentication failures.
+
+## Token lifetime and revocation (ADR-019, accepted 2026-11-06)
+
+`BRIDGE_TOKEN_MAX_LIFETIME` (a Go duration; default `24h`, ceiling `720h`) sets
+how far in the future `BRIDGE_TOKEN_EXPIRES` may be at startup. Above `24h` the
+token must be at least 43 characters. Use the shortest lifetime that fits
+unattended operation, for example `168h` (7 days). A longer lifetime means a
+leaked token stays usable for longer, because there is no per-token denylist.
+
+Once the token expires, every remote request is refused, including status,
+result and interrupt calls. Rotate before expiry if an execution may still need
+monitoring.
+
+**Immediate revocation** (for example after a suspected leak):
+1. Write a fresh token to the token file (`BRIDGE_TOKEN_FILE`, see
+   [CREDENTIAL_FILES.md](deploy/CREDENTIAL_FILES.md)) with a new
+   `BRIDGE_TOKEN_EXPIRES`. Never paste the token into a chat, a log or a
+   command line.
+2. Restart the Bridge (`systemctl restart <BRIDGE_UNIT>`). Until the restart the
+   old token keeps working; stopping the Bridge revokes it at once.
+3. Remove the Claude connector and add it again with the new header value. Its
+   request headers cannot be edited in place.
+4. Reconcile per ADR-010. The restart loses every in-memory execution,
+   idempotency and parent-ID record, so never reuse an idempotency key from
+   before the restart. Every later `send_prompt` uses a fresh key, and an
+   execution of unknown outcome is reconciled from native history, never
+   resubmitted.
 
 ## Threat model and limits
 

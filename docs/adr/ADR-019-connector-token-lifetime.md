@@ -1,7 +1,11 @@
 # ADR-019: Connector token lifetime
 
-Date: 2026-11-06. Status: **PROPOSED**. The maintainer decides; no code change
-is part of this ADR.
+Date: 2026-11-06. Status: **ACCEPTED, option (2)** (maintainer, 2026-11-06,
+via Planning Desk; issue #98). Option (3), OAuth, remains the long-term option
+and needs its own ADR. Option (4) is rejected. Implemented by the
+ADR019-IMPL change (`BRIDGE_TOKEN_MAX_LIFETIME`).
+
+Originally proposed 2026-11-06 with no code change.
 
 Numbering: ADR-015 and ADR-016 are referenced in `docs/` without files and are
 treated as reserved. ADR-017 exists. ADR-018 is free on `main`, but open issue
@@ -171,7 +175,7 @@ Notes:
   (secret handling mistakes, skipped reconciliation), so the short window is
   not free.
 
-## 5. Recommendation (PROPOSED)
+## 5. Recommendation (accepted 2026-11-06: option (2))
 
 **Adopt (2)**:
 - `BRIDGE_TOKEN_MAX_LIFETIME`, default `24h` and so unchanged behavior;
@@ -187,6 +191,9 @@ without restarts becomes a requirement. It needs its own ADR and security
 review. Do not pursue (4) as a fix: the connector cannot change a header
 without being removed and re-added, so it cannot remove the manual re-add.
 
-This ADR stays PROPOSED until the maintainer decides. Any implementation is a
-separate task with tests (default, ceiling, out-of-range rejection, unchanged
-24 h behavior) and a CONTRACTS.md update.
+Acceptance note (maintainer, 2026-11-06, via Planning Desk): option (2) is
+accepted as recommended above; (3) stays the long-term option with its own ADR;
+(4) is rejected. The implementation (issue #98) adds `BRIDGE_TOKEN_MAX_LIFETIME`
+with tests for the default, the ceiling, out-of-range rejection and the
+unchanged 24 h behavior, plus the CONTRACTS.md and H3_CONNECTOR_GUIDE.md
+updates.
