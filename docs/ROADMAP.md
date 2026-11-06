@@ -815,3 +815,13 @@ Verdict table row headings (quoted verbatim):
 Final verdict (quoted verbatim):
 
 > **R5: PASS. MVP accepted on revision `692992d`, with ONE recorded gap:** live permission-wait detection was not exercised. Closing that gap needs a short supplementary run (R5b): configure the test instance with `permission.bash: ask`, send one prompt, observe `waiting_for_permission`, and have the human reject it natively. The maintainer decides whether R5b is required before the MVP is declared, or is tracked as a follow-up.
+
+## Finding F-6 2026-11-06: orphan assistant message recovery
+
+An OpenCode restart during a running tool call leaves an assistant message
+without `time.completed`. Native abort does not clear it, and the Bridge then
+refuses every `send_prompt` for the session with `SESSION_BUSY: unfinished native
+assistant message` (P2, R5/R5b). Detection and the maintainer-only native
+deletion procedure are in
+[`docs/deploy/ORPHAN_MESSAGE_RECOVERY.md`](deploy/ORPHAN_MESSAGE_RECOVERY.md).
+The discovery side is F-5 (PR #82).
