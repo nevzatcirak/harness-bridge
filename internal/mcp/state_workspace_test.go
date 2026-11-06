@@ -26,6 +26,8 @@ func workspaceServer(t *testing.T, workspaceID, status, permissions string) *Ser
 			w.Write([]byte(status))
 		case "/permission":
 			w.Write([]byte(permissions))
+		case "/session/ses_a/message":
+			w.Write([]byte(`[]`)) // F-5: no unfinished assistant message
 		default:
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: root, WorkspaceID: workspaceID})
 		}

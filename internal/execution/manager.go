@@ -316,11 +316,9 @@ retry:
 		release()
 		return Execution{}, false, err
 	}
-	for _, msg := range history {
-		if msg.Info.Role == "assistant" && msg.Info.Time.Completed <= 0 {
-			release()
-			return Execution{}, false, Fail("SESSION_BUSY", "unfinished native assistant message")
-		}
+	if opencode.UnfinishedAssistant(history) {
+		release()
+		return Execution{}, false, Fail("SESSION_BUSY", "unfinished native assistant message")
 	}
 	{
 		p := r

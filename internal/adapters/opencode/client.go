@@ -46,6 +46,20 @@ type Message struct {
 	Info  MessageInfo       `json:"info"`
 	Parts []json.RawMessage `json:"parts"`
 }
+
+// UnfinishedAssistant reports whether any assistant message in msgs has no
+// completion time. send_prompt admission refuses such a session (SESSION_BUSY)
+// and discovery reports it unknown (F-5); both use this one predicate so they
+// cannot diverge.
+func UnfinishedAssistant(msgs []Message) bool {
+	for _, msg := range msgs {
+		if msg.Info.Role == "assistant" && msg.Info.Time.Completed <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 type Status struct {
 	Type string `json:"type"`
 	// Attempt and Next accompany type "retry" (attempt count; next attempt as
