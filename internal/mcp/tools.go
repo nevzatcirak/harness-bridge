@@ -48,6 +48,11 @@ type Session struct {
 	// because the session is absent from a successful native status read of its
 	// own directory. Omitted otherwise, including for an explicit native "idle".
 	NativeStateInferredFromAbsence bool `json:"native_state_inferred_from_absence,omitempty"`
+
+	// NativeUnfinishedMessage is true when the session's native history has an
+	// assistant message without time.completed (F-5). Such a session is never
+	// reported idle; send_prompt admission refuses it with SESSION_BUSY.
+	NativeUnfinishedMessage bool `json:"native_unfinished_message,omitempty"`
 }
 type Sessions struct {
 	Sessions []Session `json:"sessions"`

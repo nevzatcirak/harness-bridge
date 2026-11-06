@@ -48,6 +48,9 @@ type directoryEvidence struct {
 	permissionsOK bool
 	repository    *repository.Repository
 	workspace     *repository.Workspace
+	// history holds completed F-5 checks by session ID. A session whose state
+	// would be idle and that has no completed check is reported unknown.
+	history map[string]historyEvidence
 }
 
 // workspaceBound reports whether OpenCode routes the session's own requests by
@@ -55,7 +58,7 @@ type directoryEvidence struct {
 func workspaceBound(v opencode.Session) bool { return v.WorkspaceID != "" }
 
 func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, members ...string) directoryEvidence {
-	d := directoryEvidence{status: map[string]opencode.Status{}, permissions: map[string]bool{}}
+	d := directoryEvidence{status: map[string]opencode.Status{}, permissions: map[string]bool{}, history: map[string]historyEvidence{}}
 	if !workspaceBound(v) {
 		// Directory-scoped native reads load (bootstrap) the OpenCode instance for
 		// v.Directory. A workspace-bound session lives in its workspace's instance,
@@ -129,6 +132,15 @@ func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible boo
 	} else if d.permissions[v.ID] {
 		out.State = "waiting_for_permission"
 	}
+	// F-5: idle needs a completed history check without an unfinished
+	// assistant message. Anything else is unknown, never idle.
+	if out.State == "idle" {
+		h := d.history[v.ID]
+		if !h.checked || h.unfinished {
+			out.State = "unknown"
+		}
+		out.NativeUnfinishedMessage = h.checked && h.unfinished
+	}
 	// A session guarded by this Bridge is never idle, whatever native status says.
 	if s.Runs != nil {
 		if held, executionState := s.Runs.SessionGuard(v.ID); held {
@@ -163,7 +175,14 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.C
 		_, _, e := s.authorized(ctx, v.ParentID)
 		visible = e == nil
 	}
-	return s.view(v, s.inspectDirectory(ctx, v), visible)
+	d := s.inspectDirectory(ctx, v)
+	if wouldBeIdle(v, d) {
+		// Full history, as admission reads it: get_session is authoritative.
+		check, cancel := context.WithTimeout(ctx, unfinishedBudget)
+		d.history[v.ID] = s.checkUnfinished(check, v, 0)
+		cancel()
+	}
+	return s.view(v, d, visible)
 }
 
 // parallel performs at most four jobs concurrently, with no per-session goroutine.
@@ -255,6 +274,26 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	parallel(ctx, len(directories), func(i int) { evidence[i] = s.inspectDirectory(ctx, directories[i], groups[i]...) })
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	// F-5: sessions whose state would be idle get a bounded latest-page history
+	// check, at most four at once, within one phase budget. A check that does
+	// not complete leaves the session unknown; it does not fail the listing.
+	pending := []int{}
+	for i, id := range ids {
+		if authorized[id] && wouldBeIdle(metadata[i], evidence[directoryIndex[groupKey{metadata[i].Directory, workspaceBound(metadata[i])}]]) {
+			pending = append(pending, i)
+		}
+	}
+	checks := make([]historyEvidence, len(pending))
+	phase, cancelPhase := context.WithTimeout(ctx, unfinishedBudget)
+	parallel(phase, len(pending), func(j int) { checks[j] = s.checkUnfinished(phase, metadata[pending[j]], unfinishedPage) })
+	cancelPhase()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	for j, i := range pending {
+		v := metadata[i]
+		evidence[directoryIndex[groupKey{v.Directory, workspaceBound(v)}]].history[v.ID] = checks[j]
 	}
 	// Revalidate all paths before projecting either sessions or parent links.
 	// This remains a best-effort observation, not an atomic filesystem snapshot.

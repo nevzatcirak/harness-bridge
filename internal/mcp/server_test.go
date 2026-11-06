@@ -65,7 +65,11 @@ func TestSessionACLHistoryAndDirectory(t *testing.T) {
 	if !strings.Contains(string(b), "opencode:ses_allowed") || strings.Contains(string(b), "ses_outside") {
 		t.Fatal(string(b))
 	}
-	if _, e = s.call(ctx, "read_session_history", args{SessionID: "opencode:ses_allowed"}); e != nil || historyCalls != 1 {
+	// list_sessions made one F-5 history check for the idle session.
+	if historyCalls != 1 {
+		t.Fatal("discovery history checks", historyCalls)
+	}
+	if _, e = s.call(ctx, "read_session_history", args{SessionID: "opencode:ses_allowed"}); e != nil || historyCalls != 2 {
 		t.Fatal(e, historyCalls)
 	}
 	for _, id := range []string{"ses_allowed", "opencode:ses_outside", "opencode:ses_denied", "opencode:ses_../escape"} {

@@ -19,7 +19,7 @@ func TestDiscoveryScale(t *testing.T) {
 	for _, n := range []int{1, 50, 200, 1000} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			root := t.TempDir()
-			var gets, statuses, permissions, inflight, peak atomic.Int64
+			var gets, statuses, permissions, histories, inflight, peak atomic.Int64
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				current := inflight.Add(1)
 				defer inflight.Add(-1)
@@ -33,6 +33,15 @@ func TestDiscoveryScale(t *testing.T) {
 					permissions.Add(1)
 					w.Write([]byte(`[]`))
 				default:
+					if strings.HasSuffix(r.URL.Path, "/message") {
+						// F-5: one bounded latest-page read per idle session.
+						if r.URL.Query().Get("limit") != "10" {
+							t.Errorf("unbounded history read %s", r.URL)
+						}
+						histories.Add(1)
+						w.Write([]byte(`[]`))
+						return
+					}
 					gets.Add(1)
 					id := strings.TrimPrefix(r.URL.Path, "/session/")
 					json.NewEncoder(w).Encode(opencode.Session{ID: id, Directory: root, ParentID: "ses_0000"})
@@ -49,10 +58,15 @@ func TestDiscoveryScale(t *testing.T) {
 			started := time.Now()
 			out, e := s.discover(context.Background())
 			elapsed := time.Since(started)
-			if e != nil || len(out) != n || gets.Load() != int64(n) || statuses.Load() != 1 || permissions.Load() != 1 || peak.Load() > 4 {
-				t.Fatalf("n=%d returned=%d gets=%d status=%d permissions=%d peak=%d err=%v", n, len(out), gets.Load(), statuses.Load(), permissions.Load(), peak.Load(), e)
+			if e != nil || len(out) != n || gets.Load() != int64(n) || statuses.Load() != 1 || permissions.Load() != 1 || histories.Load() != int64(n) || peak.Load() > 4 {
+				t.Fatalf("n=%d returned=%d gets=%d status=%d permissions=%d histories=%d peak=%d err=%v", n, len(out), gets.Load(), statuses.Load(), permissions.Load(), histories.Load(), peak.Load(), e)
 			}
-			t.Logf("sessions=%d metadata_GETs=%d status_GETs=%d permission_GETs=%d peak=%d elapsed=%s", n, gets.Load(), statuses.Load(), permissions.Load(), peak.Load(), elapsed)
+			for _, v := range out {
+				if v.State != "idle" {
+					t.Fatalf("state %q, want idle", v.State)
+				}
+			}
+			t.Logf("sessions=%d metadata_GETs=%d status_GETs=%d permission_GETs=%d history_GETs=%d peak=%d elapsed=%s", n, gets.Load(), statuses.Load(), permissions.Load(), histories.Load(), peak.Load(), elapsed)
 			page, e := s.call(context.Background(), "find_sessions", args{Limit: 200})
 			if e != nil {
 				t.Fatal(e)
@@ -120,6 +134,11 @@ func TestDiscoveryDirectoryScopedEvidence(t *testing.T) {
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: a})
 		case "/session/ses_b":
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_b", Directory: b})
+		case "/session/ses_b/message":
+			if r.URL.Query().Get("directory") != b {
+				t.Error("history read outside the session's directory")
+			}
+			w.Write([]byte(`[]`))
 		case "/session/status":
 			statuses.Add(1)
 			switch r.URL.Query().Get("directory") {

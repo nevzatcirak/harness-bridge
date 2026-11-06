@@ -194,3 +194,31 @@ func TestHistoryPageOrderingAndLegacy(t *testing.T) {
 		t.Fatal("oversized page accepted")
 	}
 }
+
+// F-5: the one predicate shared by send_prompt admission and discovery.
+func TestUnfinishedAssistant(t *testing.T) {
+	msg := func(role string, completed int64) Message {
+		m := Message{}
+		m.Info.Role = role
+		m.Info.Time.Created = 1
+		m.Info.Time.Completed = completed
+		return m
+	}
+	for _, tc := range []struct {
+		name string
+		msgs []Message
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", []Message{}, false},
+		{"completed", []Message{msg("user", 0), msg("assistant", 2)}, false},
+		{"user without completion", []Message{msg("user", 0)}, false},
+		{"unfinished last", []Message{msg("user", 0), msg("assistant", 0)}, true},
+		{"unfinished earlier", []Message{msg("assistant", 0), msg("user", 0), msg("assistant", 3)}, true},
+		{"negative completion", []Message{msg("assistant", -1)}, true},
+	} {
+		if got := UnfinishedAssistant(tc.msgs); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
