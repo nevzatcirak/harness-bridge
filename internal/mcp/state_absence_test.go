@@ -146,6 +146,8 @@ func TestStateAbsenceSameDirectory(t *testing.T) {
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: rootA})
 		case "/session/ses_b":
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_b", Directory: rootB})
+		case "/session/ses_a/message", "/session/ses_b/message":
+			w.Write([]byte(`[]`))
 		default:
 			w.WriteHeader(404)
 		}

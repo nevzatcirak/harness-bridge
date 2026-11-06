@@ -53,6 +53,8 @@ func TestRepositoryDiscovery(t *testing.T) {
 			w.Write([]byte(`[{"name":"build","mode":"primary"},{"name":"explore","mode":"subagent"},{"name":"internal","mode":"primary","hidden":true}]`))
 		case "/doc":
 			w.Write([]byte(`{"paths":{"/session":{"post":{}},"/session/{sessionID}/children":{"get":{}}}}`))
+		case "/session/ses_a/message":
+			w.Write([]byte(`[]`)) // F-5 history check for the idle session
 		case "/session/ses_b/message":
 			if r.URL.Query().Get("directory") != root || r.URL.Query().Get("limit") != "1" || r.URL.Query().Get("before") != "msg_cursor" {
 				t.Error("pagination scope", r.URL)
@@ -192,6 +194,8 @@ func TestStateEvidence(t *testing.T) {
 					} else {
 						w.Write([]byte(tc.permissions))
 					}
+				case "/session/ses_a/message":
+					w.Write([]byte(`[]`))
 				default:
 					json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: root})
 				}

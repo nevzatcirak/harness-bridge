@@ -364,7 +364,8 @@ prompted session.
 
 Session fields gain optional repository/workspace objects, parent_session_id,
 harness_instance_id, native_project_id, native_workspace_id, native_state and
-native_state_inferred_from_absence. Existing required fields remain. Omitted
+native_state_inferred_from_absence, and (F-5, 2026-11-06) native_unfinished_message.
+Existing required fields remain. Omitted
 native_state means native status was unavailable (failed read); see "Session state
 and the Bridge guard" for when absence from a successful read is reported as idle.
 
@@ -405,6 +406,37 @@ read gives `unknown`; otherwise a pending native permission for the session give
   session at all, so it is always reported `unknown` without `native_state`
   (a held Bridge guard maps as for a failed permission read: `unknown`). Its
   repository/workspace objects still come from local filesystem inspection.
+- **Unfinished native assistant message (F-5, 2026-11-06):** an OpenCode restart
+  during a tool call can leave an assistant message without `time.completed` while
+  the session is absent from native status. `send_prompt` admission refuses such a
+  session (`SESSION_BUSY`, "unfinished native assistant message"), so discovery must
+  not call it idle. When the rules above would give `state: "idle"` (observed or
+  inferred native idle, permission read succeeded, none pending), the Bridge reads the
+  session's native history and applies the same predicate admission uses
+  (`opencode.UnfinishedAssistant`: any assistant message with
+  `time.completed <= 0`):
+  - an unfinished assistant message gives `state: "unknown"` and
+    `native_unfinished_message: true` (field omitted otherwise);
+  - a history read that fails, times out, is refused by the bounded-call limit or
+    returns a 2xx `null` body gives `state: "unknown"`, never `idle`;
+  - all assistant messages completed (or none) leaves `idle` unchanged.
+  `native_state` and `native_state_inferred_from_absence` are reported as before. A
+  held Bridge guard still wins (state follows the guard). Pending-permission,
+  busy/retry and workspace-bound sessions are not idle, so their history is not read
+  for state and their state is unchanged. History reads go through the F-3
+  `internal/bounded` policy: one in-flight read per (endpoint, directory, session,
+  page size), at most 8 running, each bounded to 3 s.
+  - **`get_session` is authoritative:** it reads the full history, exactly as
+    admission does.
+  - **`list_sessions` / `find_sessions` read only the latest page:** they use
+    OpenCode's bounded latest-page route (`GET /session/{id}/message?limit=10`; OpenCode
+    1.19.4 `148842ef`, `packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts:106-128`
+    and `packages/opencode/src/session/message-v2.ts:438-479`, newest rows by
+    `time_created DESC` with `LIMIT n+1`). At most four reads run at once, and the
+    whole phase is bounded to 3 s. Sessions not checked within it are `unknown`;
+    the listing itself does not fail. An unfinished assistant message older than
+    the latest 10 messages is not seen there, so list/find may show `idle` where
+    admission refuses. Call `get_session` before a mutation.
 
 The guard is per Bridge process: another Bridge or native client is not visible
 (ADR-010). The guard is read without native I/O. Session state is a non-atomic

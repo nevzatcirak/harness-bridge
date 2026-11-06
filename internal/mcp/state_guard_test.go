@@ -163,6 +163,8 @@ func discoveryUpstream(t *testing.T, root, status, permissions string) *opencode
 				return
 			}
 			w.Write([]byte(permissions))
+		case "/session/ses_a/message":
+			w.Write([]byte(`[]`)) // F-5: no unfinished assistant message
 		default:
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: root})
 		}
