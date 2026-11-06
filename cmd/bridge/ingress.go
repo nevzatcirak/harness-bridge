@@ -11,6 +11,9 @@ type ingress struct {
 	addr, cert, key string
 	remote          *security.Remote
 	readOnly        bool
+	// maxLifetime is BRIDGE_TOKEN_MAX_LIFETIME (ADR-019), default 24h. It is
+	// validated in every mode and sets the minimum token length.
+	maxLifetime time.Duration
 }
 
 // Resolve the complete ingress configuration before any listener is opened.
@@ -28,6 +31,10 @@ func readIngress(env func(string) string) (ingress, error) {
 	if c.addr == "" {
 		c.addr = "127.0.0.1:8080"
 	}
+	var err error
+	if c.maxLifetime, err = security.ParseTokenMaxLifetime(env("BRIDGE_TOKEN_MAX_LIFETIME")); err != nil {
+		return c, err
+	}
 	if env("BRIDGE_PUBLIC_ORIGIN") != "" || env("BRIDGE_PRINCIPAL") != "" || env("BRIDGE_TOKEN_EXPIRES") != "" || c.cert != "" || c.key != "" {
 		if c.cert == "" || c.key == "" {
 			return c, errors.New("remote mode requires TLS certificate and key")
@@ -36,7 +43,7 @@ func readIngress(env func(string) string) (ingress, error) {
 		if err != nil {
 			return c, errors.New("BRIDGE_TOKEN_EXPIRES must be RFC3339")
 		}
-		c.remote, err = security.NewRemote(env("BRIDGE_PUBLIC_ORIGIN"), env("BRIDGE_PRINCIPAL"), expires)
+		c.remote, err = security.NewRemoteWithMaxLifetime(env("BRIDGE_PUBLIC_ORIGIN"), env("BRIDGE_PRINCIPAL"), expires, c.maxLifetime)
 		if err != nil {
 			return c, err
 		}
