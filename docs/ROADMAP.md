@@ -856,3 +856,13 @@ maintainer decides):
 - F-6: issue [#79](https://github.com/nevzatcirak/harness-bridge/issues/79), PR [#84](https://github.com/nevzatcirak/harness-bridge/pull/84).
 - F-7: issue [#78](https://github.com/nevzatcirak/harness-bridge/issues/78), PR [#83](https://github.com/nevzatcirak/harness-bridge/pull/83) (ADR-018, PROPOSED).
 - Connector token lifetime: issue [#80](https://github.com/nevzatcirak/harness-bridge/issues/80), PR [#81](https://github.com/nevzatcirak/harness-bridge/pull/81) (ADR-019, PROPOSED).
+
+## Finding F-6 2026-11-06: orphan assistant message recovery
+
+An OpenCode restart during a running tool call leaves an assistant message
+without `time.completed`. Native abort does not clear it, and the Bridge then
+refuses every `send_prompt` for the session with `SESSION_BUSY: unfinished native
+assistant message` (P2, R5/R5b). Detection and the maintainer-only native
+deletion procedure are in
+[`docs/deploy/ORPHAN_MESSAGE_RECOVERY.md`](deploy/ORPHAN_MESSAGE_RECOVERY.md).
+The discovery side is F-5 (PR #82).
