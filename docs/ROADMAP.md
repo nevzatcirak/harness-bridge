@@ -866,3 +866,123 @@ assistant message` (P2, R5/R5b). Detection and the maintainer-only native
 deletion procedure are in
 [`docs/deploy/ORPHAN_MESSAGE_RECOVERY.md`](deploy/ORPHAN_MESSAGE_RECOVERY.md).
 The discovery side is F-5 (PR #82).
+
+## Status 2026-11-07 (consolidated)
+
+Recorded against `main` `22264de340afde912bdf2161ac66a7478581cd6a` (DOC-ROADMAP-STATUS,
+issue #106). Append only: no earlier section is edited. Statements above that are
+no longer true are listed under "Superseded statements" with the current fact.
+Merge SHAs come from `gh pr view <n> --json mergeCommit` and match
+`git log --merges` on `main`.
+
+### Current state
+
+- **MVP accepted** on revision `692992d`, including R5b:
+  - [`docs/evidence/R5_EVIDENCE_2026-11-05.md`](evidence/R5_EVIDENCE_2026-11-05.md)
+    ("R5: PASS. MVP accepted on revision `692992d`, with ONE recorded gap");
+  - [`docs/evidence/R5B_EVIDENCE_2026-11-06.md`](evidence/R5B_EVIDENCE_2026-11-06.md)
+    ("R5b: PASS. MVP accepted on revision `692992d`, including R5b"), which
+    closes that gap (live permission-wait detection).
+- **`main`** is `22264de` (PR #99) when this section was written. It contains
+  every change listed below.
+- **Live writer:** still the R5 binary built from `692992d`
+  (`/usr/local/libexec/harness-bridge-r5`, sha256 `d9837334…63b7`, as recorded in
+  the R5 and R5b evidence). It predates F-3 bounding (#55, #67), ADR-017 (a)
+  (#56), F-5 (#82), ADR-018 (d) (#99) and ADR-019 (2) (#100). Promotion of `main`
+  (H4) is pending and needs its own acceptance.
+
+### Merged since 2026-11-05
+
+| PR | Merged (UTC) | Merge SHA | Scope |
+| --- | --- | --- | --- |
+| [#70](https://github.com/nevzatcirak/harness-bridge/pull/70) | 2026-11-05 16:27 | `e605d67dd1ec9deee3f24f8b26b5da51caee4ead` | DOC-STATUS-02: "Status 2026-11-05" section |
+| [#67](https://github.com/nevzatcirak/harness-bridge/pull/67) | 2026-11-05 18:07 | `868675a4ea52dd9d8adab6a0ea5037550f1419e3` | EXEC-FS-BOUND-IMPL: bounded workspace filesystem checks in `internal/execution` (F-3 execution part); early `ctx.Err()` in `bounded.Do` |
+| [#75](https://github.com/nevzatcirak/harness-bridge/pull/75) | 2026-11-06 05:19 | `fb298ed0a5457f3cf0aeb8ba5b3efe7019f36e0d` | DOC-R5-EVIDENCE: R5 evidence and runbook; "R5 result 2026-11-06" |
+| [#82](https://github.com/nevzatcirak/harness-bridge/pull/82) | 2026-11-06 11:19 | `15dc66faafe51da79349aefb6fd5ca926fa4b9f3` | F-5: discovery reports `unknown` and `native_unfinished_message` for an unfinished native assistant message; shared `opencode.UnfinishedAssistant` |
+| [#81](https://github.com/nevzatcirak/harness-bridge/pull/81) | 2026-11-06 11:19 | `50ba68805c652d68ffc02dde52dd54af424b6976` | ADR-019 connector token lifetime (merged as PROPOSED) |
+| [#83](https://github.com/nevzatcirak/harness-bridge/pull/83) | 2026-11-06 11:22 | `42f128d1c44e632bb3f996fae94848ff5080c78f` | ADR-018 F-7 permission rejection outcome (merged as PROPOSED) |
+| [#90](https://github.com/nevzatcirak/harness-bridge/pull/90) | 2026-11-06 12:15 | `c9ce216c3c05f50aaeda0dffff2c7580e9baed48` | DOC-R5B-EVIDENCE: R5b evidence and runbook; "R5b result … MVP accepted incl. R5b" |
+| [#93](https://github.com/nevzatcirak/harness-bridge/pull/93) | 2026-11-06 13:05 | `6bb0862a72734141c5fa974550a5362babb499d8` | F-5 review follow-ups: ErrBusy test, guard short-circuit, BACKLOG entries |
+| [#84](https://github.com/nevzatcirak/harness-bridge/pull/84) | 2026-11-06 13:48 | `9f9775268fba7bb843a6877094e10d2c06fd71e8` | F-6: `docs/deploy/ORPHAN_MESSAGE_RECOVERY.md` (maintainer-only native deletion), review fixes |
+| [#100](https://github.com/nevzatcirak/harness-bridge/pull/100) | 2026-11-06 21:11 | `7280906383bf1308a3c82954df1b08228f690df2` | ADR-019 option (2) accepted and implemented: `BRIDGE_TOKEN_MAX_LIFETIME` (default 24h, ceiling 720h) |
+| [#99](https://github.com/nevzatcirak/harness-bridge/pull/99) | 2026-11-06 21:14 | `22264de340afde912bdf2161ac66a7478581cd6a` | ADR-018 option (d) on (a) accepted and implemented: report-only `permission_rejection` evidence |
+
+### ADR status
+
+| ADR | Status | Record |
+| --- | --- | --- |
+| ADR-015, ADR-016 | Referenced in `docs/` but absent from `docs/adr`; treated as reserved | — |
+| ADR-017 | ACCEPTED, option (a) (report-only liveness) | [D-ADR017-A](decisions/D-ADR017-A.md); #56 |
+| ADR-018 | ACCEPTED, option (d) built on (a); §5 (pending-permission detail, P3) still PROPOSED | issue [#97](https://github.com/nevzatcirak/harness-bridge/issues/97); #99 |
+| ADR-019 | ACCEPTED, option (2) | issue [#98](https://github.com/nevzatcirak/harness-bridge/issues/98); #100 |
+| ADR-020 | PROPOSED (guard recovery without a Bridge restart) | PR [#107](https://github.com/nevzatcirak/harness-bridge/pull/107) (open) |
+
+### Superseded statements
+
+Each quote below is unchanged in its section; the current fact replaces it.
+
+1. "Status 2026-11-04 …" table: "| R5 | Pending | — |". **Now:** R5 PASS
+   (2026-11-06) and R5b PASS; MVP accepted on `692992d` (sections "R5 result
+   2026-11-06" and "R5b result 2026-11-06").
+2. Same section: "Open: PR #22 FIX-FIXTURE-03, PR #23 AUDIT-01." **Now:** both
+   merged: #22 `34541b1`, #23 `692992d` (table in "Status 2026-11-05").
+3. "Backlog (recorded 2026-11-04)": "PR #23 AUDIT-01 open". **Now:** merged
+   (`692992d`); the AUDIT-01 line is the live writer's journal format.
+4. "Backlog (recorded 2026-11-04)": "F-2 and F-3 open (below)". **Now:** F-3 is
+   closed (#41, #55, #67). F-2 is mitigated, and its P2 residual stays open (see
+   "Open items").
+5. "Status 2026-11-05": "**Open:** PR #67 EXEC-FS-BOUND-IMPL". **Now:** merged
+   (`868675a`).
+6. "Status 2026-11-05" → "H4-A promotion gate", F-3 row: "execution part open …
+   PR #67 (open)". **Now:** closed by #67.
+7. "Status 2026-11-05" → "R5": "**IN PROGRESS. The MVP is not accepted.**", and
+   "4. Connection loss | Pending" / "Corroboration | Pending". **Now:** R5 PASS.
+   Step 4 attempt 2 passed (typed `unknown`, no promotion or resubmission), and
+   corroboration passed (R5-CORROBORATE, issue #73), as recorded in the R5
+   evidence file. The MVP is accepted including R5b.
+8. "Status 2026-11-05" → "Backlog (P3 …)": "`bounded` select: check `ctx.Err()`
+   first … addressed in PR #67 (open)". **Now:** closed by #67 (`bounded.Do`
+   returns `ErrTimeout` for an already-cancelled caller).
+9. "R5b result 2026-11-06": "every ADR below stays PROPOSED", "(ADR-018,
+   PROPOSED)", "(ADR-019, PROPOSED)". **Now:** ADR-018 is ACCEPTED ((d) on (a),
+   §5 PROPOSED) and ADR-019 is ACCEPTED (option (2)). The F-5 (#82) and F-6 (#84)
+   PRs listed there are merged.
+10. "Finding F-6 2026-11-06": "The discovery side is F-5 (PR #82)." **Now:**
+    #82 is merged (`15dc66f`).
+
+### Open items (deduplicated)
+
+| Sev | Item | Status | Record |
+| --- | --- | --- | --- |
+| P2 | F-2 residual: `send_prompt` preflight (`internal/execution`) still does directory-scoped status and permission reads for workspace-bound sessions; `?workspace=` routing unverified | Open | #45 merge record; `docs/design/F2_WORKSPACE_ROUTING.md` (#50) |
+| P2 | Guard held on `unknown` until a Bridge restart (ADR-010); R5, R5b and F-6 each needed a restart | Proposal open | ADR-020, PR [#107](https://github.com/nevzatcirak/harness-bridge/pull/107) |
+| P3 | `reconcile.go:396-399` reports `running` on an explicit native `idle` without terminal proof (unreachable on OpenCode 1.19.4) | Open | `docs/BACKLOG.md` (#93); #99 left it unchanged |
+| P3 | No test for a guard released between `needsHistory` and `view` (fail-closed today; mutation Y1 survives) | Open | R93-REVIEW [#95](https://github.com/nevzatcirak/harness-bridge/issues/95) finding 1 |
+| nit | #95 nit 2: the busy-slot test depends on timing | Open | [#95](https://github.com/nevzatcirak/harness-bridge/issues/95) |
+| nit | F-6 runbook: "on every connection" wording (`ORPHAN_MESSAGE_RECOVERY.md:120-122`); no ready GET command in Step 2.1 | Open | R84-REREVIEW [#96](https://github.com/nevzatcirak/harness-bridge/issues/96) nits 1–2 |
+| nit | ADR-019 implementation: startup error order changed; no deterministic test at the exact expiry boundary | Open | R100-REVIEW [#102](https://github.com/nevzatcirak/harness-bridge/issues/102) nits 1–2 |
+| P3 | Process: `go test -race -count=20 ./internal/execution` takes about 633 s; gate commands need `-timeout 30m` | Open | R99-REVIEW [#101](https://github.com/nevzatcirak/harness-bridge/issues/101) finding 2 |
+| nit | ADR-018 block can appear while native is still `busy` / `retry`; not stated in CONTRACTS | Open | [#101](https://github.com/nevzatcirak/harness-bridge/issues/101) finding 1 |
+| P3 | `//go:linkname` references evade the identifier lint (hostile code only) | Open | #57 merge record; review #60 P3-1 |
+| P3 | CI reason match per output event: a split reason fails CI (never passes silently) | Open | #57 merge record; review #60 P3-2 |
+| P3 | Local-worktree workspace sessions report `unknown` where the directory instance could answer (safe direction) | Open | #45 merge record |
+| — | ADR-011 live late completion | NOT_EXERCISED (R3a, R5, R5b) | R5 and R5b evidence |
+| — | ADR-018 `native_event` unreachable until the permission observer is wired | Disclosed | #101 finding 3; CONTRACTS ADR-018 section |
+| — | Research: P6 Claude Code adapter feasibility | In progress (Worker B) | issue [#103](https://github.com/nevzatcirak/harness-bridge/issues/103) |
+| — | Research: P4-PERM trusted human approval channel from Claude Chat | In progress (Worker C) | issue [#104](https://github.com/nevzatcirak/harness-bridge/issues/104) |
+
+**Closed since the 2026-11-05 list:**
+- The `bounded` `ctx.Err()` P3 was closed by #67.
+- The #85 findings 1–2 (ErrBusy test, guard short-circuit) were closed by #93.
+- The #88 findings 1–4 (F-6 runbook) were closed in #84, as confirmed by
+  [#96](https://github.com/nevzatcirak/harness-bridge/issues/96).
+- The #86 findings 1–2 (ADR-018 wording and citation) were closed by #99.
+
+### Next phases (in order)
+
+1. Research: P6 (#103) and P4-PERM (#104).
+2. H4 promotion of `main` as the live writer, with its own acceptance run
+   (the live writer is still `692992d`).
+3. ADR-020 implementation, if the maintainer accepts it.
+4. Phase 7 (workspace discovery, selection, launcher, session observatory),
+   later.
