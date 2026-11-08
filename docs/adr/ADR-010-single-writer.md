@@ -112,3 +112,13 @@ a still-running manager: known unresolved submissions can be reconciled by bound
 status/result reads, without resubmission. Background workers still stop on their
 budget; host ownership, the one-writer deployment decision and memory-only restart
 limitations above remain unchanged. No new live migration was performed.
+
+## Guard release follow-up (2026-11-08)
+
+[ADR-020](ADR-020-guard-recovery-without-restart.md) option (b), accepted
+2026-11-08, adds an operator-only fenced release of one session's busy guard
+through a private admin socket that only this writer opens. It replaces the
+restart as the first recovery step for a guard stuck on `unknown`. It keeps
+every in-memory execution, idempotency key and fingerprint, and it does not
+touch the lock files above. The restart, with the fenced procedure and the
+"never reuse a key across a restart" rule, stays the fallback.

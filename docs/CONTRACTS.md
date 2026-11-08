@@ -381,6 +381,123 @@ write is added. Like all execution records it is process-local: a restart loses
 it with the execution. Pending-permission detail (ADR-018 §5) is PROPOSED and
 not implemented.
 
+## ADR-020 operator guard release (option (b), accepted 2026-11-08)
+
+A guard stuck on `unknown` can be released for **one** session by the operator,
+on the host, without a Bridge restart. This is **not** an MCP tool: the eleven
+tool names and their schemas are unchanged, there is no TCP or HTTP listener for
+it, and the remote connector cannot reach it. The Chat principal can never
+release a guard.
+
+**Admin socket.** Set `BRIDGE_ADMIN_SOCKET` to an absolute path. The writer
+opens it after it acquires writer ownership (ADR-010); read-only ingress never
+opens it (the variable is ignored, with one log line). Startup fails unless the
+parent directory is owned by the service user with mode exactly `0700`. A stale
+socket at the path is replaced only if it is a socket owned by the service user;
+any other file there fails startup. The socket is created with mode `0600`.
+Each connection must come from the service user's UID (`SO_PEERCRED`); root uses
+`sudo -u <service user>`. One newline-delimited JSON request per connection, at
+most 4096 bytes, read within 5 s; the connection is closed after 60 s. Unknown
+JSON fields are refused, so no free-text reason can be sent. Unset variable: no
+socket, no release path.
+
+**CLI** (same binary, runs as a client and needs none of the server's secrets):
+
+```
+sudo -u <service user> env BRIDGE_ADMIN_SOCKET=<path> \
+  bridge admin release-guard --session opencode:ses_<id> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message]
+```
+
+`--socket <path>` overrides `BRIDGE_ADMIN_SOCKET`. `--ticket` is required and
+must match `[A-Za-z0-9._-]{1,64}`. The command prints the JSON response and
+exits `0` when released, `1` when refused or the socket is unreachable, `2` on
+a usage error (also for a bad ticket, checked before connecting).
+
+Response:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `released` or `refused` |
+| `session_id`, `execution_id` | echoed only when well formed |
+| `evidence.native_read` | whether a native read happened |
+| `evidence.native_state` | `absent`, `idle`, `busy`, `retry`, `unknown` (last read) |
+| `evidence.unfinished`, `evidence.permission_pending` | from the last read |
+| `evidence.correlated_user` | `found` or `absent` |
+| `evidence.settle_ms` | settle interval used (5000) |
+| `evidence.guard_released_at` | Bridge time of the release (released only) |
+| `error` | the typed error (`code`, `message`, `retryable`) when refused |
+
+**Preconditions, all checked by the Bridge** (the operator's word is not
+enough):
+1. the guard of the session is held by exactly this execution (compare-and-swap);
+2. the execution is `unknown` and its background monitor has ended;
+3. a fresh native read, holding the execution's `x.op` token: identity and
+   workspace check before and after the reads, native status absent or `idle`,
+   no unfinished assistant anywhere in the full history (F-5 predicate), no
+   pending permission for the session;
+4. the correlated user message exists, or `--allow-missing-user-message` was
+   given (the lost-Prompt case; audited);
+5. after a 5 s settle interval, during which `x.op` is **not** held (status
+   polls and interrupts proceed normally), checks 1-2 are repeated, then a
+   second read repeats check 3-4 and must show the same message IDs and the same
+   status;
+6. a final compare-and-swap and state check under the run and manager locks,
+   still holding `x.op`, then the guard is deleted.
+
+**Failure codes:**
+
+| Code | When |
+| --- | --- |
+| `INVALID_INPUT` | malformed or oversized request, unknown field, bad ticket, bad session or execution ID, guard not held by this execution (including a newer execution holding it), execution not `unknown` or monitor still running, correlated user message absent without the override |
+| `SESSION_BUSY` | native status `busy`, `retry` or unsupported; unfinished assistant; pending permission; native evidence changed during the settle interval |
+| `FORBIDDEN` | peer is not the service UID; session identity or workspace changed |
+| `UPSTREAM_TIMEOUT` | a native read or workspace check did not complete within the 5 s bound (retryable) |
+| `UPSTREAM_FAILURE` | a native read failed (retryable) |
+| `UNKNOWN_OUTCOME` | the manager is shutting down |
+
+Every refusal leaves the guard and the execution unchanged.
+
+**Effect.** Only the guard is deleted and the additive execution field
+`guard_released_at` is set. `state`, `error`, `unresolved`, `ended_at`,
+`updated_at`, idempotency keys, fingerprints and the ADR-010 lock files are
+unchanged. The old key still replays the same `unknown` execution and never
+submits again; a different payload with it still conflicts. A new key goes
+through the normal admission preflight. ADR-011 promotion of the old execution
+remains possible; its guard delete is conditional on the guard still naming that
+execution, so it never removes a newer execution's guard.
+
+**Audit.** Exactly one AUDIT-01 line per request, on every return path,
+including refused peers and malformed requests:
+
+| Key | Values | Notes |
+| --- | --- | --- |
+| msg | `guard release` | |
+| event | `guard_release` | |
+| tool | `admin` | never an MCP tool name |
+| outcome | `released`, `refused` | |
+| accepted | `true`, `false` | `true` exactly for `released` |
+| error_code | typed code above | refused only |
+| session_id, execution_id | as in AUDIT-01 | only when well formed |
+| native_state, unfinished, permission_pending, correlated_user | as in the response | only when a native read happened |
+| settle_ms | integer | only when the settle interval was used |
+| allow_missing_user_message | `true` | only when the override was requested |
+| ticket | `[A-Za-z0-9._-]{1,64}` | only when valid; an invalid ticket is refused and never logged |
+| principal | `admin:uid=<n>` | peer UID from `SO_PEERCRED`; `admin:uid=unknown` if it could not be read |
+
+No free text, no prompt or history content. Synthetic examples:
+
+```
+INFO guard release event=guard_release tool=admin outcome=released accepted=true session_id=opencode:ses_example execution_id=0f1e2d3c4b5a69788796a5b4c3d2e1f0 native_state=absent unfinished=false permission_pending=false correlated_user=found settle_ms=5000 ticket=OPS-1234 principal=admin:uid=998
+INFO guard release event=guard_release tool=admin outcome=refused accepted=false error_code=SESSION_BUSY session_id=opencode:ses_example execution_id=0f1e2d3c4b5a69788796a5b4c3d2e1f0 native_state=busy unfinished=false permission_pending=false correlated_user=found ticket=OPS-1234 principal=admin:uid=998
+```
+
+**Limits.** The release cannot prove what happened to the original prompt; it
+makes the operator's decision explicit, local, audited and per session. The
+override leaves a residual double-submission risk if a lost Prompt arrives late.
+The settle interval is a heuristic, not a native lease. Like all execution
+records, `guard_released_at` is process-local. Token rotation (ADR-019) still
+needs a restart. Live acceptance (ADR-020 §4) is not yet recorded.
+
 ## H4-A additive discovery contracts (not deployed)
 
 - `list_repositories {}` -> `{repositories:[{repository_id,common_directory}]}`.
