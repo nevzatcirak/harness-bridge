@@ -18,6 +18,10 @@ type fake struct {
 	mid                                     string
 	entered, release                        chan struct{}
 	nativeStatus                            *opencode.Status // overrides status when set
+	// quiesced is a message ID whose native turn ended without a terminal
+	// reply (an OpenCode restart, F-6, or a rejected permission, F-7): the
+	// session reads idle again although the prompt has no terminal reply.
+	quiesced string
 	// Native read counters (ADR-017 §3(a): liveness adds no native read).
 	gets, statusReads, historyReads, permissionReads int
 }
@@ -147,7 +151,7 @@ func complete(f *fake, mid, finish, errorJSON string) {
 // inTurn reports a submitted, delivered prompt without a terminal reply.
 // Caller holds f.mu.
 func (f *fake) inTurn() bool {
-	if f.mid == "" || f.fail {
+	if f.mid == "" || f.fail || f.mid == f.quiesced {
 		return false
 	}
 	for _, msg := range f.messages {

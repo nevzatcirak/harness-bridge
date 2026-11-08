@@ -64,6 +64,9 @@ func releaseFixtureWith(t *testing.T, r Runner) (*Manager, Execution) {
 	for {
 		v, err := m.Snapshot(context.Background(), x.ID)
 		if err == nil && v.MonitorEndedAt != nil && v.State == "unknown" {
+			// The stuck case ADR-020 (b) addresses: the native turn ended
+			// without a terminal reply, so the session is idle again.
+			quiesce(t, r)
 			return m, v
 		}
 		if time.Now().After(deadline) {
@@ -71,6 +74,21 @@ func releaseFixtureWith(t *testing.T, r Runner) (*Manager, Execution) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// quiesce marks the fake's current turn as ended without a terminal reply.
+func quiesce(t *testing.T, r Runner) {
+	t.Helper()
+	var f *fake
+	switch v := r.(type) {
+	case *fake:
+		f = v
+	case *releaseRunner:
+		f = v.fake
+	default:
+		t.Fatalf("quiesce: unsupported runner %T", r)
+	}
+	locked(f, func() { f.quiesced = f.mid })
 }
 
 // wantKept checks that a refused release left the guard and the record alone.
@@ -335,6 +353,17 @@ func TestReleaseLateCompletionKeepsNewerGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// While the newer turn is natively busy it blocks the old promotion (the
+	// ADR-020 safety argument). Let its Prompt land, then let it go quiet, so
+	// the old correlated proof can promote while the newer guard is held.
+	deadline := time.Now().Add(2 * time.Second)
+	for sends(f) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("newer Prompt not invoked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	quiesce(t, f)
 	complete(f, old.MessageID, "stop", "")
 	done := waitState(t, m, old.ID, "completed")
 	if done.Ended == nil || done.GuardReleasedAt == nil {
