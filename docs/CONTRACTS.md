@@ -152,6 +152,17 @@ Token lifetime (ADR-019 option (2), accepted 2026-11-06):
 - Expiry is still enforced on every request (`401`,
   `error="invalid_token"`), and the expiry or lifetime cannot change without a
   Bridge restart.
+- Startup error order (fixed 2026-11-08, #102 nit 1): the token and the ingress
+  are checked before any other secret is read or a native client is built. The
+  first error reported is, in this order: `BRIDGE_TOKEN` / `BRIDGE_TOKEN_FILE`
+  access; a token shorter than 32 characters, a missing token included
+  (`BRIDGE_TOKEN must be at least 32 characters`, as before ADR-019); the
+  ingress settings (`BRIDGE_READ_ONLY`, `BRIDGE_TOKEN_MAX_LIFETIME`, remote
+  mode); the 43-character rule above `24h`; then `OPENCODE_SERVER_PASSWORD`
+  and the remaining settings.
+- The expiry bound is inclusive and read against one clock sample: an expiry
+  exactly `BRIDGE_TOKEN_MAX_LIFETIME` after startup is accepted, a later one is
+  rejected, and an expiry at or before startup is rejected.
 
 
 Optional `BRIDGE_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
@@ -257,6 +268,14 @@ session/workspace/user/assistant-parent/positive-completed-time/final-finish-or-
 named-error proof, no correlated unfinished assistant and no pending permission.
 A missing native status is acceptable ONLY with that full terminal evidence.
 Pending permission remains waiting_for_permission and cannot release the guard.
+
+While the background monitor runs and there is no terminal proof, native
+status `busy` or `retry` reports `running`. An absent entry, an explicit `idle`
+entry or an unsupported status reports `unknown` with `unresolved.reason =
+OBSERVATION_UNAVAILABLE`; explicit `idle` is treated exactly like absent and is
+never reported as `running` (#86 finding 3, changed 2026-11-08; earlier builds
+reported `running` for an explicit `idle` entry). OpenCode 1.19.4 deletes idle
+entries from `/session/status`, so it only ever shows the absent case.
 
 The original unresolved reason/since are retained while late checks remain
 inconclusive; the error string gives a sanitized current explanation. Identity

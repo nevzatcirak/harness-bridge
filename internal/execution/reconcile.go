@@ -400,8 +400,10 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	if x.monitorDone {
 		unresolved(x, "MONITOR_EXPIRED", "native terminal evidence remains inconclusive", now, true)
 		x.view.Unresolved.LastCheckedAt = &now
-	} else if !exists || (status.Type != "idle" && status.Type != "busy" && status.Type != "retry") {
-		unresolved(x, "OBSERVATION_UNAVAILABLE", "native status absent or unsupported without terminal proof", now, false)
+	} else if !exists || (status.Type != "busy" && status.Type != "retry") {
+		// An explicit idle entry without terminal proof is treated exactly like
+		// an absent one: never reported as running (#86 finding 3).
+		unresolved(x, "OBSERVATION_UNAVAILABLE", "native status absent, idle or unsupported without terminal proof", now, false)
 	} else {
 		x.view.State = "running"
 		x.view.Error = ""

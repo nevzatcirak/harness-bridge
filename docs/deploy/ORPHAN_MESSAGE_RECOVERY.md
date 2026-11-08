@@ -60,7 +60,23 @@ Do every step here before considering Step 3. None of them change state.
    - native, on the host:
      `GET /session/<SESSION_ID>/message?directory=<SESSION_DIRECTORY>`.
      Authenticate as in the Step 3 command shape (credential via curl's stdin
-     config, never on the command line).
+     config, never on the command line). Ready-made command, the Step 3 shape
+     without `-X DELETE`. **Run in bash**; every `<…>` is a placeholder:
+     ```bash
+     set +o history   # keep the commands out of shell history
+     set +x           # no xtrace: a traced printf line would print the password
+     PWFILE=<OPENCODE_SERVER_PASSWORD_FILE>   # as configured for the Bridge; see CREDENTIAL_FILES.md
+     SESSION=<SESSION_ID>                     # ses_…
+     DIR=<SESSION_DIRECTORY>                  # the session's own directory
+     builtin printf 'user = "%s:%s"\n' "${OPENCODE_SERVER_USERNAME:-opencode}" "$(<"$PWFILE")" \
+       | curl --silent --show-error --fail-with-body --config - \
+           --get --data-urlencode "directory=$DIR" \
+           "http://127.0.0.1:<OPENCODE_PORT>/session/$SESSION/message" \
+       > <READ_ONLY_COPY>.json
+     ```
+     The output is the full history; keep it as the read-only copy Step 3
+     asks for. Never use `-u user:password`, which puts the password in the
+     process list.
 
    Select assistant messages without completion:
    ```sh
@@ -118,7 +134,7 @@ What the source does:
   usage. Its parts are removed by `ON DELETE CASCADE`
   (`core/src/session/projector.ts:274-292`, `core/src/session/sql.ts:82-90`).
   SQLite enforces the cascade only with foreign keys enabled; OpenCode enables
-  them on every connection (`core/src/database/database.ts:31`,
+  them when it opens its database (`core/src/database/database.ts:31`,
   `PRAGMA foreign_keys = ON`).
 - The route description says: "Permanently delete a specific message and all of
   its parts from a session without reverting file changes"

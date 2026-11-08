@@ -59,6 +59,17 @@ func wouldBeIdle(v opencode.Session, d directoryEvidence) bool {
 	return !listed || native.Type == "idle"
 }
 
+// guardWindowHook runs, in tests only, after the needsHistory decisions and
+// before view, so a test can release a guard inside that window (#95 finding 1).
+// It is nil in production.
+var guardWindowHook func()
+
+func runGuardWindowHook() {
+	if guardWindowHook != nil {
+		guardWindowHook()
+	}
+}
+
 // needsHistory reports whether v's state depends on a history check: native
 // evidence alone would make it idle and this Bridge holds no guard for it. A
 // held guard decides the state anyway (view), so its history is not read. If

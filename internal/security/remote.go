@@ -74,6 +74,13 @@ func NewRemote(origin, principal string, expires time.Time) (*Remote, error) {
 // is more than maxLifetime from now. This is a startup check; Check still
 // refuses every request once the expiry has passed.
 func NewRemoteWithMaxLifetime(origin, principal string, expires time.Time, maxLifetime time.Duration) (*Remote, error) {
+	return newRemoteAt(origin, principal, expires, maxLifetime, time.Now())
+}
+
+// newRemoteAt is NewRemoteWithMaxLifetime at a given instant, read once, so
+// the boundary is deterministic: an expiry exactly maxLifetime after now is
+// accepted, one nanosecond later is not, and an expiry equal to now is not.
+func newRemoteAt(origin, principal string, expires time.Time, maxLifetime time.Duration, now time.Time) (*Remote, error) {
 	if err := validMaxLifetime(maxLifetime); err != nil {
 		return nil, err
 	}
@@ -81,7 +88,7 @@ func NewRemoteWithMaxLifetime(origin, principal string, expires time.Time, maxLi
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.ForceQuery || strings.ContainsAny(u.Host, "\\\r\n") {
 		return nil, errors.New("public origin must be an HTTPS origin without path or credentials")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(principal) || !expires.After(time.Now()) || expires.After(time.Now().Add(maxLifetime)) {
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(principal) || !expires.After(now) || expires.After(now.Add(maxLifetime)) {
 		if maxLifetime == DefaultTokenMaxLifetime {
 			return nil, errors.New("named principal and future token expiry within 24 hours required")
 		}

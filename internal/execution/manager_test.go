@@ -60,6 +60,12 @@ func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 	if f.nativeStatus != nil {
 		return map[string]opencode.Status{"ses_test": *f.nativeStatus}, nil
 	}
+	// Like native OpenCode, an idle session is busy while the last submitted
+	// prompt has no terminal reply. Without this an idle fake reads as "idle
+	// without terminal proof", which is not reported as running (#86 finding 3).
+	if f.status == "idle" && f.inTurn() {
+		return map[string]opencode.Status{"ses_test": {Type: "busy"}}, nil
+	}
 	return map[string]opencode.Status{"ses_test": {Type: f.status}}, nil
 }
 func (f *fake) Permissions(context.Context) ([]opencode.Permission, error) {
@@ -136,6 +142,20 @@ func complete(f *fake, mid, finish, errorJSON string) {
 	msg.Info.Time.Completed = 1
 	msg.Info.Error = []byte(errorJSON)
 	f.messages = append(f.messages, msg)
+}
+
+// inTurn reports a submitted, delivered prompt without a terminal reply.
+// Caller holds f.mu.
+func (f *fake) inTurn() bool {
+	if f.mid == "" || f.fail {
+		return false
+	}
+	for _, msg := range f.messages {
+		if msg.Info.Role == "assistant" && msg.Info.ParentID == f.mid && terminalState(msg) != "" {
+			return false
+		}
+	}
+	return true
 }
 func TestTwoTurnsCorrelationAndResults(t *testing.T) {
 	f := &fake{status: "idle"}

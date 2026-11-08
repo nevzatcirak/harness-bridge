@@ -182,6 +182,7 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.C
 		d.history[v.ID] = s.checkUnfinished(check, v, 0)
 		cancel()
 	}
+	runGuardWindowHook()
 	return s.view(v, d, visible)
 }
 
@@ -295,6 +296,7 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 		v := metadata[i]
 		evidence[directoryIndex[groupKey{v.Directory, workspaceBound(v)}]].history[v.ID] = checks[j]
 	}
+	runGuardWindowHook()
 	// Revalidate all paths before projecting either sessions or parent links.
 	// This remains a best-effort observation, not an atomic filesystem snapshot.
 	for i, id := range ids {
