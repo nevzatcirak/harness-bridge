@@ -39,6 +39,7 @@ func snapshot(v Execution) Execution {
 	v.Ended = copyTime(v.Ended)
 	v.MonitorEndedAt = copyTime(v.MonitorEndedAt)
 	v.ReconciledAt = copyTime(v.ReconciledAt)
+	v.GuardReleasedAt = copyTime(v.GuardReleasedAt)
 	if v.LocalFailure != nil {
 		local := *v.LocalFailure
 		v.LocalFailure = &local

@@ -1,7 +1,15 @@
 # ADR-020: Guard recovery without a Bridge restart
 
-Date: 2026-11-07. Status: **PROPOSED**. The maintainer decides; no code change
-is part of this ADR.
+Date: 2026-11-07. Status: **ACCEPTED, option (b)** (operator-only fenced
+release).
+
+**Acceptance note (maintainer, 2026-11-08, via Planning Desk, decision D2):**
+option (b) is accepted and implemented as outlined in §4. Option (c) may follow
+later as a separate amendment, after live evidence from (b). Option (d) is
+rejected. Option (a), the restart, stays the fallback and the token-rotation
+path (ADR-019). The #116 review nit N1 (lock wording of outline steps 6 and 8)
+is folded into §4. The proposal text below is kept as written on 2026-11-07,
+except for that wording and the status lines.
 
 Numbering: `docs/adr` holds ADR-010 to ADR-014 and ADR-017 to ADR-019;
 ADR-015 and ADR-016 are referenced in `docs/` without files and are treated as
@@ -219,7 +227,7 @@ Proposed keys, in addition to the AUDIT-01 keys `event`, `tool`, `outcome`,
 No free-text reason is accepted or logged; the operator's explanation lives in
 the ticket.
 
-## 4. Recommendation (PROPOSED)
+## 4. Recommendation (ACCEPTED 2026-11-08: option (b))
 
 **Adopt (b).** Keep (c) as a possible later amendment once (b) has live
 evidence and the background-job question is verified. Reject (d). Keep (a) as
@@ -234,9 +242,9 @@ the fallback and for token rotation (ADR-019).
      3. take `x.op`; first native read through `x.runner` (Get + `validateSession`, Status, History, Permissions, `revalidateSession`); give `x.op`;
      4. the F-5 predicate, pending permission, correlated user message;
      5. sleep for the settle interval **without** holding `x.op`;
-     6. take `x.op` again; repeat the compare-and-swap and state checks; second native read; give `x.op`. Any check that fails refuses;
+     6. take `x.op` again; repeat the compare-and-swap and state checks; second native read. Any check that fails refuses. `x.op` is **kept** through steps 7 and 8 (there is no sleep there), so no reconcile or interrupt can run between the second read and the delete;
      7. compare the two reads (message IDs, status);
-     8. a final check under `run.mu` and `m.mu`, then delete;
+     8. a final check under `run.mu` then `m.mu` that repeats **both** the compare-and-swap (`busy[session] == executionID`) and `state == unknown` with the monitor ended, then delete; give `x.op` only after this step;
      9. set `guard_released_at`.
    - It never changes `state`, `error`, `unresolved`, `ended_at`, `keys` or `fingerprints`.
    - Typed errors: `SESSION_BUSY` (native busy, unfinished or permission pending), `INVALID_INPUT` (not `unknown`, holder mismatch), `FORBIDDEN` (identity), `UPSTREAM_TIMEOUT` (bounded read timeout).
@@ -314,4 +322,7 @@ the fallback and for token rotation (ADR-019).
 - The settle interval is a heuristic, not a native lease. Native TUI races stay
   as in ADR-010.
 - Token rotation (ADR-019) still needs a restart; (b) does not change that.
-- Not implemented and not tested. Every line reference is to `main` `22264de`.
+- Every line reference in §1 to §4 is to `main` `22264de`. The implementation
+  (`internal/execution/release.go`, `internal/admin`, `cmd/bridge/admin.go`)
+  is covered by unit, fake-runner and local-socket tests only; the live
+  acceptance in §4 is still open.

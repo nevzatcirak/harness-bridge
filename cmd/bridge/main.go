@@ -17,6 +17,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		os.Exit(runAdmin(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
+	}
 	token, cfg, err := loadStartup(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
@@ -52,6 +55,13 @@ func main() {
 	}
 	runs := execution.New(client)
 	defer runs.Close()
+	adminServer, err := openAdmin(os.Getenv, cfg.readOnly, runs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if adminServer != nil {
+		defer adminServer.Close()
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly})
 	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}

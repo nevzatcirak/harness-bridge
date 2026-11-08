@@ -66,6 +66,8 @@ type Execution struct {
 	Liveness       *Liveness     `json:"liveness,omitempty"`
 	// PermissionRejection is the ADR-018 (d) report-only block; see rejection.go.
 	PermissionRejection *PermissionRejection `json:"permission_rejection,omitempty"`
+	// GuardReleasedAt is set only by the ADR-020 (b) operator release.
+	GuardReleasedAt *time.Time `json:"guard_released_at,omitempty"`
 }
 type run struct {
 	mu             sync.Mutex
@@ -111,6 +113,8 @@ type Manager struct {
 	noLiveness     bool
 	// ADR-018 (d): optional in-memory witness for basis native_event.
 	witness rejectionWitness
+	// releaseSleep replaces the ADR-020 settle sleep in tests only.
+	releaseSleep func(context.Context, time.Duration) error
 }
 
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
