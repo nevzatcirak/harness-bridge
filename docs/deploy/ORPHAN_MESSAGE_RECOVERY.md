@@ -1,6 +1,7 @@
 # Orphan assistant message recovery (F-6)
 
-Status: runbook, 2026-11-06. Finding F-6 (R5/R5b, P2). Applies to OpenCode
+Status: runbook, 2026-11-06; Step 4 updated 2026-11-08 for the ADR-020 (b)
+fenced guard release (release first, restart only as fallback). Finding F-6 (R5/R5b, P2). Applies to OpenCode
 1.19.4 (`anomalyco/opencode` `148842ef7cb1bc34192b3fff57d0f9721ab9c801`). Source
 paths below are relative to that tree's `packages/`.
 
@@ -181,21 +182,53 @@ This runbook does not cover them: stop and escalate.
      clear;
    - `unknown` can still be correct. If the Bridge sent the interrupted prompt,
      its execution is `unknown`, and the Bridge's single-writer guard stays held
-     until a Bridge restart (ADR-010; ADR-017 option (a) reports this but does
-     not release it). The R5 run recorded exactly this
-     (`R5_EVIDENCE_2026-11-05.md`, "Guard recovery").
-3. If the guard is held, the maintainer restarts the Bridge in an approved
-   window (ADR-010 procedure: fence writers, restart, verify the binary hash, PID
-   and `NRestarts`). Then read `get_session` again.
-4. **Never reuse an idempotency key across that restart.** Idempotency records
-   are in memory and are lost on restart, so a reused key would submit a new
-   prompt, not replay the old one. Every later `send_prompt` uses a fresh key.
+     (ADR-010; ADR-017 option (a) reports this but does not release it). The R5
+     run recorded exactly this (`R5_EVIDENCE_2026-11-05.md`, "Guard recovery").
+3. If the guard is held, **first** use the fenced guard release (ADR-020 option
+   (b), accepted 2026-11-08; `docs/CONTRACTS.md`, "ADR-020 operator guard
+   release"). It needs the writer started with `BRIDGE_ADMIN_SOCKET`. As the
+   maintainer on the host, with a ticket ID for this recovery:
+   ```bash
+   sudo -u <SERVICE_USER> env BRIDGE_ADMIN_SOCKET=<ADMIN_SOCKET> \
+     <BRIDGE_BINARY> admin release-guard \
+       --session opencode:<SESSION_ID> --execution <EXECUTION_ID> --ticket <TICKET_ID>
+   ```
+   - `<EXECUTION_ID>` is the `unknown` execution that holds the guard
+     (`get_session` / `get_execution_status`).
+   - The Bridge re-checks everything itself, twice, 5 s apart: the guard holder,
+     `unknown` with the monitor ended, identity and workspace, native status
+     absent or `idle`, no unfinished assistant (so Step 3 must be done first),
+     no pending permission, and the correlated user message. Expect exit `0`
+     and `"outcome": "released"`. Record the printed JSON.
+   - Add `--allow-missing-user-message` **only** when the Bridge's user message
+     is absent natively and you accept that a late delivery could still
+     arrive. The override is audited.
+   - On `refused`, read `error.code` (`SESSION_BUSY`: native work, an orphan or
+     a permission is still there, so go back to Step 2; `INVALID_INPUT`: wrong
+     IDs, the run is no longer `unknown`, or another execution holds the guard;
+     `UPSTREAM_TIMEOUT` / `UPSTREAM_FAILURE`: retry later). Do not work around
+     it.
+   - Then check: `get_session` is no longer guarded, the execution is still
+     `unknown`, the journal has exactly one `event=guard_release
+     outcome=released` line, and the Bridge PID and `NRestarts` are unchanged.
+
+   **Fallback only** (no admin socket configured, or the release keeps being
+   refused while you are sure native work has stopped): the maintainer restarts
+   the Bridge in an approved window (ADR-010 procedure: fence writers, restart,
+   verify the binary hash, PID and `NRestarts`). Then read `get_session` again.
+4. **Keys.** After a fenced release, every idempotency record is kept: the old
+   key replays the same `unknown` execution and never submits again, and a new
+   prompt needs a fresh key. **Never reuse an idempotency key across a
+   restart.** Idempotency records are in memory and are lost on restart, so a
+   reused key would submit a new prompt, not replay the old one. Every later
+   `send_prompt` uses a fresh key.
 5. Record what you did:
    - session ID, message ID and `time.created`;
    - the Step 2 evidence (status, service start time, journal window);
    - the DELETE response;
    - the post-recovery `get_session`;
-   - any Bridge restart.
+   - the release JSON and ticket ID, or any Bridge restart and why the release
+     was not used.
 
    Include no credential and no prompt text.
 
