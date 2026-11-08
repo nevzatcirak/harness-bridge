@@ -306,11 +306,14 @@ func Call(ctx context.Context, socket string, req Request) (Response, error) {
 	if err != nil {
 		return resp, err
 	}
-	if _, err = conn.Write(append(b, '\n')); err != nil {
-		return resp, fmt.Errorf("send admin request: %w", err)
-	}
+	// The server may refuse a peer before reading its request and close the
+	// connection; the refusal is still readable after a failed write.
+	_, writeErr := conn.Write(append(b, '\n'))
 	line, err := bufio.NewReader(io.LimitReader(conn, maxResponseSize)).ReadBytes('\n')
 	if err != nil {
+		if writeErr != nil {
+			return resp, fmt.Errorf("send admin request: %w", writeErr)
+		}
 		return resp, fmt.Errorf("read admin response: %w", err)
 	}
 	if err = json.Unmarshal(line, &resp); err != nil {
