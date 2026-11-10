@@ -341,6 +341,44 @@ func TestReleaseSuccess(t *testing.T) {
 	}
 }
 
+// Test 5b (#132 P2-1): both accepted native statuses release. Pinned OpenCode
+// deletes idle entries from /session/status, so absent is the real-world F-6 /
+// F-7 shape; an explicit idle entry is accepted as well.
+func TestReleaseSuccessAbsentAndIdle(t *testing.T) {
+	cases := []struct {
+		name   string
+		status func(*fake)
+	}{
+		{"absent", func(f *fake) { f.missing = true }},
+		{"idle", func(f *fake) { f.nativeStatus = &opencode.Status{Type: "idle"} }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fake{status: "idle"}
+			m, before := releaseFixtureWith(t, f)
+			locked(f, func() { c.status(f) })
+			ev, err := m.ReleaseGuard(context.Background(), "ses_test", before.ID, fastRelease)
+			if err != nil {
+				t.Fatalf("%s: release refused: %v", c.name, err)
+			}
+			if !ev.NativeRead || ev.NativeState != c.name || ev.CorrelatedUser != "found" || ev.GuardReleasedAt == nil {
+				t.Fatalf("%s: evidence %+v", c.name, ev)
+			}
+			if g := guardOf(m); g != "" {
+				t.Fatalf("%s: guard still held: %q", c.name, g)
+			}
+			wantGuard(t, m, false, "")
+			after, err := m.Snapshot(context.Background(), before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.State != "unknown" || after.GuardReleasedAt == nil || !after.GuardReleasedAt.Equal(*ev.GuardReleasedAt) {
+				t.Fatalf("%s: record %+v", c.name, after)
+			}
+		})
+	}
+}
+
 // Test 6: ADR-011 promotion still applies after a release and never removes a
 // newer execution's guard.
 func TestReleaseLateCompletionKeepsNewerGuard(t *testing.T) {
@@ -353,9 +391,11 @@ func TestReleaseLateCompletionKeepsNewerGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// While the newer turn is natively busy it blocks the old promotion (the
-	// ADR-020 safety argument). Let its Prompt land, then let it go quiet, so
-	// the old correlated proof can promote while the newer guard is held.
+	// This test asserts the promotion while the newer turn is quiesced: let the
+	// newer Prompt land, then let that turn go quiet, so the old correlated
+	// proof can promote while the newer guard is held. The case where a busy
+	// newer turn blocks the old promotion is covered by
+	// TestLateWrongCorrelationCannotReleaseGuard/busy (reconcile_test.go).
 	deadline := time.Now().Add(2 * time.Second)
 	for sends(f) < 2 {
 		if time.Now().After(deadline) {
