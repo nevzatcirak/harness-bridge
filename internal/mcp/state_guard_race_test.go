@@ -82,7 +82,10 @@ func TestStateGuardConcurrentDiscovery(t *testing.T) {
 					}
 				}
 			}
-			waitExecution(t, runs, x.ID, "running")
+			// Native status is always idle here, and an explicit idle entry
+			// without terminal proof is reported unknown, never running (#86
+			// finding 3), so wait only until the Prompt was observed.
+			waitSubmitted(t, runs, x.ID)
 			g.complete(x.MessageID)
 			waitExecution(t, runs, x.ID, "completed")
 		}
@@ -119,6 +122,21 @@ func waitExecution(t *testing.T, m *execution.Manager, id, state string) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("execution %s: want %s got %+v %v", id, state, v, e)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitSubmitted(t *testing.T, m *execution.Manager, id string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		v, e := m.Get(context.Background(), id)
+		if e == nil && (v.State == "running" || v.State == "unknown") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("execution %s: not submitted: %+v %v", id, v, e)
 		}
 		time.Sleep(time.Millisecond)
 	}

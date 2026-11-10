@@ -18,6 +18,10 @@ type fake struct {
 	mid                                     string
 	entered, release                        chan struct{}
 	nativeStatus                            *opencode.Status // overrides status when set
+	// quiesced is a message ID whose native turn ended without a terminal
+	// reply (an OpenCode restart, F-6, or a rejected permission, F-7): the
+	// session reads idle again although the prompt has no terminal reply.
+	quiesced string
 	// Native read counters (ADR-017 §3(a): liveness adds no native read).
 	gets, statusReads, historyReads, permissionReads int
 }
@@ -59,6 +63,12 @@ func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 	}
 	if f.nativeStatus != nil {
 		return map[string]opencode.Status{"ses_test": *f.nativeStatus}, nil
+	}
+	// Like native OpenCode, an idle session is busy while the last submitted
+	// prompt has no terminal reply. Without this an idle fake reads as "idle
+	// without terminal proof", which is not reported as running (#86 finding 3).
+	if f.status == "idle" && f.inTurn() {
+		return map[string]opencode.Status{"ses_test": {Type: "busy"}}, nil
 	}
 	return map[string]opencode.Status{"ses_test": {Type: f.status}}, nil
 }
@@ -136,6 +146,20 @@ func complete(f *fake, mid, finish, errorJSON string) {
 	msg.Info.Time.Completed = 1
 	msg.Info.Error = []byte(errorJSON)
 	f.messages = append(f.messages, msg)
+}
+
+// inTurn reports a submitted, delivered prompt without a terminal reply.
+// Caller holds f.mu.
+func (f *fake) inTurn() bool {
+	if f.mid == "" || f.fail || f.mid == f.quiesced {
+		return false
+	}
+	for _, msg := range f.messages {
+		if msg.Info.Role == "assistant" && msg.Info.ParentID == f.mid && terminalState(msg) != "" {
+			return false
+		}
+	}
+	return true
 }
 func TestTwoTurnsCorrelationAndResults(t *testing.T) {
 	f := &fake{status: "idle"}

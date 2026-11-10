@@ -7,6 +7,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 )
 
 // F-7 (R5b, 2026-11-06): current behavior after a native permission rejection.
@@ -120,8 +122,10 @@ func TestF7PermissionRejectStaysUnknown(t *testing.T) {
 
 // Same rejection, but native status reports "idle" instead of being absent.
 // OpenCode v1.19.4 deletes idle entries from /session/status (status.ts:42-44),
-// so this shape is defensive. Without terminal proof main reports "running"
-// (liveness native_status "absent") until monitor expiry, then unknown.
+// so this shape is defensive. Without terminal proof an explicit idle entry is
+// treated exactly like an absent one (#86 finding 3): unknown
+// OBSERVATION_UNAVAILABLE, never "running", until monitor expiry, then
+// MONITOR_EXPIRED.
 func TestF7PermissionRejectIdleStatus(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fake{status: "idle"}
@@ -132,7 +136,7 @@ func TestF7PermissionRejectIdleStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		pendingThenRejected(t, m, f, x)
-		locked(f, func() { f.missing = false; f.status = "idle" })
+		locked(f, func() { f.missing = false; f.nativeStatus = &opencode.Status{Type: "idle"} })
 		synctest.Wait()
 		time.Sleep(time.Second)
 		synctest.Wait()
@@ -141,7 +145,7 @@ func TestF7PermissionRejectIdleStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.State != "running" || got.Ended != nil {
+		if got.State != "unknown" || got.Ended != nil || got.Unresolved == nil || got.Unresolved.Reason != "OBSERVATION_UNAVAILABLE" {
 			t.Fatalf("idle without proof: %+v", got)
 		}
 		if l := got.Liveness; l == nil || l.StallReason != "COMPLETED_WITHOUT_TERMINAL_EVIDENCE" || l.NativeStatus != "absent" {

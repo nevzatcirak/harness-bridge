@@ -20,7 +20,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "admin" {
 		os.Exit(runAdmin(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
 	}
-	token, err := readSecret(os.Getenv, "BRIDGE_TOKEN")
+	token, cfg, err := loadStartup(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,10 +33,6 @@ func main() {
 		log.Fatal(err)
 	}
 	client, err := opencode.New(base, os.Getenv("OPENCODE_SERVER_USERNAME"), password)
-	if err != nil {
-		log.Fatal(err)
-	}
-	cfg, err := loadIngress(os.Getenv, token)
 	if err != nil {
 		log.Fatal(err)
 	}
