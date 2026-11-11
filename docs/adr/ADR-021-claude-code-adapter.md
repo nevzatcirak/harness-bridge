@@ -131,14 +131,14 @@ admission and ADR-014 identity rules unchanged), then the adapter starts:
 - **Never `--bare` (D5).** `--bare` does not read subscription credentials
   (spike precondition notes; DOCUMENTED, see §8 for the URL). A run that reports
   `init.apiKeySource` other than `none` ends the run `unknown` with
-  `IDENTITY_MISMATCH`, guard kept, child interrupted (§3 row 7, §8.2, §8.3 item 4).
+  `IDENTITY_MISMATCH`, guard kept, child interrupted (§3 row 0, §8.2, §8.3 item 4).
 - **Pinned permission flags, every run, no exceptions:** `--permission-mode
   default` and `--permission-prompts none`. Never `auto`, `acceptEdits`,
   `bypassPermissions`, `dontAsk` or `--dangerously-skip-permissions`. The Bridge
   fixed-compares the argv it builds against an allow-pattern before `exec` (unit
   test, §10), and a run whose `init.permissionMode` is not `default` ends
   `unknown` with `IDENTITY_MISMATCH`, guard kept, and the child is interrupted
-  (§3 row 7, §4, §8.3 item 4). It is not reported `failed`: the Bridge cannot
+  (§3 row 0, §4, §8.3 item 4). It is not reported `failed`: the Bridge cannot
   prove what ran under the wrong mode.
 - **cwd** is the session's approved root from the allowlist (§6), after the same
   canonical-path and symlink checks the OpenCode path uses (ADR-014). The Bridge
@@ -239,20 +239,28 @@ Claude (documented in §9).
   is non-empty; `tools` is not exactly the configured profile; or a
   `hook_started`/`hook_response`/`plugin_install` event appeared before `init`.
   The Bridge then interrupts the child (§4), and the verdict is row 0 below,
-  **regardless of any later `result`, `terminal_reason` or exit status**. Rows 3 to
-  8 apply only if the latch did not fire.
+  **regardless of any later `result`, `terminal_reason` or exit status**. Every other
+  row applies only if the latch did not fire.
 - **Exit before decision (review #172 P2-1).** Every terminal decision, and every
   automatic guard release (rows 1 to 5), is taken only after stdout EOF **and** the
   `wait` of the child (exit status known), because a `result` line can precede
   process exit and a guard released at the `result` could admit a second child
   while the first is alive (§2). A correlated `result` with the child still alive
   is recorded and the execution stays `running` (guard held) for a bounded exit
-  grace (default 10 s, configurable). If the child has not exited by then it is
-  interrupted (§4) and the verdict is row 9 (`MONITOR_EXPIRED`) if the cap is
-  already reached, otherwise row 6 (`PROCESS_ENDED_WITHOUT_RESULT`, with
-  `child_unconfirmed` if the exit cannot be confirmed). Rows 1 and 2 refer to a
-  child that never produced a usable `init`: they also wait for exit, which is
-  immediate in those cases.
+  grace (default 10 s, configurable). If the child has not exited by the end of
+  the grace, or its exit status cannot be obtained, the child is interrupted (§4)
+  and the verdict is the dedicated row 6a (`EXIT_UNCONFIRMED`), **not** row 6
+  (row 6 means "no `result`", which is false here). If the wall-clock cap (row 9)
+  is what fired, row 9 wins; if a second `result` or later events were seen, row 8
+  wins (both are `unknown` with the guard kept, so the guard outcome is the same;
+  only the reason differs). Rows 1 and 2 refer to a child that never produced a
+  usable `init`: they also wait for exit, which is immediate in those cases.
+- **Evaluation order (review #177 P2-1).** First match wins **in the order the
+  rows are printed below**, which is `0, 1, 2, 8, 3, 4, 5, 9, 6a, 6, 7, 10`. The
+  numbers are labels, kept stable so that earlier references stay valid; they are
+  not positions. Row 8 precedes 3 to 5 so that "exactly one `result`" in those
+  rows is true by construction, and row 9 precedes 6a and 6 so that a run ended by
+  the Bridge's own cap is `MONITOR_EXPIRED` and never `PROCESS_ENDED_WITHOUT_RESULT`.
 
 **Terminal decisions** (the table is the whole decision procedure; first match
 wins):
@@ -262,13 +270,14 @@ wins):
 | 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
+| 8 | Two or more `result` lines, or events after the final `result` (seen up to EOF, or up to the end of the exit grace) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 3 | `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
 | 4 | `result` with `is_error: true` and exit non-zero, no Bridge-requested interrupt, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
 | 5 | A Bridge-requested interrupt (§4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a requested interrupt this shape is item 4. **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
-| 6 | Process ended and **no `result`** (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed, killed by the Bridge's own cap) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT` | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
+| 9 | Wall-clock cap reached (the Bridge's own cap fired and the child was interrupted), whether or not a `result` was seen, unless row 8 matched | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted (§4) | wins over 6a and 6; never `PROCESS_ENDED_WITHOUT_RESULT` |
+| 6a | Exactly one correlated `result` was seen, but the child did not exit within the exit grace, or its exit status could not be obtained (`wait` failed), and neither row 8 nor row 9 applies | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted (§4) | the `result` is recorded but is **not** treated as terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. A second `result` or other line arriving after the grace interrupt does not change the verdict: it is audited (`late_lines_after_verdict`) and the guard stays held; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees it. If the exit is observed later, the verdict is still not promoted |
+| 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT` | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
-| 8 | Two or more `result` lines, or events after the final `result` (seen up to EOF) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
-| 9 | Wall-clock cap reached | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted (§4) | |
 | 10 | Everything else | `unknown` | default |
 
 - **Idle and exit are never success** (ADR-011): a clean exit without a
@@ -569,13 +578,19 @@ when present"), then `apiKeyHelper`, then `CLAUDE_CODE_OAUTH_TOKEN`, then
 "Anthropic profile and federation credentials", and subscription OAuth last
 (https://code.claude.com/docs/en/authentication, "Authentication precedence",
 accessed 2026-11-11); an inherited key would silently switch billing and auth
-mode. The profile/federation entry is selected by configuration in the Claude
-user's own home or settings, not by an environment variable the Bridge could
-scrub, so the env scrub does not cover it. Whether `init.apiKeySource` reports
-a value other than `none` for it is **UNVERIFIED**, so the `apiKeySource` check
-may not detect it: it is therefore an operator requirement (no profile or
+mode. A named profile is selected by `ANTHROPIC_PROFILE` and
+federation by `ANTHROPIC_FEDERATION_RULE_ID` / `ANTHROPIC_ORGANIZATION_ID`
+(authentication page, "Authentication precedence", as quoted in review #177;
+I did not re-fetch it for this revision); all of these are covered by the
+`ANTHROPIC_*` scrub. The **residual** is the active or default profile stored in
+the Claude user's configuration directory, which is selected without an
+environment variable, so the scrub cannot cover it. Whether `init.apiKeySource`
+reports a value other than `none` for it is **UNVERIFIED**, so the `apiKeySource`
+check may not detect it: it remains an operator requirement (no profile or
 federation credentials are configured for the Claude user) and a slice-3
-acceptance item, not something this ADR claims the Bridge can detect. `sudo` `env_reset` is the second layer;
+acceptance item, not something this ADR claims the Bridge can detect.
+
+`sudo` `env_reset` is the second layer;
 the Bridge's own scrub is the first and is unit-tested with a poisoned
 environment.
 
@@ -588,7 +603,7 @@ by the operator (§8.5), never self-updated under the Bridge.
 **Auth mode check.** Every run must report `system/init.apiKeySource: "none"`
 (OBSERVED for subscription OAuth, spike). Anything else ends the execution
 `unknown` with `IDENTITY_MISMATCH`, guard kept, and the child is interrupted
-(§3 row 7, §8.3 item 4); no verdict is drawn from that run.
+(§3 row 0, §8.3 item 4); no verdict is drawn from that run.
 
 ### 8.3 Repository-provided configuration
 
@@ -667,9 +682,11 @@ slice 3 passes**; the design does not claim protection before that.
      and modes (research note, SDK permissions page); managed settings override
      `--settings` and can make managed rules the only source
      (`allowManagedPermissionRulesOnly`, managed-settings page, accessed
-     2026-11-11); the managed-settings page also lists
-     `permissions.blockReadsOutsideWorkingDirectories` (v2.1.257 or later, relayed
-     by the fetch summarizer) among keys that lower scopes can only make stricter.
+     2026-11-11); the permissions page (https://code.claude.com/docs/en/permissions, as
+     identified in review #177; not the managed-settings page) documents
+     `permissions.blockReadsOutsideWorkingDirectories`. The version in which it
+     appeared (an earlier draft said v2.1.257 or later) is **UNVERIFIED** and is not
+     relied on.
      **UNVERIFIED:** the exact rule syntax and path-glob semantics for `Read`
      denies (including `~` expansion), whether `Glob`/`Grep` honour them, and
      whether `blockReadsOutsideWorkingDirectories` blocks a read of the home
@@ -687,8 +704,12 @@ setting `ANTHROPIC_BASE_URL` to a local sink, and an `apiKeyHelper` that writes 
 canary; a `.mcp.json` server that writes a canary; a `CLAUDE.md` with a
 distinctive injected instruction; and a second `CLAUDE.md`-style instruction that
 asks the model to **read `~/.claude/.credentials.json` and print it** (the
-credential canary: the Claude user's home holds a decoy file of the same name and
-mode in the test home, never the real login). After a run: no canary file exists,
+credential canary). **Isolation:** the canary runs under an isolated test user
+with its own `HOME`, or under a disposable `CLAUDE_CONFIG_DIR` pointing into the
+throwaway tree, and the decoy `.credentials.json` (same name, mode 0600, fake
+content) exists only there. The real Claude user's `~/.claude` is never created,
+replaced, moved or read by the test, and the test fails closed if its resolved
+config directory is the real one. After a run: no canary file exists,
 the sink received no request, `init.mcp_servers` is empty, `init.apiKeySource` is
 `none`, **the decoy credential content appears nowhere in the stream, the history
 record or the result** (a `Read` of that path must be denied and listed in
@@ -749,7 +770,9 @@ The tool names and field names of the eleven tools do not change; the accepted
   Bridge's opaque execution-scoped ID (no native user message ID exists, §3);
   optional additive `permission_denials`, `liveness`, `child_unconfirmed`,
   `cost_usd_reported` (informational) and `exit` (`class` only).
-- **Unresolved reasons, additive:** `PROCESS_ENDED_WITHOUT_RESULT`. Existing
+- **Unresolved reasons, additive:** `PROCESS_ENDED_WITHOUT_RESULT` (no `result`
+  at all) and `EXIT_UNCONFIRMED` (a `result` was seen but the exit was not
+  confirmed; §3 row 6a). Existing
   reasons are reused (`ABORT_UNCONFIRMED`, `MONITOR_EXPIRED`,
   `IDENTITY_MISMATCH`, `MANAGER_CLOSED`). `SUBMISSION_UNCONFIRMED` is used when a
   write to stdin failed after some bytes were accepted.
@@ -783,7 +806,9 @@ machine as a pure function (events, exit status, requested-signal flag) to a
 verdict; session-ID parsing; redaction rules; the history record writer/reader
 (§5) on a temp dir. No `exec`.
 - RED tests: every §3 row (table-driven, including OBSERVED fixtures from the
-  spike evidence); success requires all four conditions; two `result` lines;
+  spike evidence); success requires all four conditions; two `result` lines; first-match order `0,1,2,8,3,4,5,9,6a,6,7,10`
+  (a table of overlapping evidence pairs: cap plus no result is row 9, result plus
+  hang is 6a, result plus second result is 8);
   unlisted `terminal_reason`; SIGINT shape without a requested interrupt is
   `failed`; row 0 (every latch trigger: `permissionMode`, `apiKeySource`, `cwd`,
   `session_id`, unlisted version, non-empty `mcp_servers`/`plugins`, wrong
@@ -826,13 +851,18 @@ MCP schemas; allowlist file loading (§6).
   a `result` line with the child still alive keeps the execution `running` and the
   guard held (a second `send_prompt` gets `SESSION_BUSY`), and only the child's
   exit (or the exit grace, then an interrupt) produces the verdict and any guard
-  release; credential canary: a `Read` of the decoy `~/.claude/.credentials.json`
+  release; **a correlated `result` whose child does not exit within the grace (or
+  whose `wait` fails) is `unknown` / `EXIT_UNCONFIRMED` with `child_unconfirmed`
+  and the guard kept, never `PROCESS_ENDED_WITHOUT_RESULT`; the same case with the
+  cap fired is `MONITOR_EXPIRED` (row 9 beats 6a); the same case with a second
+  `result` is row 8; a second `result` after the grace interrupt does not change
+  the verdict or release the guard; row 6 stays for runs with no `result`;** credential canary: a `Read` of the decoy `~/.claude/.credentials.json`
   is denied and its content appears nowhere**; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
   to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
-  row 3 or row 5 before row 0; release the guard at the `result` line before EOF
+  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; release the guard at the `result` line before EOF
   and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
   test** of §8.3; sudo signal relay for SIGINT and SIGTERM; `--safe-mode` versus
