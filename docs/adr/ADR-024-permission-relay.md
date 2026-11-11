@@ -1,10 +1,19 @@
 # ADR-024: Permission relay (Claude Chat answers a native permission request)
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code, no
-contract change, nothing deployed. Written for maintainer requirement D11.
+Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code,
+nothing deployed. No change to existing fields or semantics; an additive tool
+(`reply_permission`) and additive fields (`pending_permission`,
+`pending_permission_count`) are proposed. Written for maintainer requirement
+D11. Decision in force: D12 (maintainer decision, recorded in issue #117,
+2026-11-11): ADR acceptance is delegated to the Planning Desk with exception
+(b), enabling any `allow_once` policy stays with the maintainer; a
+`reject_only` default may be implemented. This ADR does not enable any
+`allow_once` policy.
 
 Numbering: ADR-024 is reserved for this decision. It builds on ADR-018 §5
-(pending permission detail, PROPOSED until now) and amends nothing.
+(pending permission detail, PROPOSED until now) and may amend ADR-018 §5 if
+open question 2 is accepted (the bounded-pattern exposure relaxes §5's "never
+raw patterns"). It amends no other accepted ADR.
 
 Must preserve: ADR-010 (single writer), ADR-011 (late completion), ADR-017,
 ADR-018 option (d) built on (a), ADR-020, and the project invariants: no
@@ -77,7 +86,7 @@ session/request binding). This ADR therefore specifies the **current** route
 if it is ever used the Bridge's own binding is the only binding. The route
 choice does not change the security argument.
 
-## 3. Exposure of the pending permission (resolves ADR-018 §5)
+## 3. Exposure of the pending permission (builds on ADR-018 §5)
 
 ADR-018 §5 (P3, PROPOSED) proposed exposing the `ObservedPermission` safe
 projection and **never raw patterns**. D11 needs more than that for an
@@ -102,12 +111,19 @@ shapes stay valid; clients that ignore the field are unaffected):
 listing never carries patterns.
 
 Only requests with `attribution = verified` for **this** execution are shown
-as actionable; others are shown as a count only. Patterns are native/untrusted
+as actionable; others are shown as a count only. `verified` is required
+unconditionally: a request without a native `tool` object (a tool-less request)
+cannot be correlated to this execution's assistant message by call ID, so it
+is never `verified`, is shown as a count only, and cannot be answered through
+the relay (the operator answers it natively). Session equality alone is not
+enough, because the native `GET /permission` lists requests of all sessions
+and a same-session request could belong to another turn or run. Patterns are native/untrusted
 text and are prompt-injection surface, which is why they are opt-in. The
 Bridge never returns native message text, only these fields.
 
 Read path: the existing `GET /permission` observation; today the execution path
-keeps only `sessionID` from it (`internal/adapters/opencode/client.go:57-59`),
+keeps only `sessionID` from it (`internal/adapters/opencode/client.go:71-73`,
+the `Permission` struct; the fetch is `:202-206`),
 so wiring the already-built `ObservedPermission` into the manager and MCP is
 part of this work (ADR-018 §5 already says the same).
 
@@ -143,10 +159,12 @@ as verified.
    `waiting_for_permission` with the guard held by this execution.
 4. **Fresh native re-read** (never trust a cached observation): `GET /permission`
    and find the request with `id == permission_id`. It must exist and its
-   `sessionID` must equal the execution's native session, and its
-   `tool.messageID`/`callID`, when present, must correlate to the execution's
-   assistant message (`attribution = verified`). Otherwise `NOT_FOUND` or
-   `FORBIDDEN` (reason from a closed set; no native text is returned).
+   `sessionID` must equal the execution's native session, **and** its
+   `tool.messageID`/`callID` must be present and correlate to the execution's
+   assistant message (`attribution = verified`, required unconditionally; a
+   tool-less request is refused with `FORBIDDEN`, reason `not_verified`).
+   Otherwise `NOT_FOUND` or `FORBIDDEN` (reason from a closed set; no native
+   text is returned).
    This is the binding the legacy route lacks.
 5. For `allow_once`: evaluate the policy against the **live native request**
    (tool, kind, patterns), never against values supplied by the caller.
@@ -159,20 +177,53 @@ as verified.
 
 ### 4.3 Idempotency, races and timeouts
 
-- Bridge-side key `(execution_id, permission_id)`, memory-only (ADR-010). Same
-  decision again returns the recorded result; the opposite decision returns
-  `IDEMPOTENCY_CONFLICT` (`retryable:false`). After a restart the map is empty;
-  the native side then answers a second reply with not-found, which is the
-  fail-closed outcome.
-- **Never re-reply.** The native API has no idempotency key and cannot tell a
-  lost response from a request that never existed or was dropped (research §5).
-  A timeout or lost response yields `UNKNOWN_OUTCOME` (`retryable:false`) and
-  the Bridge does not resend. The caller re-reads `get_execution_status`: if the
-  request is still pending, the reply did not land (a *new* explicit
-  `reply_permission` call is then a new operator-visible attempt, audited as such);
-  if it is gone, the outcome stays unknown to the Bridge, which does not
-  resolve it by guessing. The project rule "no automatic replay of uncertain
-  native mutations" holds.
+- **Record, keyed by `(execution_id, permission_id)`, memory-only** (ADR-010).
+  It holds the decision, an `attempt_id` (random, Bridge-generated, returned to
+  the caller), the attempt number and a state: `refused` (no native write was
+  made), `replied` (the native side accepted), or `unknown` (a native write was
+  sent and its result is not known). The record is written **before** the
+  native write (state `in_flight`, audited as `phase=attempt`) and updated
+  after it. Same-key behavior:
+  - `replied`, same decision: returns the recorded result, **sends nothing**;
+  - `replied`, opposite decision: `IDEMPOTENCY_CONFLICT` (`retryable:false`);
+  - `unknown` (or `in_flight`, so an overlapping call): returns the recorded
+    `UNKNOWN_OUTCOME` (`retryable:false`) with its `attempt_id`, **sends
+    nothing**, whatever the decision in the new call;
+  - `refused`: re-evaluated normally (nothing was sent).
+  After a restart the record is empty; the native side then answers a reply to
+  a request that is gone with not-found, which is the fail-closed outcome. A
+  request that is still pending after a restart is, from the Bridge's view, a
+  fresh request with attempt number 1.
+- **Never an automatic or silent re-reply.** The native API has no
+  idempotency key and cannot tell a lost response from a request that never
+  existed or was dropped (research §5). A timeout or lost response yields
+  `UNKNOWN_OUTCOME` with the `attempt_id`, and the Bridge does not resend by
+  itself, ever. A caller who wants another try must make a **new, explicit,
+  distinctly keyed attempt**:
+  1. the call carries `supersedes: <attempt_id>` quoting the unknown attempt
+     (proof it saw the unknown outcome; a call without it only gets the
+     recorded `UNKNOWN_OUTCOME` above);
+  2. it must carry the **same decision** as the unknown attempt (a different
+     one is `INVALID_INPUT`), so the retry cannot turn a possibly landed
+     `allow_once` into a different answer;
+  3. the Bridge re-reads natively and requires the request to be **still
+     pending** with the same ID and session. Native `reply` deletes the pending
+     entry before resolving it (`perm:109-114`), so "still pending" means the
+     earlier reply was not applied, and a late-arriving earlier reply and this
+     one cannot both apply (first wins, at most once). If the request is gone,
+     the result is `NOT_FOUND` (`resolved_elsewhere_or_dropped`) and nothing is
+     sent;
+  4. it is recorded as attempt number 2 under a new `attempt_id`, audited as
+     `phase=attempt` with `attempt=2` and `supersedes=<attempt_id>`, so it is
+     never indistinguishable from a resend;
+  5. at most **one** supersede per `(execution_id, permission_id)`; a second
+     `UNKNOWN_OUTCOME` ends the relay's attempts for that request (the operator
+     answers it natively).
+  The project rule "no automatic replay of uncertain native mutations" holds
+  because no replay is automatic; whether even an explicit superseding attempt
+  is acceptable is open question 8. After the explicit attempt the Bridge still
+  does not resolve a lost response by guessing; it only learns from the native
+  re-read.
 - **Race with the native TUI or another client**: first reply wins natively.
   If the TUI answered first, the Bridge's reply gets not-found and returns
   `NOT_FOUND` with the closed reason `resolved_elsewhere_or_dropped`. The
@@ -234,7 +285,9 @@ answer it natively or Chat can `reject` it.
 AUDIT-01 gets `event=permission_reply`, one line per phase per call on every
 return path (so one call writes `attempt` then `result`, and a refusal before
 the attempt writes one `refused` line). Fields: `tool=reply_permission`,
-`phase`, `outcome`, `accepted`, `error_code`, `decision`, `permission_id`,
+`phase`, `attempt` (1, or 2 for a superseding attempt), `supersedes` (the
+`attempt_id` it supersedes, when present), `outcome`, `accepted`, `error_code`,
+`decision`, `permission_id`,
 `execution_id`, `session_id` (when well formed), `native_tool`, `kind`,
 `scope_digest`, `pattern_count`, `policy_mode`, `policy_rule` (the closed code
 that allowed or refused), and always:
@@ -314,7 +367,7 @@ maintainer needs verified human approval. The maintainer decides.
 |---|---|---|---|
 | S1 | Wire `ObservedPermission` into the manager; `pending_permission` and `pending_permission_count` (no patterns) | `waiting_for_permission` exposes the fields; other states do not; unattributed/conflicting are count-only; no native text | expose a pattern in default mode; show an unattributed request as actionable |
 | S2 | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
-| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), idempotent same decision, `IDEMPOTENCY_CONFLICT` | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check |
+| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native call, second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified` | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified |
 | S4 | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native call on refusal | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
 | S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit | one line per phase on every path; no free text | omit `human_verified`; skip the attempt line |
 | S6 | CONTRACTS, runbook, ADR-018 §5 status update after acceptance | doc review | n/a |
@@ -366,6 +419,10 @@ PASS.
 6. **Out-of-band approval page** (P4-PERM option (c)) as a follow-up ADR?
 7. Is requiring per-call claude.ai approval on `reply_permission` a deployment
    requirement or only a recommendation?
+8. After an `UNKNOWN_OUTCOME`, is one explicit, distinctly keyed superseding
+   attempt (section 4.3) acceptable, or should the Bridge never send a second
+   reply for the same request and leave it to the operator? This ADR specifies
+   the explicit attempt as the recommendation; the maintainer decides.
 
 ## 13. Limitations of this record
 
