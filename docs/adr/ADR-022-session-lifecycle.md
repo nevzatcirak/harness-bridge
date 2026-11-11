@@ -120,8 +120,13 @@ A session is **authorized for lifecycle actions** when, at call time:
    directory, rechecked immediately before the native call); and
 3. its worktree root (the Git top level, or `/` for a non-git directory,
    exactly as in the F-2 note) is **inside the same root**. If the worktree
-   root is above the root, the `.opencode` search would walk outside the
-   operator's trust statement, so the session is refused with `FORBIDDEN`.
+   root is not inside the root (it is above the root, or there is none), the
+   `.opencode` search would walk outside the operator's trust statement, so the
+   session is refused with `FORBIDDEN`. **The Bridge reports that one case with
+   one reason, `non_git`**: the procedure below never ascends past the root, so
+   a repository whose top level lies above the root is seen as "no top level
+   found inside the root", exactly like a plain directory. (The `gitdir:`
+   pointer that leaves the root is a different case, `not_in_root`.)
    **Non-git directories are therefore excluded:** a directory with no Git top
    level has worktree root `/`, which is never inside a root, so
    `create_session` and `archive_session` refuse it (reason `non_git`; CONTRACTS
@@ -133,12 +138,39 @@ A session is **authorized for lifecycle actions** when, at call time:
    Bridge never creates or initializes directories).
 
 **How the Git top level (worktree root) is learned.** The Bridge uses **no
-`git` subprocess** (the repository has no `os/exec` in non-test code, and
-CONTRACTS "Confined metadata reads replace Git subprocesses" records why:
+`git` subprocess** (the Bridge's `internal/` and `cmd/` packages have no `os/exec`
+import; the only non-`_test.go` file that imports it is the confinement test
+fixture `tests/confinement/cmd/fixture/main.go`, which is not part of the
+Bridge; and CONTRACTS "Confined metadata reads replace Git subprocesses" records why:
 repository-controlled configuration must not run as the Bridge user). It reuses
-the confined metadata reads of ADR-012/H4-A (`internal/repository`, `Inspect`,
-reads through `policy.OpenStorage`/`os.Root`), extended for lifecycle use by a
-check that every step stays inside the lifecycle root. The procedure:
+the *logic* of the confined metadata reads of ADR-012/H4-A
+(`internal/repository`, `inspect`: the 128-level ascent, the single-line
+`gitdir: ` file, the 4096-byte read, symlink and non-regular `.git` refused),
+but it **cannot reuse their opener as it is**. `policy.OpenStorage(id, path)`
+returns an error unless `p.Sessions[id]` (a session in
+`BRIDGE_ALLOWED_SESSIONS`) **and** the path lies under `p.Roots`
+(`BRIDGE_ALLOWED_ROOTS`) (`internal/security/policy.go:137-143`), and `inspect`
+starts with `policy.Allows(session, directory)`
+(`internal/repository/repository.go:204`) and reads every file through
+`storage.stat/read` (`:68-100`). At `create_session` time there is no session
+yet, and 3.1 lets a lifecycle root be disjoint from `BRIDGE_ALLOWED_ROOTS`. So
+the procedure needs two **new** pieces, both in the Bridge and both proposals:
+
+- **a lifecycle-root-scoped, session-less confined opener in
+  `internal/security`**: it takes a lifecycle root and a path, requires the path
+  to be inside that root, opens the root with `os.OpenRoot`, checks the root
+  identity (`os.SameFile` against the identity recorded at startup, so a root
+  replaced after startup is refused), and walks the path component by
+  component rejecting any symlink, exactly as `OpenStorage` does
+  (`policy.go:152-171`). It must **never fall back to `BRIDGE_ALLOWED_ROOTS`**:
+  it is a new security primitive, not an extension of a containment check. (The
+  `OpenStorage` comment says it "is not a new read grant"; this opener is
+  narrower in another way, session-less but confined to one lifecycle root and
+  read-only metadata.)
+- **an `inspect` variant that does not call `policy.Allows`** and reads through
+  that opener.
+
+Both need their own review as security-critical code (S2 below). The procedure:
 
 1. Start at the canonical session directory and ascend one level at a time (at
    most 128, as `inspect` does), never past the lifecycle root. At each level
@@ -149,10 +181,13 @@ check that every step stays inside the lifecycle root. The procedure:
    directory is `.git` itself.
 4. `.git` is a **file** (linked worktree or submodule): it must be a single
    line `gitdir: <path>` (no CR/LF, at most 4096 bytes). The top level is the
-   directory that contains the `.git` file. The pointer is resolved
-   (`pointer()` in `internal/repository/repository.go`) and the resulting git
-   directory, and its `commondir` target if present, **must lie inside the
-   lifecycle root**. A pointer that leaves the root, or a pointer or
+   directory that contains the `.git` file. The pointer is **lexically
+   cleaned** (`pointer()` in `internal/repository/repository.go:119-124` is a
+   `filepath.Clean` of an absolute or base-joined path and resolves no
+   symlinks), **containment in the lifecycle root is checked on the cleaned
+   string, and only then is it opened through the symlink-rejecting confined
+   opener** above; the resulting git directory, and its `commondir` target if
+   present, **must lie inside the lifecycle root**. A pointer that leaves the root, or a pointer or
    `commondir` that cannot be opened through the confined storage, refuses with
    `FORBIDDEN` (reason `not_in_root`). The Bridge does not follow it outside.
 5. `.git` is a symlink, unreadable, not a directory and not a valid `gitdir:`
@@ -187,16 +222,24 @@ tools, `internal/mcp/server.go:107,241`; CONTRACTS still says "seven tools" in
 
 | Tool | ACL path today | O1 (narrow) | O2 (wide) |
 |---|---|---|---|
-| `send_prompt`, `interrupt_execution` (mutating) | session-scoped `authorized` (`server.go:57-68`, `AllowsContext`); `BRIDGE_READ_ONLY` returns `FORBIDDEN` | would act on a Bridge-created session | would act on any session under a lifecycle root, human-created included |
-| `get_execution_status`, `get_execution_result` | by execution ID, bound to the execution's pinned native session (which call re-checks the ACL is not traced here: UNVERIFIED) | follows the session grant | follows the session grant |
+| `send_prompt` (mutating) | session-scoped `authorized` (`server.go:57-68`, `AllowsContext`); `BRIDGE_READ_ONLY` returns `FORBIDDEN` | would act on a Bridge-created session | would act on any session under a lifecycle root, human-created included |
+| `get_execution_status`, `get_execution_result`, `interrupt_execution` | by **execution ID**: `Runs.Snapshot`, then `authorized` on the execution's native session (`server.go:142-153`, the same function as `:57-68`), then `ValidateSession`; `interrupt_execution` is also refused under `BRIDGE_READ_ONLY` | follows the session grant | follows the session grant |
 | `get_session`, `read_session_history`, `get_harness_capabilities` | session-scoped `authorized` (`server.go:277`) | would read a Bridge-created session | would read any session under a root |
 | `list_sessions`, `find_sessions`, `list_repositories`, `get_repository` | discovery pipeline, `AllowsContext` per candidate session (`discovery.go:306`), derived from the immutable ACL (ADR-012) | **would list a created session** (a read-only exposure widening) | **would list every session under a root** (largest read-only widening) |
 
 The four discovery tools matter: under O1 or O2 they would start showing
 sessions that are not in `BRIDGE_ALLOWED_SESSIONS`, which changes ADR-012's
 statement that discovery is derived exclusively from the immutable operator
-ACL. That is part of the proposed ADR-012 amendment, not a side effect. Under
-O3 nothing changes. Everything in sections 3.1 to 3.3 and 4 to 7 above concerns
+ACL. That is part of the proposed ADR-012 amendment, not a side effect. The
+amendment would touch more than `server.go`: `authorized` checks
+`Policy.Sessions[id]` (`server.go:57-68`), and so do `Policy.Allows`,
+`AllowsContext` and `OpenStorage` in `internal/security`
+(`policy.go:55-61,137-143`), which `internal/repository` `Inspect` uses for
+`list_repositories` and `get_repository`. If only `server.go` changed, a created
+session would be listed without repository metadata. The O1/O2 amendment
+therefore has to list `internal/security` (`Allows`, `AllowsContext`,
+`OpenStorage`) among the places it changes; O3 changes none of them. Under
+O3 nothing changes. Everything in sections 3.1 to 3.3 and 4 to 7 concerns
 only the lifecycle tools (`create_session`, `archive_session`,
 `list_catalog`); the lifecycle grant does not by itself let any of the eleven
 existing tools act on a session.
@@ -358,8 +401,8 @@ Flow (each step bounded by the 5 s native bound; no step retried automatically):
 
 | Case | Result |
 |---|---|
-| Root not configured, subdirectory escapes, path missing, worktree root above the root | `FORBIDDEN` / `INVALID_INPUT` / `NOT_FOUND`; no native call |
-| Non-git directory or an unsupported or unreadable `.git` layout | `FORBIDDEN`, closed reason `non_git`; no native call |
+| Root not configured, subdirectory escapes, path missing | `FORBIDDEN` / `INVALID_INPUT` / `NOT_FOUND`; no native call (a top level above the root is not here: it is `non_git`, next row) |
+| Non-git directory, a Git top level above the root, or an unsupported or unreadable `.git` layout | `FORBIDDEN`, closed reason `non_git`; no native call |
 | `gitdir:`/`commondir` target outside the lifecycle root | `FORBIDDEN`, closed reason `not_in_root`; no native call |
 | Native count of existing sessions incomplete (truncated, timed out) | `SESSION_LIMIT` (cap state unknown) or `UPSTREAM_TIMEOUT`; no native write |
 | Returned `directory` differs from the requested path (step 5) | `UNKNOWN_OUTCOME`; audit `bootstrap_may_be_outside_root=true`; session not used |
@@ -605,7 +648,7 @@ operator action. The maintainer decides; this ADR does not waive the invariant.
 | Prompt injection drives mass archive | one session per call; `archive_per_hour` cap (default 10); precondition 7.3; archive only under configured roots with `archive` mode; audit line per call; `BRIDGE_READ_ONLY` makes the tool return `FORBIDDEN`; cap reached returns `SESSION_LIMIT` and stops |
 | Prompt injection drives mass create (runaway launcher) | `create_per_hour` (default 10), `max_sessions` per root (default 20), `max_total_sessions` (default 50), no bulk, no recursion (a created session's own tool calls count against the same budget because the caps are Bridge-wide) |
 | Disk or session exhaustion | the caps above, counted from native data; no directory creation; first-prompt size bounds as `send_prompt` |
-| Escape from the root (`..`, symlink, replaced directory, worktree above the root) | clean-path rule, symlink resolution, ADR-014 identity recheck, worktree-root containment (3.2). **Residual:** a swap between the Bridge's recheck and OpenCode's use is not prevented and is detected only after the bootstrap (4.1 step 5, `UNKNOWN_OUTCOME` + `bootstrap_may_be_outside_root`); closed only by the operator duties in 4.1 (root and its components not writable by agent users) |
+| Escape from the root (`..`, symlink, replaced directory, Git top level not inside the root, reported as `non_git`) | clean-path rule, symlink resolution, ADR-014 identity recheck, worktree-root containment (3.2). **Residual:** a swap between the Bridge's recheck and OpenCode's use is not prevented and is detected only after the bootstrap (4.1 step 5, `UNKNOWN_OUTCOME` + `bootstrap_may_be_outside_root`); closed only by the operator duties in 4.1 (root and its components not writable by agent users) |
 | Plugin execution in a new directory (F-2) | operator trust statement per root, no mkdir by the Bridge, residual risk documented (5.4) |
 | Forged provenance metadata | metadata is a label only; counts and authority come from native directory and config |
 | Replay of an uncertain create after restart | `UNKNOWN_OUTCOME`, no auto-retry; documented duplicate risk; caps bound it |
@@ -636,7 +679,7 @@ practical. Mutations are the ones a reviewer should re-run.
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
 | S1 | Lifecycle config parser and root validation (no tools) | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode) | accept an overlapping root; skip the canonical check |
-| S2 | Lifecycle authorization (3.2 rules 1-3), including the Git top level procedure (no subprocess, confined reads) and the non-git exclusion. The existing-tool part (O1/O2/O3) is **not** in S2: it waits for the maintainer decision (open question 7) and, if O1 or O2 is chosen, for an ADR-012 amendment | RED test for each of: plain `.git` directory; `.git` file (linked worktree) inside the root; `.git` file whose `gitdir:` leaves the root (refused `not_in_root`); `commondir` leaving the root; `.git` symlink (refused); malformed or multi-line `gitdir:`; unsupported layout (reftable/bare); nested repository (inner wins); ascent reaching the root with no `.git` (`non_git`); depth limit; if open question 9 option (i) is chosen, `core.worktree` and `include` present (refused). Also symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots; the existing-tool check shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass; follow a `gitdir:` pointer outside the root; ascend past a symlinked `.git`; run a `git` subprocess |
+| S2 | Lifecycle authorization (3.2 rules 1-3), including the Git top level procedure (no subprocess, confined reads) and the non-git exclusion. The existing-tool part (O1/O2/O3) is **not** in S2: it waits for the maintainer decision (open question 7) and, if O1 or O2 is chosen, for an ADR-012 amendment | RED test for each of: **the new lifecycle-root session-less opener and the `inspect` variant: a path outside the lifecycle root (refused even if it lies under `BRIDGE_ALLOWED_ROOTS`), a lifecycle root replaced after startup (refused), a symlink component (refused), a session-less call (works, unlike `OpenStorage`), and the existing session-bound `OpenStorage` behavior unchanged**; plain `.git` directory; `.git` file (linked worktree) inside the root; `.git` file whose `gitdir:` leaves the root (refused `not_in_root`); `commondir` leaving the root; `.git` symlink (refused); malformed or multi-line `gitdir:`; unsupported layout (reftable/bare); nested repository (inner wins); ascent reaching the root with no `.git` (`non_git`); depth limit; if open question 9 option (i) is chosen, `core.worktree` and `include` present (refused). Also symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots; the existing-tool check shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass; follow a `gitdir:` pointer outside the root; ascend past a symlinked `.git`; run a `git` subprocess; **make the new opener fall back to `BRIDGE_ALLOWED_ROOTS`; skip the root-identity check; skip the symlink-component check** |
 | S3 | `list_catalog` read-only, instance-qualified `session_ref`, bounds | limit/offset/deadline, filters, no silent partial result, archived not visible | remove the deadline; drop a filter |
 | S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is included only if O1 or O2 is chosen; under O3 it is absent | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY`; a 128-byte create key still yields a valid first-prompt key (hash-derived, 32 bytes); an incomplete or timed-out native count refuses the create with no native write; a returned directory that differs from the request is `UNKNOWN_OUTCOME` with `bootstrap_may_be_outside_root`; the fully resolved path is what is sent | retry on timeout; accept a caller `permission`; cap disabled; derive the first-prompt key by concatenation; treat an incomplete count as zero; ignore the directory mismatch |
 | S5 | Audit lines for create and archive | one line per call on every return path, no free text | skip an audit on a refusal path |
@@ -722,8 +765,10 @@ H4 did (native DB, filesystem, journal, independent rebuild).
   `internal/repository` reader by reading its code; it was not run, and the
   lifecycle extension (never ascend past the lifecycle root, containment of
   `gitdir:`/`commondir`) is a design, not tested behavior.
-- Which call re-checks the ACL for `get_execution_status`/`get_execution_result`
-  was not traced (UNVERIFIED, 3.2 table).
+- The lifecycle-root session-less opener and the `inspect` variant (3.2) are new
+  security code that does not exist; their design is modeled on `OpenStorage`
+  and `inspect` by reading them, and nothing was run. They are the most
+  security-critical new piece in this ADR and need an independent review.
 - The lifecycle reservation kind (5.1) and the `guard_reason` field are design
   proposals about the manager API; no code was written or read beyond
   `SessionGuard` and `Send`.
