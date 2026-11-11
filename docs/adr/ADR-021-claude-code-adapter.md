@@ -16,9 +16,14 @@ Maintainer decisions recorded 2026-11-11 and binding for this proposal:
 Must preserve ADR-010 (single writer, memory-only records), ADR-011 (late
 completion, no success from idle), ADR-017 option (a) (report-only liveness),
 ADR-018 option (d) (report-only permission rejection) and ADR-020 option (b)
-(operator-only fenced guard release), all accepted. Amends none of them. ADR-024
-(permission relay) is referenced as future work and does not exist yet; ADR-022
-and ADR-023 are not used here.
+(operator-only fenced guard release), all accepted. It amends none of them as
+written. It does **propose** one amendment to ADR-020, scoped to the Claude
+harness only (§3, last bullet; slice 4; open question 8): ADR-020's native-read
+preconditions have no Claude equivalent, so a Claude-specific set is proposed.
+That amendment is for the maintainer to decide in that slice; nothing in this
+ADR takes effect until then. ADR-024 (permission relay) is referenced as future
+work and does not exist yet; ADR-022 (session lifecycle) is not used here; ADR-023
+(read-only dashboard) is a separate proposal (see the last sentence of §5).
 
 ## Evidence base and how claims are marked
 
@@ -120,18 +125,21 @@ admission and ADR-014 identity rules unchanged), then the adapter starts:
   nothing else, with `env_reset`.
 - **Never `--bare` (D5).** `--bare` does not read subscription credentials
   (spike precondition notes; DOCUMENTED, see §8 for the URL). A run that reports
-  `init.apiKeySource` other than `none` is refused (§8, auth mode).
+  `init.apiKeySource` other than `none` ends the run `unknown` with
+  `IDENTITY_MISMATCH`, guard kept, child interrupted (§3 row 7, §8.2, §8.3 item 4).
 - **Pinned permission flags, every run, no exceptions:** `--permission-mode
   default` and `--permission-prompts none`. Never `auto`, `acceptEdits`,
   `bypassPermissions`, `dontAsk` or `--dangerously-skip-permissions`. The Bridge
   fixed-compares the argv it builds against an allow-pattern before `exec` (unit
-  test, §10), and a run whose `init.permissionMode` is not `default` is failed
-  and killed (§3).
+  test, §10), and a run whose `init.permissionMode` is not `default` ends
+  `unknown` with `IDENTITY_MISMATCH`, guard kept, and the child is interrupted
+  (§3 row 7, §4, §8.3 item 4). It is not reported `failed`: the Bridge cannot
+  prove what ran under the wrong mode.
 - **cwd** is the session's approved root from the allowlist (§6), after the same
   canonical-path and symlink checks the OpenCode path uses (ADR-014). The Bridge
   sets `cmd.Dir` and then requires `system/init.cwd` to equal the canonical root.
-  A mismatch fails the execution as `IDENTITY_MISMATCH` and the child is
-  interrupted (§4). The spike showed the CLI follows the invoking directory
+  A mismatch ends the execution `unknown` with `IDENTITY_MISMATCH`, guard kept,
+  and the child is interrupted (§4), for the same reason as above. The spike showed the CLI follows the invoking directory
   (OBSERVED), so this check is the only thing tying a session to its project.
 - **Prompt delivery.** The prompt travels over the child's **stdin**, not argv.
   Reason: argv is visible to other users in `/proc` and `ps`, and `sudo` logs the
@@ -188,13 +196,15 @@ namespaced by harness:
   delivered. After any byte of the prompt was written, a loss of evidence yields
   `unknown` and the guard stays (§3). The same key never starts a second child.
 - **Never fork.** `--fork-session` is not used: it changes the session ID and
-  breaks "continue the same session". Residual risk accepted by the maintainer
-  as part of D7's scope: **a human who resumes the session in a terminal
-  interleaves with the Bridge and can silently drop a turn**. The adapter cannot
-  detect this (no documented detection; the transcript is not parsed). Operators
-  must keep the Bridge-managed sessions out of interactive use, as ADR-010 already
-  requires for OpenCode ("operator exclusivity"). This is stated in the tool
-  descriptions and in CONTRACTS for the Claude harness.
+  breaks "continue the same session". **Proposed residual risk (not a recorded
+  maintainer decision; see open question 1):** a human who resumes the session in
+  a terminal interleaves with the Bridge and can silently drop a turn. The adapter
+  cannot detect this (no documented detection; the transcript is not parsed). The
+  proposal is that operators keep Bridge-managed sessions out of interactive use,
+  as ADR-010 already requires for OpenCode ("operator exclusivity"), and that, if
+  the maintainer accepts the risk, it would be stated in the tool descriptions and
+  in CONTRACTS for the Claude harness. Alternatives (refuse sessions the Bridge
+  did not create, or fork) are in open question 1.
 
 ## 3. State mapping
 
@@ -220,7 +230,7 @@ wins):
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
 | 3 | `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
 | 4 | `result` with `is_error: true` and exit non-zero, no Bridge-requested interrupt, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
-| 5 | A Bridge-requested interrupt (§4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a requested interrupt this shape is item 4 |
+| 5 | A Bridge-requested interrupt (§4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a requested interrupt this shape is item 4. **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
 | 6 | Process ended and **no `result`** (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed, killed by the Bridge's own cap) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT` | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped, but exit code non-zero, or `permissionMode` not `default`, or `apiKeySource` not `none` | `unknown` (`IDENTITY_MISMATCH` for the last two), guard kept | contradictory evidence is never success |
 | 8 | Two or more `result` lines, or events after the final `result` | `unknown` | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess |
@@ -246,15 +256,18 @@ wins):
   and never releases a guard. (Heartbeat shape is DOCUMENTED in the research note
   and not exercised in the spike: UNVERIFIED on 2.1.322.)
 - **No late reconciliation.** There is no ADR-011 on-demand native read. A
-  `unknown` execution stays `unknown`. Only the extended ADR-020 admin release
+  `unknown` execution stays `unknown`. Only the ADR-020 admin release (as extended by the proposed, undecided amendment below; without it, only a restart)
   (last bullet of this section) can release its guard. This is a deliberate loss of capability relative to OpenCode,
   not an oversight.
 - **Cost.** `total_cost_usd` is cumulative per session and an estimate (spike
-  step 7 re-run observed cumulative growth across resumes). It is reported as
+  Environment table and the step 2/5 re-runs of the spike evidence: the reported
+  cost grows across resumes of one session). It is reported as
   informational and never used for correctness.
 - **Guard release for `unknown`.** Unchanged principle (ADR-017 (c) rejected, no
-  automatic release). ADR-020's admin channel is extended, in its own slice, with
-  Claude-specific preconditions in place of the native reads: the guard is held by
+  automatic release). **Proposed ADR-020 amendment, scoped to the Claude harness
+  only, for the maintainer to decide in slice 4 (open question 8):** the admin
+  channel would be extended with Claude-specific preconditions in place of
+  ADR-020's native reads, which do not exist here: the guard is held by
   exactly that execution; the execution is `unknown` with its child **confirmed
   exited** (the Bridge `wait`ed the `sudo` parent, which waits for the command)
   and the child's process group empty; and an audited ticket. If child exit cannot
@@ -295,8 +308,12 @@ execution state at request time (it can still be `running`), and the client poll
     the killed tool differently (SIGINT: "rejected, never ran"; SIGTERM: "killed,
     code 137"), which is **model-reported, not read from the transcript**; it is
     not used as evidence.
-- **Process tree.** The wrapper starts the CLI as the leader of its own process
-  group and session; the Bridge treats the child as dead only after it has
+- **Process tree.** The wrapper is required to start the CLI in its own session
+  and process group (for example `setsid -w`, so that the wrapper stays the
+  parent until the CLI exits; a plain `setsid` can fork and let `sudo` return
+  early). Whether this works together with `sudo` signal relay is **UNVERIFIED**
+  and is tested in slice 3; until then no claim in this ADR relies on the group
+  being a complete boundary. The Bridge treats the child as dead only after it has
   `wait`ed the `sudo` parent (which waits for the command). A grandchild that
   detached itself (`setsid`, double fork) is outside this guarantee. The
   deployment runs the Claude user's commands in a systemd transient scope or
@@ -398,6 +415,13 @@ because the execution no longer exists. The session is not marked reconciled:
 the ADR-010 fenced procedure applies (the operator decides whether the killed
 turn matters). When the Bridge dies, the child receives SIGPIPE/EPIPE on its next
 write to stdout and normally exits; this is **UNVERIFIED** and slice 2 tests it.
+
+**Dashboard.** This ADR defines no read interface for a dashboard. The only
+reader of the history store is `read_session_history`; the history records tool
+inputs and bounded results, not file patches, and the first deliverable's tool
+profile is read-only (§7), so it will record no file edits. A dashboard (ADR-023,
+separate proposal) would need its own requirement and interface; none is designed
+here.
 
 ## 6. Discovery
 
@@ -519,8 +543,9 @@ page, accessed 2026-11-11), `DISABLE_AUTOUPDATER=1` and `DISABLE_UPDATES=1`
 by the operator (§8.5), never self-updated under the Bridge.
 
 **Auth mode check.** Every run must report `system/init.apiKeySource: "none"`
-(OBSERVED for subscription OAuth, spike). Anything else fails the execution before
-a verdict is possible (§3 item 7) and the child is interrupted.
+(OBSERVED for subscription OAuth, spike). Anything else ends the execution
+`unknown` with `IDENTITY_MISMATCH`, guard kept, and the child is interrupted
+(§3 row 7, §8.3 item 4); no verdict is drawn from that run.
 
 ### 8.3 Repository-provided configuration
 
@@ -564,7 +589,8 @@ slice 3 passes**; the design does not claim protection before that.
    `CLAUDE.md` are **UNVERIFIED**; slice 3 decides between it and item 2 by test.
    The ADR does not depend on it.
 4. **Post-start verification from `system/init` (Bridge-side, always on).** The
-   Bridge reads the init event and **fails the run and interrupts the child** if:
+   Bridge reads the init event and **interrupts the child and ends the run
+   `unknown` (`IDENTITY_MISMATCH`, guard kept)** if:
    `mcp_servers` is non-empty; `plugins` is non-empty; `tools` is not exactly the
    configured profile; `permissionMode` is not `default`; `apiKeySource` is not
    `none`; `claude_code_version` is outside the allowlist (§8.5); or any
@@ -625,17 +651,20 @@ and the adapter stays disabled.
 
 ## 9. MCP tool contract changes and capabilities
 
-The tool names and input schemas of the eleven tools do not change. Additive only.
+The tool names and field names of the eleven tools do not change; the accepted
+`session_id` values widen for `claudecode:` (below). Everything else is additive.
 
 - **Session ID:** `claudecode:<uuid>` with the lowercase 8-4-4-4-12 hex UUID
   pattern, in the same `session_id` field. The input pattern widens from
   `^opencode:ses[A-Za-z0-9_-]+$` to an `anyOf` of the two patterns (maximum
   length stays below the current 265). Native ID validation is per harness
   (`opencode.ValidID(..., "ses")` for OpenCode, a strict UUID parser for Claude).
-  Strict old clients that validate IDs against the old pattern will reject a
-  Claude ID; this is a **versioned, announced change** (CONTRACTS bump), and
-  Claude sessions are not listed to a client that did not negotiate it
-  (open question 2).
+  Tool names, input field names and output field names are unchanged; the
+  accepted `session_id` values widen for `claudecode:`. Strict old clients that
+  validate IDs against the old pattern would reject a Claude ID, so the change
+  would need a CONTRACTS version bump to be announced. Whether Claude sessions are
+  then hidden from a client that did not negotiate the new version is **contingent
+  on open question 2**; this ADR does not decide it.
 - **Session fields:** `harness: "claudecode"`; `native_id` = the UUID; `title` =
   the allowlist label; `directory` = root; `state` per §6.
 - **Execution fields:** `session_id` is `claudecode:<uuid>`; `message_id` is the
@@ -709,7 +738,8 @@ MCP schemas; allowlist file loading (§6).
 **Slice 3: hardening and interrupt, live-gated.** `init` verification (§8.3 item
 4), interrupt escalation (§4), `--setting-sources`/`--strict-mcp-config`/
 `--settings`/`--tools` wiring, `BRIDGE_CLAUDE_VERSIONS`.
-- RED tests: each init-violation case fails the run and interrupts; SIGINT then
+- RED tests: each init-violation case ends the run `unknown`
+  (`IDENTITY_MISMATCH`), keeps the guard and interrupts the child; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
@@ -719,7 +749,8 @@ MCP schemas; allowlist file loading (§6).
   item 2; managed settings applied in `-p` (UNVERIFIED items resolved or the ADR
   amended); live prompt-from-stdin; SIGPIPE on Bridge death (§5).
 
-**Slice 4: ADR-020 extension and operator tooling.** Claude-specific
+**Slice 4: proposed ADR-020 amendment (Claude harness only, maintainer decides
+in this slice) and operator tooling.** Claude-specific
 preconditions for `bridge admin release-guard` (child exited and group empty,
 one re-check, no native read), the new `unresolved` reasons in CONTRACTS, the
 CONTRACTS update for §9, and the capabilities block. Docs: `CREDENTIAL_FILES.md`
@@ -747,7 +778,7 @@ Evidence only. Runbook outline, mirroring R5 for Claude Code:
 4. R6-4 failure paths: unknown UUID (`NOT_FOUND`, no side effect), max-turns
    failure.
 5. R6-5 interrupt: SIGINT mid tool call (`interrupted`), SIGTERM path (`unknown`,
-   guard kept), resume afterwards; operator guard release (ADR-020 extension).
+   guard kept), resume afterwards; operator guard release (the proposed ADR-020 amendment, if the maintainer accepts it).
 6. R6-6 permission denial: a Write is denied, listed in `permission_denials`,
    state `completed`.
 7. R6-7 hostile root canary test and auth-mode check.
@@ -802,6 +833,10 @@ anything not observed is NOT_EXERCISED, never PASS.
 6. **History store growth (§5).** 64 MiB/session and 30-day segment retention:
    adequate defaults?
 7. **Version policy (§8.5).** Exact-version allowlist only, or a minimum version?
+8. **ADR-020 amendment for the Claude harness (§3, slice 4).** May ADR-020's
+   admin release be extended with Claude-specific preconditions (child confirmed
+   exited and its group empty, one re-check, no native read), or must `unknown`
+   Claude executions stay releasable only by restart?
 
 ## Verification status
 
