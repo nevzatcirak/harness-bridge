@@ -1,8 +1,12 @@
 # ADR-022: Session lifecycle (launcher, catalog, close and archive)
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code, no
-contract change, nothing deployed. Written for maintainer decision D8 (Phase 7
-scope).
+Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code,
+nothing deployed. It proposes additive contract changes (new tools
+`create_session`, `list_catalog`, `archive_session`, the error code
+`SESSION_LIMIT`, and `session_ref` in the catalog); the seven original tool
+shapes do not change. Written for maintainer decision D8 (Phase 7 scope).
+Revised 2026-11-11 after review #160 (findings P2-1..P2-3, P3-1..P3-6; see the
+fix report on issue #164).
 
 Numbering: ADR-022 is reserved for this decision. ADR-021 (Claude Code
 adapter) is a separate record; this ADR does not depend on it, and the Claude
@@ -11,8 +15,14 @@ Code launcher is out of scope until ADR-021 is accepted.
 Must preserve: ADR-010 (single writer, memory-only records), ADR-011 (late
 completion), ADR-012 (stateless registry derived from an immutable operator
 ACL), ADR-014 (workspace identity and bounded admission), ADR-017, ADR-018 and
-ADR-020 (operator-only fenced guard release). Amends none of them. The seven
-original tool shapes stay unchanged.
+ADR-020 (operator-only fenced guard release). It amends none of them **for the
+lifecycle tools**. The one place that would amend an accepted ADR is the
+seven-tool authorization widening in section 3.2: it is **not** decided here;
+it is presented as options and an open question, and if the maintainer chooses
+a widening it is a proposed **ADR-012 amendment** (ADR-012 states the registry is
+derived exclusively from the immutable operator session ACL and that no dynamic
+write grant exists). A deleting admin-socket command (section 7.4) would
+likewise be an ADR-020 amendment.
 
 Upstream facts below are static source reading of `anomalyco/opencode` tag
 v1.19.4 = commit `148842ef7cb1bc34192b3fff57d0f9721ab9c801` (a fresh sparse
@@ -84,8 +94,12 @@ Configuration (proposed; names are not final):
 - Global: `create_per_hour`, `archive_per_hour`, `max_total_sessions`
   (section 7).
 - Absent or empty: lifecycle tools are not registered (default off, no change
-  for existing deployments). `BRIDGE_READ_ONLY=1` also removes `create_session`
-  and `archive_session`.
+  for existing deployments). With `BRIDGE_READ_ONLY=1` the lifecycle tools stay
+  registered and return `FORBIDDEN` for `create_session` and `archive_session`
+  before any native mutation, the same pattern CONTRACTS uses for `send_prompt`
+  and `interrupt_execution` (CONTRACTS "BRIDGE_READ_ONLY"). Keeping the tools
+  listed means a client sees a stable tool set and a typed refusal rather than
+  a missing tool. `list_catalog` is read-only and stays available.
 
 Startup validation fails closed: each root must exist, be canonical (no
 symlink alias in its own path, same rule as ADR-014), be a directory owned by
@@ -106,13 +120,56 @@ A session is **authorized for lifecycle actions** when, at call time:
    exactly as in the F-2 note) is **inside the same root**. If the worktree
    root is above the root, the `.opencode` search would walk outside the
    operator's trust statement, so the session is refused with `FORBIDDEN`.
+   **Non-git directories are therefore excluded:** a directory with no Git top
+   level has worktree root `/`, which is never inside a root, so
+   `create_session` and `archive_session` refuse it (reason `non_git`; CONTRACTS
+   "Discovery bootstraps native instances" records that the `.opencode` walk of
+   a non-git directory goes up to `/`). A configured root that is itself not a
+   Git worktree is still valid as a container: sessions are created in
+   directories below it whose Git top level lies inside the root. An operator
+   who wants to launch in a plain directory must `git init` it first (the
+   Bridge never creates or initializes directories).
 
-The existing seven tools keep their current check
-(`BRIDGE_ALLOWED_SESSIONS` ∪ sessions in `BRIDGE_ALLOWED_ROOTS` where that
-already applies). Sessions under a lifecycle root are **additionally**
-authorized for the seven tools, so a created session can be prompted without
-being added to the static list. The union is computed per call from live native
-data and current config; nothing is cached as a grant.
+**The existing seven tools keep their current check, unchanged by this
+section.** That check is a conjunction, not a union
+(`internal/security/policy.go:56-66`, `Allows`): the session ID must be in
+`BRIDGE_ALLOWED_SESSIONS` (`p.Sessions[id]`) **and** its directory must lie
+under a root in `BRIDGE_ALLOWED_ROOTS` (`directoryAllowed`). Everything in
+sections 3.1 to 3.3 and 4 to 7 above concerns only the lifecycle tools
+(`create_session`, `archive_session`, `list_catalog`); the lifecycle grant does
+not by itself let `send_prompt`, `get_execution_status` and the other
+original tools act on a session.
+
+A created session has to be usable by the seven tools for the launcher to be
+useful, and that needs a decision this ADR does not take. The options:
+
+- **(O1) Narrow grant: sessions the Bridge itself created in this process.**
+  The seven-tool check would accept a session that is **not** in
+  `BRIDGE_ALLOWED_SESSIONS` only if (i) this writer process created it
+  (the in-memory creation event is the sole authority, recorded when the
+  native `POST /session` returned and the answer was verified; never read back
+  from a journal, a file or native metadata), (ii) its directory is still under
+  a lifecycle root and the ADR-014 identity still matches, and (iii) it is
+  still under the lifecycle caps. After a restart those sessions lose the
+  grant (fail-closed) until the operator adds the IDs to
+  `BRIDGE_ALLOWED_SESSIONS`. This is a dynamic, in-process grant, so it is a
+  proposed **ADR-012 amendment** (narrow).
+- **(O2) Wide grant: every session whose directory is under a lifecycle root.**
+  Stateless and restart-proof, but it also authorizes the seven tools for
+  pre-existing and human-created sessions under the root, which goes beyond D8
+  (D8 covers sessions the Bridge creates). A proposed **ADR-012 amendment**
+  (wide).
+- **(O3) No widening.** The seven-tool check stays exactly as today
+  (ADR-012 intact). A created session is usable by the seven tools only after
+  the operator appends its ID to `BRIDGE_ALLOWED_SESSIONS` and restarts. The
+  launcher then creates sessions the operator must enable out of band, which
+  limits its value. The optional first prompt in `create_session` is not
+  available in this option.
+
+The maintainer decides (open question 7). Slices S2 and S4 below name the
+parts that depend on the choice. In every option the lifecycle grant is
+computed per call from live native data and current config, and nothing is
+cached as a grant.
 
 ### 3.3 Registry (location, modes, restart behavior)
 
@@ -121,14 +178,20 @@ The Bridge keeps a **memory-only registry** of sessions it created, with
 rate limits. It lives in the single writer process (ADR-010), is guarded by the
 same host-ownership rule, and is **not an authority**:
 
-- authority comes only from section 3.2 (config + live native directory), so a
-  restart loses no authorization and the registry cannot be forged by editing a
-  file or by a journal replay (the project invariant: no grant restoration from
-  journal history alone);
+- authority for the lifecycle tools comes only from section 3.2 (config + live
+  native directory), so a restart loses no lifecycle authorization and the
+  registry cannot be forged by editing a file or by a journal replay (the
+  project invariant: no grant restoration from journal history alone). What the
+  seven tools may do with a created session depends on the O1/O2/O3 decision in
+  section 3.2; under O1 a restart does drop that grant, by design;
 - the registry is used for idempotent replay of `create_session` and for
   counting created-per-hour; per-root `max_sessions` is counted from **native
   data** (a bounded catalog read), not from the registry, so it stays correct
   after a restart and for sessions created outside the Bridge;
+- the rate counters (`create_per_hour`, `archive_per_hour`) also live in this
+  registry, so **a restart resets them**; each window is still bounded by the
+  caps, but an operator who restarts the Bridge repeatedly gets a fresh budget
+  each time (a limit of the memory-only design, stated here);
 - after a restart the registry is empty. A retry of `create_session` with the
   same key after a restart is a new request (documented duplicate risk, section
   4.3); the caps bound the damage, and the catalog shows any duplicate.
@@ -188,9 +251,10 @@ Flow (each step bounded by the 5 s native bound; no step retried automatically):
 5. Verify the answer: the returned `directory` must canonicalize to the
    requested path and the identity must still match; otherwise the Bridge
    reports `UNKNOWN_OUTCOME` and does not use the session.
-6. Optional first prompt: through the existing `send_prompt` admission with a
-   derived key (`<key>:first`), so the writer, guard and replay rules of
-   ADR-010/011 apply unchanged.
+6. Optional first prompt (only if the maintainer chooses O1 or O2 in section
+   3.2; under O3 the field is rejected): through the existing `send_prompt`
+   admission with a derived key (`<key>:first`), so the writer, guard and replay
+   rules of ADR-010/011 apply unchanged.
 7. Audit and return.
 
 ### 4.2 Failure modes
@@ -223,11 +287,26 @@ evidence and is not designed here.
 ### 5.1 Guard, single writer, idempotency (ADR-010/020)
 
 - `create_session` is a mutation: it runs only in the process that owns the
-  writer role, and `BRIDGE_READ_ONLY` removes it. Independent processes do not
-  share the registry.
-- `archive_session` takes the same admission path as `send_prompt` on that
-  session: it runs under the run's token, so it cannot interleave with a
-  prompt, an interrupt or an ADR-020 guard release (section 6.3).
+  writer role, and `BRIDGE_READ_ONLY` makes it return `FORBIDDEN` (section 3.1).
+  Independent processes do not share the registry.
+- `archive_session` is excluded from `send_prompt` and the other writers **by
+  the manager's per-session reservation, not by an execution token.** An
+  archivable session normally has no run at all (precondition 7.3.2 requires
+  that no execution is running, unknown or guard-held), so there is no
+  `x.op` token to take (`x.op` is a per-run channel,
+  `internal/execution/manager.go`). The mechanism is the reservation
+  `busy[session]` (ADR-010) that `Send` already takes before any network IO
+  (`manager.go:232-238`) together with the reconcile slot: `archive_session`
+  takes `busy[session]` for the duration of its re-check and `PATCH` (a
+  concurrent `send_prompt` then gets `SESSION_BUSY`, an interrupt or guard
+  release has no run to act on), and releases it afterwards. It never uses
+  `x.op`. **Residual race (stated limitation, not a decision):** the reservation excludes
+  Bridge-mediated writers only. A native client or a human can start a turn in
+  OpenCode between the Bridge's re-check and its `PATCH`; the Bridge cannot
+  exclude that (ADR-010 operator exclusivity is a deployment rule, not
+  something the Bridge enforces). The consequence is that a session which just
+  became busy is archived (hidden from the default list, one-way through the
+  API); the data is not lost.
 - A guard held by an execution (including `unknown` with the guard retained)
   blocks archive, as does any running state.
 
@@ -267,8 +346,9 @@ duties and as Bridge limits:
 New read-only tool; `list_sessions` and `find_sessions` keep their shapes.
 
 Filters (all optional, exact match): `root`, `state`
-(`idle|running|waiting_permission|unknown|archived` mapped from the existing
-ADR-012 state semantics plus an `archived` flag), `updated_since`,
+(`idle|running|waiting_permission|unknown`, mapped from the existing ADR-012
+state semantics; **`archived` is not a v1 filter value**, see section 6.3),
+`updated_since`,
 `created_by_bridge` (label only), `harness`. Bounds as `find_sessions`: limit
 default 50, max 200; offset 0–1000; ID-sorted; fresh view, not a snapshot; one
 total deadline of 10 s; errors never return silent partial results. Ordering by
@@ -278,8 +358,12 @@ recency is a filter on `updated_since`, not a sort, to keep ID-sorted paging.
 
 ADR-012 states that multi-harness aggregation needs "a future versioned
 instance-qualified session ID" and that the current IDs are not unique across
-servers. This ADR adopts exactly that, additively: catalog entries carry
-`session_ref = {harness: "harness:<hash>", session_id: "<existing id>"}`. The
+servers. This ADR takes **a first step toward that requirement, not the
+requirement itself**: catalog entries carry
+`session_ref = {harness: "harness:<hash>", session_id: "<existing id>"}`, a
+composite versioned inside the new `list_catalog` contract. It is not the
+ADR-012 versioned instance-qualified session ID, and it does not reinterpret the
+seven-tool contract; a later ADR-012 follow-up would define the real ID. The
 existing `opencode:<native-id>` form is unchanged for the other tools and is
 accepted as before when only one harness is configured. Aggregate counts
 (`{total, by_state, by_root}`) are computed from the same bounded page set and
@@ -288,8 +372,9 @@ entries appear after ADR-021 and are omitted (not guessed) before.
 
 ### 6.3 Archive state
 
-An `archived` flag shows in the catalog only when the native listing can show
-it. The HTTP list has no `archived` parameter at v1.19.4 (`grp:30-38`), so
+There is no `archived` filter or flag in v1. An `archived` state could be
+added only if the native listing can show it, gated on the UNVERIFIED read
+path below. The HTTP list has no `archived` parameter at v1.19.4 (`grp:30-38`), so
 **archived sessions are not visible to the Bridge catalog** unless `get` by ID
 works on them (**UNVERIFIED**). The Bridge therefore also records, in memory
 only, the IDs it archived since startup, for audit and for the answer to "did I
@@ -325,7 +410,9 @@ maintainer must choose the semantic:
   persisted that is new persistent state with its own recovery and
   no-restoration-from-journal questions.
 
-**Recommendation: (A)**, accepted by the maintainer as one-way, with the caps
+**Recommendation: (A); it requires the maintainer decision in open question
+1.** It is not accepted: D8 recorded only that Chat may decide archive because
+archive is reversible, and it did not accept a one-way archive. With the caps
 below, because it adds no Bridge state and the data is preserved. If the
 maintainer wants real reversibility, choose (B) and open a follow-up ADR for
 the overlay's persistence. **The maintainer decides.**
@@ -333,11 +420,14 @@ the overlay's persistence. **The maintainer decides.**
 ### 7.3 Preconditions (both options), fail-closed
 
 `archive_session` refuses, with no native write, unless all of these hold at
-call time and again immediately before the `PATCH` (re-check under the run
-token, then write):
+call time and again immediately before the `PATCH` (re-check while holding the
+`busy[session]` reservation of section 5.1, then write; there is no run token
+for an idle session):
 
 1. the session passes section 3.2 with `archive` mode;
-2. native status is `idle` and **no** Bridge execution for it is `running`,
+2. native status is `idle` or absent (OpenCode deletes idle entries from
+   `/session/status`, `session/status.ts:42-44`, and ADR-017/018 treat absence
+   as idle) and **no** Bridge execution for it is `running`,
    `unknown` or has a held guard (`SESSION_BUSY`);
 3. no permission request is pending (ADR-018 view);
 4. the session has no live children that are running (the native tree);
@@ -361,9 +451,10 @@ The project invariant requires explicit approval for destructive operations.
 Options:
 
 - **(a) Not exposed to Chat.** `delete` does not exist in the Bridge. An
-  operator who needs it uses OpenCode directly, or a later operator-only command
-  on the ADR-020 admin socket (fenced, audited, not reachable from the MCP
-  ingress).
+  operator who needs it uses OpenCode directly. A later operator-only delete
+  command on the ADR-020 admin socket would be an **ADR-020 amendment**, not an
+  extension to assume: ADR-020 and `internal/admin/admin.go` define
+  `release_guard` as the only operation, so adding delete needs its own review.
 - **(b) Exposed with an explicit confirm token.** A two-step flow:
   `request_delete` returns a single-use, short-lived token bound to
   `{session_id, tree size}`; `confirm_delete {token}` performs it. This keeps
@@ -380,14 +471,14 @@ operator action. The maintainer decides; this ADR does not waive the invariant.
 
 | Threat | Control |
 |---|---|
-| Prompt injection drives mass archive | one session per call; `archive_per_hour` cap (default 10); precondition 7.3; archive only under configured roots with `archive` mode; audit line per call; `BRIDGE_READ_ONLY` removes the tool; cap reached returns `SESSION_LIMIT` and stops |
+| Prompt injection drives mass archive | one session per call; `archive_per_hour` cap (default 10); precondition 7.3; archive only under configured roots with `archive` mode; audit line per call; `BRIDGE_READ_ONLY` makes the tool return `FORBIDDEN`; cap reached returns `SESSION_LIMIT` and stops |
 | Prompt injection drives mass create (runaway launcher) | `create_per_hour` (default 10), `max_sessions` per root (default 20), `max_total_sessions` (default 50), no bulk, no recursion (a created session's own tool calls count against the same budget because the caps are Bridge-wide) |
 | Disk or session exhaustion | the caps above, counted from native data; no directory creation; first-prompt size bounds as `send_prompt` |
 | Escape from the root (`..`, symlink, replaced directory, worktree above the root) | clean-path rule, symlink resolution, ADR-014 identity recheck, worktree-root containment (3.2) |
 | Plugin execution in a new directory (F-2) | operator trust statement per root, no mkdir by the Bridge, residual risk documented (5.4) |
 | Forged provenance metadata | metadata is a label only; counts and authority come from native directory and config |
 | Replay of an uncertain create after restart | `UNKNOWN_OUTCOME`, no auto-retry; documented duplicate risk; caps bound it |
-| Archive racing a prompt or guard release | admission through the run token, re-check before write (7.3) |
+| Archive racing a Bridge prompt or guard release | `busy[session]` reservation and re-check before write (5.1, 7.3); a native or human writer can still race the `PATCH` (residual, stated in 5.1) |
 | Log flooding by refused calls | one line per call; refusals before parsing heavy input; limits apply to tool calls at the ingress (existing token and body bounds) |
 | Same-UID attacker | out of scope, as in the ADR-020 trust boundary |
 
@@ -401,8 +492,10 @@ not measured values.
    "grant restoration from history" shape the invariants forbid.
 2. **Per-session grant stored in a Bridge database.** Rejected: new persistent
    authority, conflicts with ADR-010 memory-only records.
-3. **Root allowlist with stateless derivation (chosen).** Authority is config
-   plus live native directory, like ADR-012's read-through registry.
+3. **Root allowlist with stateless derivation (proposed for the lifecycle
+   tools).** Authority is config plus live native directory, like ADR-012's
+   read-through registry. Whether it extends to the seven tools is the open
+   O1/O2/O3 decision in section 3.2, not a choice made by this option.
 
 ## 10. Implementation plan (PR slices)
 
@@ -412,11 +505,11 @@ practical. Mutations are the ones a reviewer should re-run.
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
 | S1 | Lifecycle config parser and root validation (no tools) | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode) | accept an overlapping root; skip the canonical check |
-| S2 | Effective authorization (3.2), including worktree-root containment | symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots | drop rule 3; compare paths without resolving symlinks |
+| S2 | Lifecycle authorization (3.2 rules 1-3), including worktree-root containment and the non-git exclusion. The seven-tool part (O1/O2/O3) is **not** in S2: it waits for the maintainer decision (open question 7) and, if O1 or O2 is chosen, for an ADR-012 amendment | symlink, replaced-directory, worktree-above-root, non-git directory refused, root with `create` only, static session outside roots; the seven-tool check is shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass |
 | S3 | `list_catalog` read-only, instance-qualified `session_ref`, bounds | limit/offset/deadline, filters, no silent partial result, archived not visible | remove the deadline; drop a filter |
-| S4 | `create_session` against a fake native with `POST /session?directory=` | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted | retry on timeout; accept a caller `permission`; cap disabled |
+| S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is included only if O1 or O2 is chosen; under O3 it is absent | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY` | retry on timeout; accept a caller `permission`; cap disabled |
 | S5 | Audit lines for create and archive | one line per call on every return path, no free text | skip an audit on a refusal path |
-| S6 | `archive_session` | preconditions 7.3 each refuse with no native write; re-check before write; rate cap; `UNKNOWN_OUTCOME` | drop the pre-write re-check; archive while a guard is held |
+| S6 | `archive_session` under the `busy[session]` reservation (never `x.op`) | preconditions 7.3 each refuse with no native write; a concurrent `send_prompt` gets `SESSION_BUSY` while the PATCH is in flight; re-check before write; rate cap; `UNKNOWN_OUTCOME`; `FORBIDDEN` under `BRIDGE_READ_ONLY` | drop the pre-write re-check; archive while a guard is held; skip the reservation |
 | S7 | CONTRACTS and runbook; ADR status update after acceptance | doc review | n/a |
 | S8 (only if the maintainer picks 7.2 B) | overlay persistence design, its own ADR | | |
 
@@ -446,8 +539,11 @@ H4 did (native DB, filesystem, journal, independent rebuild).
    result for decision 7.2. M
 6. Prompt-injection drill: a prepared prompt that asks Chat to archive and
    create repeatedly; confirm the hourly caps stop it. M
-7. Restart the Bridge: authorization of created sessions persists (derived),
-   registry empty, replay of an old key is a new request (documented).
+7. Restart the Bridge: lifecycle authorization of created sessions persists
+   (derived); what the seven tools may do with them follows the O1/O2/O3
+   decision (under O1 the grant is gone until the operator lists the ID);
+   registry empty and rate counters reset, replay of an old key is a new
+   request (documented).
 8. Skips and anything not run are reported as UNVERIFIED, not PASS.
 
 ## 12. Open questions for the maintainer
@@ -465,6 +561,11 @@ H4 did (native DB, filesystem, journal, independent rebuild).
 6. **Scope of archive:** may Chat archive sessions it did not create but that
    live under an `archive` root, or only sessions the Bridge created in this
    process (a stricter, restart-fragile rule)?
+7. **Seven-tool authorization for created sessions (section 3.2):** O1 (narrow,
+   in-process grant for sessions this writer created; proposed ADR-012
+   amendment), O2 (wide, every session under a lifecycle root; proposed
+   ADR-012 amendment, beyond D8), or O3 (no widening; the operator lists the ID
+   and restarts)? The ADR does not choose.
 
 ## 13. Limitations of this record
 
