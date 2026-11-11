@@ -55,10 +55,10 @@ made for display.
 | Data | Source | Notes |
 | --- | --- | --- |
 | Session IDs, harness, root, ACL | The existing read-only discovery path (`internal/mcp/discovery.go`, ADR-012 policy) plus the operator allowlist | Only ACL-authorized sessions are shown. An unavailable discovery result is shown as `unknown`; the dashboard never invents a session. Discovery is bounded like today's MCP discovery; a stall renders "discovery unavailable", never an empty list silently. |
-| Executions (id, session, state, started/updated/ended, unresolved, permission rejection, guard-release time) | The execution manager's in-memory records (`internal/execution/manager.go:53-71`) | The dashboard needs a new **read-only enumeration** (`DashboardSnapshot`) that returns copies; today the manager exposes only per-ID `Snapshot`, `Get`, `SessionGuard` (`manager.go:492`, `:511`, `:532`). The new method takes `m.mu` and per-run `x.mu` briefly, in the documented order, and never takes `x.op`. |
+| Executions (id, session, state, started/updated/ended, unresolved, permission rejection, guard-release time) | The execution manager's in-memory records (`internal/execution/manager.go:53-71`) | The dashboard needs a new **read-only enumeration** (`DashboardSnapshot`) that returns copies; today the manager exposes only per-ID `Snapshot`, `Get`, `SessionGuard` (`manager.go:492`, `:511`, `:532`). Lock order (review #161 F3): copy the run pointers under `m.mu`, **release `m.mu`**, then lock each run's `x.mu` alone for the copy; the code never holds `m.mu` and a run's mutex together (`manager.go:369-391`, `:505-527`). It never takes `x.op`. |
 | Current execution | The newest non-terminal execution for the session, by `Started` | Computed in the view model, not stored. |
 | Guard | `Manager.SessionGuard(session)` (`manager.go:511-527`) | Shows `held` plus the state that holds it. |
-| Audit | AUDIT-01 lines (`docs/CONTRACTS.md:188`), including the admin `guard_release` lines | The dashboard registers a **tee `slog.Handler`** into a bounded in-memory ring (1000 entries, drop-oldest) at startup. It never re-reads the journal, never opens the journal file, and never persists entries. The ring is display-only and is lost on restart, which is acceptable because the journal remains the audit authority. |
+| Audit | AUDIT-01 lines (`docs/CONTRACTS.md:188`), including the admin `guard_release` lines | The dashboard replaces the process default logger with a **fan-out handler**: the original journal handler stays one branch (no double output), and the second branch copies into a bounded in-memory ring (1000 entries, drop-oldest). Because AUDIT-01 is written through the package-global `slog.Info` (`internal/mcp/audit.go:160`) and the admin server's `slog.Default()` (`internal/admin/admin.go:144`), the tee sees **every** slog record; it therefore keeps only records whose `event` attribute is in a closed allowlist (`guard_release`, `prompt_submission`, `interrupt`, and the future lifecycle/permission events) and copies only an allowlisted attribute set. The admin server must be constructed with the process default logger (or the same tee), not a separate one. Everything else is discarded. It never re-reads the journal, never opens the journal file, and never persists entries. The ring is display-only and is lost on restart, which is acceptable because the journal remains the audit authority. |
 
 ### 1.2 Native OpenCode (v1.19.4, `148842ef7cb1bc34192b3fff57d0f9721ab9c801`)
 
@@ -71,8 +71,14 @@ source reading only (OpenCode was not run).
 | Session detail | `GET /session/:sessionID` | `.../groups/session.ts:132` | Root/cwd from the session record. |
 | Status map | `GET /session/status` | `.../groups/session.ts:121` | OpenCode **deletes** idle entries (`packages/opencode/src/session/status.ts:32,42-44`), so absence means idle; the dashboard must not report `running` from absence (same rule as the Bridge's ADR-017/018 logic). |
 | Messages | `GET /session/:sessionID/message` | `.../groups/session.ts:179` | Needed to enumerate user-message IDs for diffs. |
-| **Session diff** | `GET /session/:sessionID/diff?messageID=<id>` | `.../groups/session.ts:84` (path) and `:168-178` (endpoint); handler `.../handlers/session.ts:99-104`; query `DiffQuery` `:39-42` | **Per user message, not session-wide.** `SessionSummary.diff` returns `[]` when `messageID` is omitted (`packages/opencode/src/session/summary.ts:129-131`) and otherwise returns the diffs stored on that user message (`:135-141`). The diffs are computed at summarize time from `step-start`/`step-finish` snapshot hashes (`:82-100`) and stored on the user message (`:102-127`); if the snapshot feature is disabled (`config.snapshot === false`, `:115`) the result is always empty. Response items are `Snapshot.FileDiff`: optional `file`, optional `patch`, `additions`, `deletions`, optional `status` added/deleted/modified (`packages/schema/src/file-diff.ts:6-12`). |
+| **Session diff** | `GET /session/:sessionID/diff?messageID=<id>` | `.../groups/session.ts:84` (path) and `:168-178` (endpoint); handler `.../handlers/session.ts:99-104`; query `DiffQuery` `:39-42` | **Per user message, not session-wide.** `SessionSummary.diff` returns `[]` when `messageID` is omitted (`packages/opencode/src/session/summary.ts:129-131`) and otherwise returns the diffs stored on that user message (`:135-141`). The diffs are computed at summarize time from `step-start`/`step-finish` snapshot hashes (`:82-100`) and stored on the user message (`:102-127`); if the snapshot feature is disabled (`config.snapshot === false`, `:115`) the result is always empty. Response items are `Snapshot.FileDiff`: optional `file`, optional `patch`, `additions`, `deletions`, optional `status` added/deleted/modified (`packages/schema/src/file-diff.ts:6-12`). The route's `[]` is ambiguous: it is the same for "no changes", snapshot disabled, an absent/wrong `messageID` and a message whose diffs were never computed (review #161 F2). The dashboard must therefore first read each user message's native `info.summary.diffs` from the message list: `summary`/`diffs` absent → *not computed / unavailable*; `diffs: []` → *computed, no changes*; non-empty → call the diff route with that `messageID`. Three fixtures must render three distinct labels. |
 | Working-tree diff | `GET /vcs/diff?mode=git\|branch&context=N` and `GET /vcs/diff/raw` | `.../groups/instance.ts:48-49` (paths), `:104-121` (endpoints); handler `.../handlers/instance.ts:51-59`; implementation `packages/opencode/src/project/vcs.ts:235,373-390` | Repo-level VCS diff (`mode=git` or `branch`), not attributable to a turn; 10 MB patch caps (`vcs.ts:12-13`). `GET /vcs/status` and `/vcs` help label it. |
+
+**Directory query binding (review #161 F8).** Every native call that accepts a
+`directory`/`workspace` query field (`/session`, `/session/:id/message`,
+`/session/:id/diff`, `/vcs/*`) sends only the **ACL-validated root of the
+requested session**, never a value taken from the dashboard request. An
+unlisted session is `404` before any native call (T4).
 
 **Never exposed:** `POST /vcs/apply` (`groups/instance.ts:50`), `/session/:id/abort`,
 `/session/:id/revert`, prompt routes and any other mutating route. See §4.
@@ -84,31 +90,39 @@ directory under `Global.Path.data/snapshot/<projectID>/<hash(worktree)>`
 dashboard therefore shows a per-turn diff only when OpenCode retained the
 snapshot; otherwise it must say "diff unavailable" rather than "no changes".
 
-### 1.3 Filesystem fallback (bounded, read-only)
+### 1.3 No Bridge-side git execution (v1)
 
-If neither session diff nor `/vcs/diff` is available, the dashboard may run a
-read-only `git diff` in the session root, as the Bridge's own service user, with:
+An earlier draft proposed a bounded, "hardened" read-only `git diff` fallback run
+by the Bridge service user. Review #161 F1 reproduced repository-controlled
+command execution through `core.fsmonitor` and `filter.*.clean` even with
+`--no-ext-diff --no-textconv` (git 2.43.0): a session root is agent-writable, so
+that fallback would let an agent (or a prompt-injected agent) run code as the
+Bridge user, which holds the connector token, the lock directory and the admin
+socket.
 
-- `GIT_OPTIONAL_LOCKS=0` so `git diff` never writes `.git/index.lock`;
-- `--no-ext-diff --no-textconv --no-color` so repository configuration cannot
-  run an external diff driver or textconv command;
-- a clean environment (no `GIT_CONFIG_GLOBAL` surprises beyond what the root
-  needs), `--no-pager`, a 5 s timeout, and at most 1 MiB of output;
-- no hooks, no `git add`, no index refresh, no worktree changes.
-
-The fallback is labelled as a working-tree diff (not per-turn). A repo whose
-configuration refuses to cooperate is shown as "unavailable", never retried in
-a loop.
+**v1 therefore does not run git at all** — no subprocess, no repository
+configuration, no hooks, no filters. If a working-tree diff is ever needed it
+must run as the least-privileged harness user (the ADR-021 pattern), with
+`-c core.fsmonitor=false`, `-c core.hooksPath=/dev/null`,
+`--no-ext-diff --no-textconv`, `GIT_OPTIONAL_LOCKS=0`, and a refusal of any root
+whose config or attributes define `core.fsmonitor`, `filter.*`, `core.hooksPath`
+or `include.*`; that needs its own review and a canary test proving an
+`fsmonitor` or clean-filter config writes no file. It is **not** in this ADR's
+v1. The dashboard therefore shows diffs only from the native session route, the
+native `/vcs/diff` route, or the ADR-021 history (Claude Code).
 
 ### 1.4 Claude Code
 
-From **ADR-021's history store** (PROPOSED, issue #152): the Bridge-owned
-append-only record of `claude -p` stream-json events for runs the Bridge started
-or resumed. The dashboard reads the file-edit tool events (`write`/`edit` tool
-inputs and their recorded results/patch) from that store, read-only, through a
-narrow interface that ADR-021 defines. Until ADR-021 is accepted and
-implemented, Claude Code sessions show "diff unavailable (ADR-021 pending)";
-this ADR does not define that schema and does not parse `~/.claude` JSONL.
+**Dependency, not a supplied feature (review #161 F6).** ADR-021 (PROPOSED,
+issue #152) defines a Bridge-owned append-only history of `claude -p`
+stream-json events, but as proposed it has **no dashboard interface**, it stores
+bounded tool inputs/results rather than patches, and its first deliverable uses a
+read-only tool profile (`Read,Glob,Grep`) that emits **no file-edit events**.
+The dashboard's Claude diff source is therefore an **open requirement on
+ADR-021**, not something that ADR provides: ADR-021 must add a read-only query
+(and, if wanted, file-edit capture) or the dashboard shows "diff unavailable
+(ADR-021 pending)" for every Claude session. This ADR does not define that
+schema and does not parse `~/.claude` JSONL.
 
 Pre-Bridge turns are unavailable by construction (ADR-021, D7); the dashboard
 shows ADR-021's explicit "history before first Bridge resume is unavailable"
@@ -119,9 +133,9 @@ marker.
 Per session, the dashboard shows the best available source and names it:
 
 1. native per-turn session diff (OpenCode) → label "turn N, native snapshot";
-2. ADR-021 file-edit events (Claude Code) → label "Bridge history";
-3. `/vcs/diff` working tree → label "working tree (not per turn)";
-4. bounded `git diff` fallback → label as such.
+2. `/vcs/diff` working tree (OpenCode) → label "working tree (not per turn)";
+3. ADR-021 history file-edit events (Claude Code) → label "Bridge history",
+   if and when ADR-021 provides the query.
 
 Sources are never silently merged. If two sources disagree, both rows are shown
 with their labels; the dashboard never picks a winner without saying so.
@@ -153,8 +167,12 @@ A dashboard listener is a `unix` socket inside a directory the service user owns
 with mode `0700`, checked exactly as the ADR-020 admin socket does
 (`internal/admin/socket_linux.go:17-55`). The filesystem mode is the auth fence;
 there is no TCP port at all. Remote access uses OpenSSH unix-socket forwarding
-(`ssh -L /tmp/dash.sock:/run/harness-bridge-dash/dashboard.sock`) or a local
-`socat` proxy. This is strictly stronger than 127.0.0.1 and adds no credential.
+to a local socket inside an operator-owned private directory (mode `0700`),
+never a world-writable `/tmp` — for example
+`ssh -L ~/.harness-bridge/dash.sock:/run/harness-bridge-dash/dashboard.sock` — or
+a local `socat` proxy. OpenSSH's own mode for the forwarded local socket is
+UNVERIFIED; the private parent directory is the fence. This is strictly stronger
+than 127.0.0.1 and adds no credential.
 
 ### Option (b): on the public HTTPS listener behind its own dashboard auth
 
@@ -165,8 +183,9 @@ there is no TCP port at all. Remote access uses OpenSSH unix-socket forwarding
   XSS becomes remotely exploitable; CSRF risk is low because everything is GET,
   but session fixation and cache leakage are new concerns; it couples the
   dashboard's release cadence to the connector listener and its tests.
-- Verdict: rejected for v1. A future remote need gets its own ADR with a token/
-  cookie design, not a silent expansion of this one.
+- Recommendation: **not for v1** (recommended against). A future remote need
+  gets its own ADR with a token/cookie design, not a silent expansion of this
+  one.
 
 ### Option (c): both
 
@@ -190,7 +209,7 @@ browser without SSH, that is a separate decision (b).
   `template.URL` for native data. Diffs render in a `<pre>` as text. Files and
   paths are never used to build a filesystem path in the handler.
 - **CSP.** `default-src 'none'; script-src 'self'; style-src 'self';
-  img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';
+  img-src 'self'; connect-src 'self'; frame-ancestors 'none';
   base-uri 'none'; form-action 'none'`, plus `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
 - **No inline script.** One embedded `dashboard.js` and one `dashboard.css` from
@@ -218,8 +237,9 @@ browser without SSH, that is a separate decision (b).
 
 **v1: polling, not SSE.**
 
-- The page polls `GET /api/state?since=<etag>` every 2 s while visible and every
-  10 s when hidden (Page Visibility API); the list view polls every 5 s.
+- The page polls `GET /api/state` with `If-None-Match: <etag>` every 2 s while
+  visible and every 10 s when hidden (Page Visibility API); the list view polls
+  every 5 s.
 - Responses carry `ETag`/`Last-Modified`; `304` is returned when the view model
   is unchanged. The view model is cached for 1 s server-side.
 - Each request has a 5 s context bound; native reads reuse the existing bounded
@@ -249,7 +269,7 @@ no writes). It is not in v1 to keep the surface minimal.
 │ Harness   Session                  Root                 State      │
 │ opencode  ses_e9329c0b (title…)    /opt/…/workspace     idle       │
 │ opencode  ses_1c6acec2 (title…)    /opt/…/proj-x        running    │
-│ claude    claudecode:4e59c1bd      /opt/…/proj-x        completed  │
+│ claude    claudecode:4e59c1bd      /opt/…/proj-x        idle       │
 │ ─────────────────────────────────────────────────────────────────  │
 │ last update 12:04:11Z · polling 2s · diff source: native snapshot   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -258,7 +278,11 @@ no writes). It is not in v1 to keep the surface minimal.
 Columns: harness, session ID + title (truncated), root, state, guard, current
 execution ID, last activity, changed-files count if a diff is available.
 Filters are client-side only (no query-driven server work beyond pagination
-limits).
+limits). Session `state` is one of `idle|running|waiting_for_permission|unknown`;
+`completed` is an **execution** state (`docs/CONTRACTS.md:579-591`), never a
+session state. `idle` means only that the Bridge holds no guard and runs no
+child; it is **not proof that the previous task succeeded** (ADR-011) and must
+not be rendered as success (review #161 F5).
 
 ### 5.2 Session detail (`GET /session/<harness>/<id>`)
 
@@ -307,13 +331,13 @@ free-text fields are rendered because AUDIT-01 stores none.
 | T1 | XSS from repository content, titles, diffs, audit values | `html/template` escaping everywhere; no inline script; CSP; no `template.HTML` | XSS fixture: titles `<script>alert(1)</script>`, paths `"><img src=x onerror=…>`, diff `</pre><script>`, message text; assert escaped output, no raw `<script`, CSP header present; parse HTML and assert no script node from data |
 | T2 | Secret leakage through diffs | local-only transport (a′); redaction option; content never logged or cached to disk; size caps | fake `sk-ant-…` fixture: not logged, redacted when enabled, and never fetched from a public listener |
 | T3 | Unauthorized access | unix socket 0700 / loopback only; refuse non-loopback bind; Host allowlist; no public listener; dashboard disabled by default | startup refuses `0.0.0.0:8080`; Host `evil.example` → 400; if (b) is ever enabled: no cookie → 401, bad/expired cookie → 401 |
-| T4 | Cross-session access / path traversal | reuse the ADR-012 operator ACL; unknown or unlisted session → 404; IDs validated with the existing patterns; never build filesystem paths from native strings | request a session outside the ACL → 404; `../` in IDs → 400/404 |
+| T4 | Cross-session access / path traversal | reuse the ADR-012 operator ACL; unknown or unlisted session → 404; IDs validated with the existing patterns; never build filesystem paths from native strings; native `directory`/`workspace` queries come only from the ACL-validated root | request a session outside the ACL → 404; `../` in IDs → 400/404; a dashboard request cannot influence the native `directory` query |
 | T5 | CSRF | no state-changing route exists; GET/HEAD only; no cookies in (a′) | route-table test + mutating-method sweep → 405 |
 | T6 | Prompt injection through rendered content | the dashboard never feeds displayed content back to an agent; no LLM endpoint; no buttons that call MCP | code review + route table: no route accepts prompt input |
 | T7 | Resource exhaustion | caps (§3), timeouts (5 s), single-flight diffs, 4 concurrent requests, 503 + Retry-After | oversized/binary/truncated fixtures; slow native fake hits the 5 s bound and renders "unavailable" |
 | T8 | Clickjacking | `frame-ancestors 'none'`, `X-Frame-Options: DENY` | header test |
 | T9 | DNS rebinding / CORS | Host allowlist; no CORS headers; no `Access-Control-Allow-Origin` | Host/Origin tests |
-| T10 | Locking out or stalling writers | the dashboard's read-only enumeration takes `m.mu`/`x.mu` briefly, never `x.op`; native reads use their own bounded client, not the execution manager's slots | a fake holds a native read; a concurrent `send_prompt` still proceeds; race detector |
+| T10 | Locking out or stalling writers | the dashboard's read-only enumeration copies run pointers under `m.mu`, releases it, then locks each `x.mu` alone; it never holds `m.mu` and a run mutex together and never takes `x.op`; native reads use their own bounded client, not the execution manager's slots | lock-order test: enumeration concurrent with `send_prompt`/finalize under a 5 s deadline (the race detector does not find lock-order inversions); a fake holds a native read; a concurrent `send_prompt` still proceeds |
 | T11 | Mutation by accident | read-only interface type; no mutating methods reachable from the dashboard package | mutating-method sweep + journal test: no `prompt_submission`/`interrupt`/`guard_release` line caused by dashboard traffic |
 
 ## 7. Implementation plan
@@ -324,9 +348,9 @@ mutation check and an acceptance step. No slice changes the MCP tool contract.
 | Slice | Scope | RED tests / mutations | Acceptance |
 | --- | --- | --- | --- |
 | 1 | `internal/dashboard` skeleton: config (`BRIDGE_DASHBOARD_SOCKET`/`ADDR`, disabled by default), listener validation (0700 unix socket or loopback only), route table, CSP/middleware, read-only `Source` interface | route-table test fails if any non-GET route exists; bind `0.0.0.0` refused; mutation: add a POST route → test RED | server starts on a 0700 socket, `curl` GET `/` returns HTML with CSP; TCP bind to 0.0.0.0 exits with an error |
-| 2 | Sessions list + detail view model; read-only manager enumeration | XSS fixtures RED; mutation: remove escaping → fixture test RED; manager method copies, no aliasing | list matches MCP `list_sessions` for the ACL; detail shows state/guard/current execution |
-| 3 | Diffs: OpenCode per-turn session diff (enumerate user messages), `/vcs/diff`, hardened `git diff` fallback; caps, binary, redaction; Claude Code hook behind a compile-time interface until ADR-021 | oversized/binary fixtures RED; mutation: drop `--no-ext-diff` → fixture with a hostile `diff.external` must not execute | diff matches `GET /session/:id/diff` for a known turn; fallback labelled; unavailable reasons shown |
-| 4 | Audit ring (tee handler), polling JSON + ETag, single-flight, 503 | mutation: add a mutating method to the interface → compile/test RED; journal test | audit feed shows AUDIT-01 lines; no mutation lines from dashboard traffic |
+| 2 | Sessions list + detail view model; read-only manager enumeration | XSS fixtures RED; mutation: remove escaping → fixture test RED; lock-order test (enumeration vs `send_prompt`/finalize, 5 s deadline) RED on an `m.mu`→`x.mu` inversion; manager method copies, no aliasing | list matches MCP `list_sessions` for the ACL; detail shows state/guard/current execution |
+| 3 | Diffs: OpenCode per-turn session diff (enumerate user messages, read `info.summary.diffs` presence), `/vcs/diff`, caps, binary, redaction; **no Bridge-side git subprocess**; Claude Code is an open ADR-021 requirement | `summary.diffs` fixtures (undefined / `[]` / non-empty) RED; mutation: treat undefined as empty, or add a `git` shell-out → test RED; a session root with `core.fsmonitor` and `filter.*.clean` canaries must stay unwritten because nothing runs git | diff matches `GET /session/:id/diff` for a known turn; three distinct labels (computed-empty, not-computed, unavailable); no subprocess is spawned |
+| 4 | Audit ring (tee handler with `event`/key allowlist), polling JSON + `ETag`/`If-None-Match`, single-flight, 503 | mutation: add a mutating method to the interface → compile/test RED; journal test | audit feed shows AUDIT-01 lines; no mutation lines from dashboard traffic |
 | 5 | Hardening sweep (Host/Origin, timeouts, race), docs, live acceptance | full route sweep; race detector | live acceptance below |
 
 ### Live acceptance outline (R-DASH)
@@ -338,7 +362,10 @@ mutation check and an acceptance step. No slice changes the MCP tool contract.
    every row's session/root/state with `list_sessions`/`get_session` over MCP.
 4. Send a prompt through MCP that writes a known file; within two polls the
    detail view shows the new turn and its diff; compare with the native
-   `GET /session/:id/diff` response for the same user message.
+   `GET /session/:id/diff` response for the same user message and with the
+   `info.summary.diffs` presence rule (F2). Put a hostile `core.fsmonitor` and
+   `filter.*.clean` config in the root: dashboard traffic must write no canary
+   because it runs no git (F1).
 5. Attempt `POST`, `PUT`, `PATCH`, `DELETE` on every route → 405; confirm the
    journal contains no `prompt_submission`/`interrupt`/`guard_release` line from
    the dashboard and the manager's counters are unchanged.
@@ -362,7 +389,8 @@ lands.
   disturb the single-writer lock order.
 - Depends on ADR-021 for Claude Code diffs; OpenCode diffs depend on snapshots
   being enabled and retained (7 days, 2 MiB per file).
-- Adds no MCP tool, no database, no external service, no Node build chain.
+- Adds no MCP tool, no database, no external service, no Node build chain, and
+  no git subprocess.
 
 ## Open questions
 
@@ -372,8 +400,10 @@ lands.
    native diff (requires enumerating user messages and snapshots) or the
    working-tree `/vcs/diff`? May the dashboard call the native diff per visible
    turn on every poll, or must it cache turn diffs for the poll interval?
-3. **ADR-021 dependency.** The Claude Code history schema and retention are not
-   settled; the file-edit event shape is UNVERIFIED until ADR-021 is accepted.
+3. **ADR-021 dependency (open requirement).** ADR-021 as proposed has no
+   dashboard query and starts with a read-only tool profile that emits no
+   file-edit events. Must ADR-021 add a read-only query/file-edit capture, or
+   does the dashboard show Claude diffs as unavailable until a later ADR?
 4. **Audit scope and retention.** 1000-entry ring OK? Include admin
    `guard_release` lines? Drop oldest or stop when full?
 5. **Redaction.** On by default or opt-in, and who owns the pattern list?
@@ -382,6 +412,9 @@ lands.
 7. **ADR-022.** Archived/closed sessions: shown, hidden, or a separate filter?
 8. **Multi-harness display.** Is `opencode:`/`claudecode:` in the ID enough, or
    should harnesses get distinct columns/badges?
+9. **Working-tree diff without Bridge-side git.** Is the native `/vcs/diff`
+   route sufficient, or should a future harness-user (least-privilege) fallback
+   with config/attribute refusal be designed and reviewed separately?
 
 ## Limitations / UNVERIFIED
 
@@ -395,7 +428,12 @@ lands.
 - ADR-021's history store does not exist yet (issue #152, PROPOSED); this ADR
   defines only the interface boundary.
 - The manager has no execution-list method today; the read-only shape above is a
-  design, and its exact locking must be reviewed with the manager's lock order.
+  design. Its lock order is specified (copy under `m.mu`, release, then each
+  `x.mu` alone) and must be pinned by the slice-2 lock-order test.
 - Whether `config.snapshot === false` is reachable through supported settings is
   inferred from `summary.ts:115`; the settings surface was not traced.
+- No Bridge-side git: the working-tree diff depends entirely on the native
+  `/vcs/diff` route (or a future, separately reviewed least-privilege fallback).
+- The ADR-021 dashboard interface does not exist; Claude diffs are an open
+  requirement, not an available source.
 - Browser compatibility, mobile layout and accessibility were not tested.
