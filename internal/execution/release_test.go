@@ -171,6 +171,10 @@ type releaseRunner struct {
 	inflight    atomic.Int32
 	overlap     atomic.Bool
 	pause       time.Duration
+	statusCalls atomic.Int32
+	// statusHook, if set, runs at the start of every Status call with the
+	// 1-based call number, before the call is served.
+	statusHook func(n int32)
 }
 
 func (r *releaseRunner) enter() func() {
@@ -193,6 +197,10 @@ func (r *releaseRunner) Get(ctx context.Context, id string) (opencode.Session, e
 	return s, err
 }
 func (r *releaseRunner) Status(ctx context.Context) (map[string]opencode.Status, error) {
+	n := r.statusCalls.Add(1)
+	if r.statusHook != nil {
+		r.statusHook(n)
+	}
 	defer r.enter()()
 	r.mu.Lock()
 	block := r.blockStatus
@@ -381,6 +389,11 @@ func TestReleaseSuccessAbsentAndIdle(t *testing.T) {
 
 // Test 6: ADR-011 promotion still applies after a release and never removes a
 // newer execution's guard.
+//
+// Premise: this test asserts that the old execution's late promotion leaves the
+// newer guard alone WHILE THE NEWER TURN IS QUIESCED (natively idle). It does
+// not prove that a natively busy newer turn blocks the old promotion; that is
+// covered by TestLateWrongCorrelationCannotReleaseGuard/busy (reconcile_test.go).
 func TestReleaseLateCompletionKeepsNewerGuard(t *testing.T) {
 	f := &fake{status: "idle"}
 	m, old := releaseFixtureWith(t, f)
@@ -391,15 +404,15 @@ func TestReleaseLateCompletionKeepsNewerGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This test asserts the promotion while the newer turn is quiesced: let the
-	// newer Prompt land, then let that turn go quiet, so the old correlated
-	// proof can promote while the newer guard is held. The case where a busy
-	// newer turn blocks the old promotion is covered by
-	// TestLateWrongCorrelationCannotReleaseGuard/busy (reconcile_test.go).
-	deadline := time.Now().Add(2 * time.Second)
+	// Let the newer Prompt land, then let that turn go quiet, so the old
+	// correlated proof can promote while the newer guard is held. The wait is
+	// a poll with a generous bound: it ends as soon as the Prompt is seen, and
+	// only a Prompt that never arrives (a real failure) can reach the bound.
+	const promptWait = 30 * time.Second
+	deadline := time.Now().Add(promptWait)
 	for sends(f) < 2 {
 		if time.Now().After(deadline) {
-			t.Fatal("newer Prompt not invoked")
+			t.Fatalf("newer Prompt not invoked within %v (sends=%d, want 2): the newer Send did not reach the runner", promptWait, sends(f))
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -577,5 +590,88 @@ func TestReleaseSnapshotCopiesReleaseTime(t *testing.T) {
 	v := snapshot(Execution{GuardReleasedAt: &now})
 	if v.GuardReleasedAt == &now {
 		t.Fatal("snapshot shares guard_released_at")
+	}
+}
+
+// A cancelled or expired context during the settle sleep is an UPSTREAM_TIMEOUT
+// (retryable, guard kept), not a typed refusal of the evidence: nothing was
+// decided, so the operator may simply retry. SettleMS in the evidence shows the
+// failure happened in the sleep and not in the first native read.
+func TestReleaseSettleSleepCancelledIsUpstreamTimeout(t *testing.T) {
+	f := &fake{status: "idle"}
+	m, x := releaseFixtureWith(t, f)
+	const settle = 30 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.releaseSleep = func(ctx context.Context, d time.Duration) error {
+		cancel() // the caller goes away while the settle sleep is running
+		return m.settleSleepWait(ctx, d)
+	}
+	start := time.Now()
+	ev, err := m.ReleaseGuard(ctx, "ses_test", x.ID, ReleaseOptions{Settle: settle})
+	e := wantCode(t, err, "UPSTREAM_TIMEOUT")
+	if !e.Retryable {
+		t.Fatalf("UPSTREAM_TIMEOUT not retryable: %+v", e)
+	}
+	if !ev.NativeRead || ev.SettleMS != settle.Milliseconds() {
+		t.Fatalf("not refused in the settle sleep: %+v", ev)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("cancel did not end the sleep: took %v", took)
+	}
+	wantKept(t, m, x)
+}
+
+// Accepted trade-off (ADR-020 (b) step 8): the second native read runs holding
+// x.op, so a status poll on the same run waits for it (and gives up at its own
+// bound) instead of starting a native read of its own. A future change that
+// releases x.op during the second read makes this test fail. Poll behavior
+// during the settle SLEEP is the opposite and is pinned by
+// TestReleaseSettleDoesNotBlockPollers.
+func TestReleaseSecondReadHoldsOp(t *testing.T) {
+	r := &releaseRunner{fake: &fake{status: "idle"}}
+	inSecond, resume := make(chan struct{}), make(chan struct{})
+	m, x := releaseFixtureWith(t, r)
+	base := r.statusCalls.Load() // reads done by the monitor before the release
+	r.statusHook = func(n int32) {
+		if n == base+2 { // the second native read of the release
+			close(inSecond)
+			<-resume
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.ReleaseGuard(context.Background(), "ses_test", x.ID, fastRelease)
+		result <- err
+	}()
+	select {
+	case <-inSecond:
+	case err := <-result:
+		t.Fatalf("release ended before its second read: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("release never reached its second native read")
+	}
+	callsDuring := r.statusCalls.Load()
+	const pollBound = 200 * time.Millisecond
+	pollCtx, cancelPoll := context.WithTimeout(context.Background(), pollBound)
+	defer cancelPoll()
+	start := time.Now()
+	_, err := m.Get(pollCtx, x.ID)
+	took := time.Since(start)
+	if err == nil {
+		t.Errorf("status poll succeeded during the second read: x.op was not held")
+	}
+	if took < pollBound/2 {
+		t.Errorf("status poll returned after %v, before waiting for x.op", took)
+	}
+	if got := r.statusCalls.Load(); got != callsDuring {
+		t.Errorf("poll started a native read during the second read: Status calls %d -> %d", callsDuring, got)
+	}
+	close(resume)
+	if err := <-result; err != nil {
+		t.Fatalf("release after the poll: %v", err)
+	}
+	if guardOf(m) != "" {
+		t.Fatal("guard not released")
 	}
 }

@@ -413,12 +413,26 @@ opens it after it acquires writer ownership (ADR-010); read-only ingress never
 opens it (the variable is ignored, with one log line). Startup fails unless the
 parent directory is owned by the service user with mode exactly `0700`. A stale
 socket at the path is replaced only if it is a socket owned by the service user;
-any other file there fails startup. The socket is created with mode `0600`.
+any other file there fails startup. The socket is created with `net.Listen` and
+only then set to mode `0600`; for that short window it has the process umask's
+mode. The real fence is the `0700` parent directory owned by the service user:
+nobody else can reach the socket path at all, so the `0600` mode is a second
+layer, not the primary one.
 Each connection must come from the service user's UID (`SO_PEERCRED`); root uses
 `sudo -u <service user>`. One newline-delimited JSON request per connection, at
-most 4096 bytes, read within 5 s; the connection is closed after 60 s. Unknown
-JSON fields are refused, so no free-text reason can be sent. Unset variable: no
-socket, no release path.
+most 4096 bytes **including the terminating newline** (a line of 4095 bytes
+plus the LF is accepted, 4096 bytes plus the LF is refused as `request too
+large`; pinned by `TestRequestLimitCountsTrailingNewline`), read within 5 s; the
+connection is closed after 60 s. At most 4 connections are served at once: a
+fifth is refused at once, without reading from it, with the retryable
+`TOO_MANY_CONNECTIONS` (fail-closed; nothing is queued and no release is
+attempted). Unknown JSON fields are refused, so no free-text reason can be sent.
+Unset variable: no socket, no release path.
+
+**Trust boundary.** The client (`bridge admin release-guard`) does not check who
+owns the server end of the socket; it relies on the `0700` directory. A
+same-UID attacker (another process running as the service user) is out of scope:
+it can already read the service's secrets and drive the Bridge directly.
 
 **CLI** (same binary, runs as a client and needs none of the server's secrets):
 
@@ -470,7 +484,8 @@ enough):
 | `INVALID_INPUT` | malformed or oversized request, unknown field, bad ticket, bad session or execution ID, guard not held by this execution (including a newer execution holding it), execution not `unknown` or monitor still running, correlated user message absent without the override |
 | `SESSION_BUSY` | native status `busy`, `retry` or unsupported; unfinished assistant; pending permission; native evidence changed during the settle interval |
 | `FORBIDDEN` | peer is not the service UID; session identity or workspace changed |
-| `UPSTREAM_TIMEOUT` | a native read or workspace check did not complete within the 5 s bound (retryable) |
+| `UPSTREAM_TIMEOUT` | a native read or workspace check did not complete within the 5 s bound (retryable); also when the request's context is cancelled or expires during the 5 s settle sleep (the caller went away or the 60 s connection bound passed; nothing is decided, the guard is kept, `evidence.settle_ms` is set because the failure is after the first read) |
+| `TOO_MANY_CONNECTIONS` | more than 4 admin connections at once; refused before any read (retryable, admin socket only) |
 | `UPSTREAM_FAILURE` | a native read failed (retryable) |
 | `UNKNOWN_OUTCOME` | the manager is shutting down |
 
@@ -701,6 +716,19 @@ and a parent link whose check does not complete is not shown. For
 `send_prompt` and `interrupt_execution` this happens before admission, so nothing
 is submitted to the native harness and the call may be retried. A check stuck in
 a call that never returns keeps its slot as described above.
+
+**`interrupt_execution` result and aborted tool parts (H4-F1, H4-F2).**
+
+- `interrupt_execution` returns the execution state **at request time**. It can
+  still be `running`: the native abort is asynchronous and the Bridge does not
+  wait for the turn to end. The client must poll `get_execution_status` for the
+  terminal state (`interrupted`, or whatever the native evidence proves).
+- Native part status is not outcome evidence. After an abort, an OpenCode `bash`
+  tool part can read `status: completed` with no exit code. The Bridge's
+  `interrupted` comes from the assistant message's `MessageAbortedError`
+  (`info.error`), never from a part. Never read a part alone as success, and do
+  not treat `completed` on a tool part of an aborted turn as the command having
+  finished.
 
 Execution manager workspace checks (EXEC-FS-BOUND-IMPL, 2026-11-05;
 docs/design/EXEC_FS_BOUNDING.md). The `EvalSymlinks`/`Stat` identity checks inside

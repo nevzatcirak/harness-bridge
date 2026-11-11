@@ -79,6 +79,25 @@ Do every step here before considering Step 3. None of them change state.
      asks for. Never use `-u user:password`, which puts the password in the
      process list.
 
+     **Passwords containing `"` or `\`.** The curl config line above wraps the
+     value in double quotes, and curl's config syntax treats `\` as an escape
+     inside them. A password containing a literal `"` or `\` therefore breaks the
+     line. Measured with curl: an unescaped password `p"w\x` was sent as `p`, cut
+     at the first quote, so the request fails authentication; it is a hard
+     failure, not an injection (`readSecret` already rejects CR, LF and NUL). Escape the
+     backslash first, then the quote, before `printf`, with shell builtins only
+     (no external command sees the password):
+     ```bash
+     PW=$(<"$PWFILE")
+     PW=${PW//\\/\\\\}   # \ -> \\
+     PW=${PW//\"/\\\"}    # " -> \"
+     builtin printf 'user = "%s:%s"\n' "${OPENCODE_SERVER_USERNAME:-opencode}" "$PW" \
+       | curl --silent --show-error --fail-with-body --config - … (rest as above)
+     unset PW
+     ```
+     The same escaping applies to the Step 3 command. A username containing `"`
+     or `\` needs the same treatment.
+
    Select assistant messages without completion:
    ```sh
    jq -r '.[] | select(.info.role == "assistant" and ((.info.time.completed // 0) <= 0))
@@ -170,7 +189,8 @@ DIR=<SESSION_DIRECTORY>                  # the session's own directory
 # The bash builtin printf and $(<file) run in the shell itself, so the password
 # never appears in any process's argv (/proc/*/cmdline), and with xtrace off it
 # is not echoed to stderr. curl reads it from its stdin config.
-# (A password containing " or \ must be escaped for curl's config syntax.)
+# (A password containing " or \ must be escaped for curl's config syntax: see
+# the escaping snippet in Step 2.1.)
 builtin printf 'user = "%s:%s"\n' "${OPENCODE_SERVER_USERNAME:-opencode}" "$(<"$PWFILE")" \
   | curl --silent --show-error --fail-with-body --config - \
       --get --data-urlencode "directory=$DIR" \

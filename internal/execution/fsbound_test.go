@@ -343,9 +343,14 @@ func TestProbeIdentityFSTimeoutNeverPromotes(t *testing.T) {
 		name  string
 		block func(nth int32) bool
 	}{
-		// V6: the first EvalSymlinks of the next probe. Later probes join that
-		// stuck call (same key), so the run stays unknown until release.
-		{"V6", func(nth int32) bool { return nth == 1 }},
+		// V6: every EvalSymlinks of "/" blocks, starting with the first one of
+		// the next probe, which is the V6 check. It must block ALL of them, not
+		// only the first: a stuck call is abandoned after fsTimeout (2 s), and
+		// under full -race load a later probe could then start a fresh,
+		// unblocked call and complete the run, which made this subtest depend
+		// on wall-clock timing (#130 F1). With every call blocked the run stays
+		// unknown however many probes run, until release.
+		{"V6", func(nth int32) bool { return nth >= 1 }},
 		// V7: the first probe's V6 passes and its V7 (the second EvalSymlinks)
 		// blocks. V7 starts its own call (fresh key), so later probes would not
 		// join it; block every later EvalSymlinks too, so the run stays unknown

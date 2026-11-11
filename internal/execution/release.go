@@ -170,6 +170,13 @@ func (m *Manager) settleSleep(ctx context.Context, d time.Duration) error {
 	if m.releaseSleep != nil {
 		return m.releaseSleep(ctx, d)
 	}
+	return m.settleSleepWait(ctx, d)
+}
+
+// settleSleepWait is the real settle wait: it ends early, with a typed error,
+// when the manager closes (UNKNOWN_OUTCOME) or ctx is cancelled or expires
+// (UPSTREAM_TIMEOUT, retryable; nothing was decided and the guard is kept).
+func (m *Manager) settleSleepWait(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
