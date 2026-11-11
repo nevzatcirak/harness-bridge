@@ -12,8 +12,8 @@ type Config struct {
 	// Socket is the path of a unix socket in a 0700 directory
 	// (BRIDGE_DASHBOARD_SOCKET). It is the recommended transport (ADR-023 (a')).
 	Socket string
-	// Addr is a loopback host:port (BRIDGE_DASHBOARD_ADDR); the host must be a
-	// loopback IP literal.
+	// Addr is host:port (BRIDGE_DASHBOARD_ADDR); the host must be exactly the
+	// IP literal 127.0.0.1 or ::1.
 	Addr string
 }
 
@@ -36,9 +36,12 @@ func ConfigFromEnv(env func(string) string) (Config, error) {
 	return c, nil
 }
 
-// ValidateAddr accepts only host:port where host is a loopback IP literal
-// (127.0.0.0/8 or ::1). Wildcards (0.0.0.0, ::), any other interface, an empty
-// host and host names are refused, so no name resolution can widen the bind.
+// ValidateAddr accepts only host:port where host is exactly 127.0.0.1 or ::1.
+// Those are the two literals on the Host allowlist (DefaultHosts), so every
+// address that can be bound can also be served; another 127.0.0.0/8 address
+// would bind and then answer 400 to every request (review #194 P3-1).
+// Wildcards (0.0.0.0, ::), any other interface, an empty host and host names are
+// refused, so no name resolution can widen the bind.
 func ValidateAddr(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -53,6 +56,9 @@ func ValidateAddr(addr string) error {
 	}
 	if ip.IsUnspecified() || !ip.IsLoopback() {
 		return fmt.Errorf("BRIDGE_DASHBOARD_ADDR host %q is not loopback: the dashboard never binds a non-loopback address", host)
+	}
+	if !ip.Equal(net.IPv4(127, 0, 0, 1)) && !ip.Equal(net.IPv6loopback) {
+		return fmt.Errorf("BRIDGE_DASHBOARD_ADDR host %q must be exactly 127.0.0.1 or ::1 (the Host allowlist names only those)", host)
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 {

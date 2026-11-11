@@ -2,17 +2,20 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
 // Server is a running dashboard listener.
 type Server struct {
-	ln  net.Listener
-	srv *http.Server
+	ln      net.Listener
+	srv     *http.Server
+	closing atomic.Bool
 }
 
 // Open starts the dashboard if cfg enables it and returns nil, nil otherwise
@@ -59,7 +62,9 @@ func Open(cfg Config, src Source, uid int) (*Server, error) {
 		MaxHeaderBytes:    16 << 10,
 	}}
 	go func() {
-		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		// A Serve error caused by our own Shutdown (the listener closed under it)
+		// is expected and not logged.
+		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed && !(s.closing.Load() && errors.Is(err, net.ErrClosed)) {
 			log.Printf("dashboard stopped: %v", err)
 		}
 	}()
@@ -69,5 +74,21 @@ func Open(cfg Config, src Source, uid int) (*Server, error) {
 // Addr returns the listener address.
 func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 
-// Shutdown stops accepting and waits for in-flight requests until ctx ends.
-func (s *Server) Shutdown(ctx context.Context) error { return s.srv.Shutdown(ctx) }
+// Shutdown stops accepting and waits for in-flight requests until ctx ends. It
+// closes the listener itself, first, so the listener is closed when Shutdown
+// returns even if it runs before the Serve goroutine has handed the listener to
+// the http.Server (review #194 P2-1; http.Server.Shutdown can only close a
+// listener it already tracks). A unix socket file is removed by the close. It
+// is safe to call more than once.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.closing.Store(true)
+	if err := s.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	// http.Server.Shutdown closes the listeners it tracks too and reports the
+	// error of closing the one we already closed: that is expected, not a failure.
+	if err := s.srv.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
+}

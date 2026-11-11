@@ -184,3 +184,177 @@ func TestShutdownClosesTheListener(t *testing.T) {
 	}
 	_ = syscall.Getpid
 }
+
+// Shutdown must close the listener deterministically, even when it runs before
+// the Serve goroutine has registered the listener with the http.Server (review
+// #194 P2-1). No sleeps: many Open+Shutdown pairs, each followed by a dial.
+func TestShutdownImmediatelyAfterOpenClosesTheListener(t *testing.T) {
+	for i := 0; i < 300; i++ {
+		srv, err := Open(Config{Addr: "127.0.0.1:0"}, nil, os.Geteuid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := srv.Addr().String()
+		shutdown(t, srv)
+		if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+			conn.Close()
+			t.Fatalf("iteration %d: listener still accepting after Shutdown returned", i)
+		}
+	}
+}
+
+func TestShutdownImmediatelyAfterOpenRemovesTheUnixSocket(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "dash.sock")
+	for i := 0; i < 100; i++ {
+		srv, err := Open(Config{Socket: sock}, nil, os.Geteuid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		shutdown(t, srv)
+		if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+			conn.Close()
+			t.Fatalf("iteration %d: unix socket still accepting after Shutdown returned", i)
+		}
+	}
+}
+
+// Shutdown is idempotent: a second call neither errors nor blocks.
+func TestShutdownTwiceIsHarmless(t *testing.T) {
+	srv, err := Open(Config{Addr: "127.0.0.1:0"}, nil, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown(t, srv)
+	shutdown(t, srv)
+}
+
+// Scope of the symlink rule (review #194 P3-2): the FINAL directory component is
+// opened with O_NOFOLLOW and refused if it is a symlink. Ancestor components of
+// the path are followed, like the admin socket does; an ancestor that another
+// user can replace is the same-UID/root residual of the ADR-020 trust boundary.
+// This test states that scope so it cannot be read as stronger than it is.
+func TestSymlinkRuleCoversOnlyTheFinalDirectoryComponent(t *testing.T) {
+	real := t.TempDir()
+	if err := os.Chmod(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(real, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// Final component is a symlink: refused.
+	if srv, err := Open(Config{Socket: filepath.Join(link, "d.sock")}, nil, os.Geteuid()); err == nil || srv != nil {
+		t.Fatal("a symlink as the final directory component must be refused")
+	}
+	// An ancestor is a symlink: followed (documented residual, not a guarantee).
+	srv, err := Open(Config{Socket: filepath.Join(link, "sub", "d.sock")}, nil, os.Geteuid())
+	if err != nil {
+		t.Fatalf("an ancestor symlink is followed by design (final component %s is a real 0700 directory): %v", sub, err)
+	}
+	shutdown(t, srv)
+}
+
+// The directory identity is re-checked after the bind (review #194 P3-3). A
+// swap of the parent directory between the pre-bind check and the bind is
+// detected: the listener is closed, nothing is served, and the error says so.
+func TestDirectorySwappedAfterBindIsDetected(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "run")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "dash.sock")
+	restore := setPostBindHookForTesting(func() {
+		// Replace the directory by another 0700 directory at the same path.
+		if err := os.Rename(dir, filepath.Join(base, "moved")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restore()
+	srv, err := Open(Config{Socket: sock}, nil, os.Geteuid())
+	if err == nil || srv != nil {
+		t.Fatalf("a directory swapped after the bind must be refused: srv=%v err=%v", srv, err)
+	}
+	if !strings.Contains(err.Error(), "changed") {
+		t.Errorf("error should say the directory changed: %v", err)
+	}
+	if conn, derr := net.DialTimeout("unix", sock, time.Second); derr == nil {
+		conn.Close()
+		t.Fatal("nothing may listen at the swapped path")
+	}
+}
+
+// Without a swap the post-bind re-check passes (guards against a re-check that
+// refuses everything).
+func TestPostBindRecheckPassesWhenNothingChanged(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	restore := setPostBindHookForTesting(func() { called = true })
+	defer restore()
+	srv, err := Open(Config{Socket: filepath.Join(dir, "d.sock")}, nil, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdown(t, srv)
+	if !called {
+		t.Fatal("the post-bind hook was not reached: the re-check is not between bind and use")
+	}
+}
+
+// The device and inode comparison matters on its own: if the swapped-in
+// directory also holds a socket of the service user at the same path, the
+// socket check alone passes, and only the directory identity refuses.
+func TestDirectorySwappedWithAForgedSocketIsDetected(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "run")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "dash.sock")
+	var forged net.Listener
+	restore := setPostBindHookForTesting(func() {
+		if err := os.Rename(dir, filepath.Join(base, "moved")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if forged, err = net.Listen("unix", sock); err != nil {
+			t.Fatal(err)
+		}
+	})
+	defer restore()
+	defer func() {
+		if forged != nil {
+			forged.Close()
+		}
+	}()
+	srv, err := Open(Config{Socket: sock}, nil, os.Geteuid())
+	if err == nil || srv != nil {
+		t.Fatalf("a swapped directory holding a forged socket must be refused: srv=%v err=%v", srv, err)
+	}
+	if !strings.Contains(err.Error(), "changed") {
+		t.Errorf("error should say the directory changed: %v", err)
+	}
+}

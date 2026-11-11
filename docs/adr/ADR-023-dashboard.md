@@ -462,4 +462,17 @@ lands.
   `/vcs/diff` route (or a future, separately reviewed least-privilege fallback).
 - The ADR-021 dashboard interface does not exist; Claude diffs are an open
   requirement, not an available source.
+- Unix-socket listener residual (slice 1 review #194 P3-2/P3-3). The socket
+  directory is checked (owner, mode exactly 0700, opened with `O_NOFOLLOW`) and
+  then the socket is bound **by path**. `O_NOFOLLOW` refuses a symlink only as
+  the **final** directory component; ancestor components are followed, as for the
+  ADR-020 admin socket. After the bind the directory is opened again and must
+  have the same device, inode, owner and mode, and the socket must be a socket
+  owned by the service user, otherwise startup is refused: this detects a swap
+  that happened before the re-check. It does not close the window after it, and
+  an ancestor or the directory itself that another user (or root) can replace is
+  outside what the dashboard can defend: the **same-UID/root residual of the
+  ADR-020 trust boundary**, an operator duty (the socket directory and its
+  ancestors must not be replaceable by agent users). The TCP transport accepts
+  only `127.0.0.1` and `::1`, the two literals on the Host allowlist.
 - Browser compatibility, mobile layout and accessibility were not tested.
