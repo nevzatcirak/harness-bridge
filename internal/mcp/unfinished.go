@@ -62,6 +62,14 @@ func wouldBeIdle(v opencode.Session, d directoryEvidence) bool {
 // guardWindowHook runs, in tests only, after the needsHistory decisions and
 // before view, so a test can release a guard inside that window (#95 finding 1).
 // It is nil in production.
+//
+// It is a package-level variable, not a field, because the window it opens is
+// inside describe/discover, which have no handle a test could set it on without
+// widening the production API of those functions. The seam is therefore global
+// and not safe for t.Parallel(): a test that sets it must reset it with
+// t.Cleanup, and no test in this package runs in parallel. A build-tag test
+// file cannot replace it (the call site is in production code); if the seam is
+// ever refactored, prefer an unexported field on the server over a global.
 var guardWindowHook func()
 
 func runGuardWindowHook() {

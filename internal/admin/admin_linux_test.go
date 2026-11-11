@@ -382,3 +382,130 @@ func TestListenStaleSocket(t *testing.T) {
 		t.Fatal("regular file changed")
 	}
 }
+
+// startWith is start with a configuration hook that runs before Serve, so the
+// test never writes a Server field while a connection is being handled.
+func startWith(t *testing.T, stub *stubReleaser, configure func(*Server)) *harness {
+	t.Helper()
+	path := filepath.Join(privateDir(t), "admin.sock")
+	ln, err := Listen(path, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	srv := &Server{Runs: stub, UID: os.Geteuid(), Logger: slog.New(slog.NewJSONHandler(logs, nil)), ReadTimeout: time.Second, HandleTimeout: 5 * time.Second}
+	configure(srv)
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ln) }()
+	t.Cleanup(func() {
+		srv.Close()
+		if err := <-done; err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	})
+	return &harness{socket: path, stub: stub, logs: logs, srv: srv}
+}
+
+// paddedRequest is a valid release request, left-padded with spaces so that
+// the line, including its terminating newline, is exactly total bytes.
+func paddedRequest(t *testing.T, total int) []byte {
+	t.Helper()
+	b, err := json.Marshal(validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := total - 1 - len(b)
+	if pad < 0 {
+		t.Fatalf("request is %d bytes, larger than %d", len(b)+1, total)
+	}
+	return append(append(bytes.Repeat([]byte(" "), pad), b...), '\n')
+}
+
+// MaxRequestBytes counts the terminating newline: a line of exactly
+// MaxRequestBytes bytes including its LF is accepted (4095 bytes of JSON and
+// padding), one byte more (4096 bytes plus the LF) is refused as too large.
+func TestRequestLimitCountsTrailingNewline(t *testing.T) {
+	cases := []struct {
+		name    string
+		total   int // bytes on the wire, including the LF
+		allowed bool
+	}{
+		{"4095_plus_LF_accepted", MaxRequestBytes, true},
+		{"4096_plus_LF_refused", MaxRequestBytes + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubReleaser{}
+			h := start(t, os.Geteuid(), stub)
+			r := raw(t, h, paddedRequest(t, c.total))
+			if c.allowed {
+				if r.Outcome != "released" || stub.count() != 1 {
+					t.Fatalf("response %+v calls %d, want released once", r, stub.count())
+				}
+				return
+			}
+			refused(t, r, "INVALID_INPUT")
+			if r.Error.Message != "request too large" || stub.count() != 0 {
+				t.Fatalf("response %+v calls %d, want request too large and no release", r, stub.count())
+			}
+		})
+	}
+}
+
+// An idle connection holds a slot until the request is read or ReadTimeout
+// passes. With the cap in force, a connection over the cap is refused at once
+// and fail-closed; releasing a slot makes room again.
+func TestConnectionCapRefusesExtra(t *testing.T) {
+	const wantCap = 4
+	stub := &stubReleaser{}
+	h := startWith(t, stub, func(s *Server) { s.ReadTimeout = 30 * time.Second })
+	var holders []net.Conn
+	t.Cleanup(func() {
+		for _, c := range holders {
+			_ = c.Close()
+		}
+	})
+	for i := 0; i < wantCap; i++ {
+		c, err := net.Dial("unix", h.socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		holders = append(holders, c)
+	}
+	// Give the server time to accept all holders before the extra connection.
+	waitFor(t, "holders admitted", func() bool { return h.srv.active() == wantCap })
+
+	extra, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	_ = extra.SetDeadline(time.Now().Add(2 * time.Second))
+	var r Response
+	if err = json.NewDecoder(extra).Decode(&r); err != nil {
+		t.Fatalf("extra connection got no immediate refusal: %v", err)
+	}
+	refused(t, r, "TOO_MANY_CONNECTIONS")
+	if r.Error == nil || !r.Error.Retryable || stub.count() != 0 {
+		t.Fatalf("response %+v calls %d, want a retryable refusal and no release", r, stub.count())
+	}
+
+	// Closing a holder frees a slot; a normal request then succeeds.
+	_ = holders[0].Close()
+	holders = holders[1:]
+	waitFor(t, "slot freed", func() bool { return h.srv.active() == wantCap-1 })
+	if got := call(t, h, validRequest()); got.Outcome != "released" {
+		t.Fatalf("after freeing a slot: %+v", got)
+	}
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}

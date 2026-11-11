@@ -986,3 +986,22 @@ Each quote below is unchanged in its section; the current fact replaces it.
 3. ADR-020 implementation, if the maintainer accepts it.
 4. Phase 7 (workspace discovery, selection, launcher, session observatory),
    later.
+
+## H4 result 2026-11-10 — main 9db1c1d promoted as the live writer
+
+Quoted verbatim from [`docs/evidence/H4_EVIDENCE_2026-11-10.md`](evidence/H4_EVIDENCE_2026-11-10.md):
+
+> **H4: PASS.** The independent rebuild matched (#138), and the native DB, filesystem and journal corroborate the run (#139). Main `9db1c1d` is the live writer, with:
+
+| ID | Finding | Priority |
+|---|---|---|
+| H4-F1 | `interrupt_execution` returns the execution state at request time (`running`). Clients must poll for the terminal state. CONTRACTS does not say this explicitly. Proposal: document it, or return an explicit `interrupt_requested` marker. | P3 |
+| H4-F2 | An aborted bash part reads `status: "completed"` with `exit: null` and "User aborted the command". The Bridge correctly reports `interrupted`, but a client that reads native parts alone could be misled. Document it. | P3 |
+
+Links:
+
+- Evidence: [`docs/evidence/H4_EVIDENCE_2026-11-10.md`](evidence/H4_EVIDENCE_2026-11-10.md); runbook: [`docs/evidence/H4_RUNBOOK.md`](evidence/H4_RUNBOOK.md)
+- PR [#141](https://github.com/nevzatcirak/harness-bridge/pull/141) (P6 spike evidence, merged `4648ca0`)
+- Issues [#137](https://github.com/nevzatcirak/harness-bridge/issues/137), [#138](https://github.com/nevzatcirak/harness-bridge/issues/138), [#139](https://github.com/nevzatcirak/harness-bridge/issues/139)
+
+Live writer: harness-bridge-h4 sha256 45fd5069…e854 (main 9db1c1d), token max lifetime 168h, ADR-020 admin socket enabled.

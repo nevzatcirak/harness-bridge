@@ -29,6 +29,9 @@ const (
 	OpReleaseGuard = "release_guard"
 	// MaxRequestBytes bounds one newline-delimited JSON request.
 	MaxRequestBytes = 4096
+	// MaxConns is the number of connections served at once. A connection over
+	// the cap is refused at once with TOO_MANY_CONNECTIONS; nothing is queued.
+	MaxConns        = 4
 	maxResponseSize = 64 << 10
 )
 
@@ -78,6 +81,7 @@ type Server struct {
 	ReadTimeout, HandleTimeout time.Duration
 
 	mu     sync.Mutex
+	conns  int
 	ln     net.Listener
 	wg     sync.WaitGroup
 	closed bool
@@ -113,12 +117,58 @@ func (s *Server) Serve(ln net.Listener) error {
 			}
 			return err
 		}
+		if !s.admit() {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.refuseOverCap(conn)
+			}()
+			continue
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer s.release()
 			s.serveConn(ctx, conn)
 		}()
 	}
+}
+
+// admit takes a connection slot, or reports that all MaxConns are in use.
+func (s *Server) admit() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conns >= MaxConns {
+		return false
+	}
+	s.conns++
+	return true
+}
+
+// refuseOverCap answers a connection over the cap without reading from it and
+// closes it. The peer UID is still recorded in the one audit line.
+func (s *Server) refuseOverCap(conn net.Conn) {
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	principal := "admin:uid=unknown"
+	if uid, err := peerUID(conn); err == nil {
+		principal = "admin:uid=" + strconv.Itoa(uid)
+	}
+	e := &execution.Error{Code: "TOO_MANY_CONNECTIONS", Message: "too many admin connections; retry", Retryable: true}
+	s.reply(conn, s.refuse(principal, Request{}, nil, e))
+}
+
+func (s *Server) release() {
+	s.mu.Lock()
+	s.conns--
+	s.mu.Unlock()
+}
+
+// active reports the number of connections currently being served.
+func (s *Server) active() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns
 }
 
 // Close stops accepting, cancels in-flight requests and waits for them. The
