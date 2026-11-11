@@ -9,6 +9,22 @@ accepted. Implementation: see "Implementation (option (d))" below.
 ADR numbering: ADR-015 and ADR-016 are referenced in `docs/ROADMAP.md` as
 PROPOSED but are not in the repository. ADR-018 is the next unused number.
 
+**Amendment 2026-11-11 (maintainer decision D10: approved; text alignment
+only, no behavior change).** PR #128 changed `internal/execution/reconcile.go`
+so that an explicit native `idle` entry without terminal proof is treated
+exactly like an absent entry: `unknown`, `OBSERVATION_UNAVAILABLE`, then
+`MONITOR_EXPIRED`, never `running` (R83-REVIEW #86 finding 3). The behavior
+now lives at `reconcile.go:376` (`!exists || status.Type == "idle"` on the
+terminal-proof path) and `:405-407` (the unresolved branch for absent, idle
+or unsupported status). The original text of this ADR, written at `fb298ed`,
+said `running` in two places; both are aligned above: the evidence-table row
+`TestF7PermissionRejectIdleStatus` in §2, and the "Out of scope" bullet about
+the `idle`-without-proof report. The test
+`TestF7PermissionRejectIdleStatus` asserts the new outcome
+(`internal/execution/permission_reject_test.go:129-165`). The accepted decision
+(option (d) built on (a)), the kept invariants and §5 are unchanged. Nothing
+else in this ADR is edited.
+
 ## Problem
 
 Finding F-7 (R5b, 2026-11-06, P2), on writer `692992d`: a human rejected a
@@ -143,7 +159,7 @@ reproduces the R5b sequence:
 | Test | Main outcome |
 |---|---|
 | `TestF7PermissionRejectStaysUnknown` | **Still `unknown`.** `OBSERVATION_UNAVAILABLE` before monitor expiry, `MONITOR_EXPIRED` after. `ended_at` unset, error is the generic `UNKNOWN_OUTCOME: …`. Guard held, 1 Prompt, 0 Abort. New compared with `692992d`: the ADR-017 (a) block reports `stall_suspected: true` with `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (`internal/execution/liveness.go:176`). The supervisor still sees nothing that names a rejection. |
-| `TestF7PermissionRejectIdleStatus` | Defensive, because OpenCode deletes idle entries. With native `idle` present and no proof, main reports **`running`**, with liveness `native_status: "absent"`, until monitor expiry; then `unknown`/`MONITOR_EXPIRED`. Guard held. |
+| `TestF7PermissionRejectIdleStatus` | Defensive, because OpenCode deletes idle entries. With native `idle` present and no proof, main (since PR #128) treats the entry like an absent one: `unknown`/`OBSERVATION_UNAVAILABLE`, liveness `native_status: "absent"`, until monitor expiry; then `unknown`/`MONITOR_EXPIRED`. Guard held. *(Amended 2026-11-11: the table originally recorded `running` at `fb298ed`; see the Amendment note.)* |
 | `TestF7PermissionRejectThenContinueCompletes` | Continue case (feedback or `continue_loop_on_deny`): a later assistant message with `finish: "stop"` is promoted to `completed`, and the guard is released. No record remains that a permission was rejected on the way. |
 
 Why: `terminalState` (`internal/execution/reconcile.go:404-424`) accepts only
@@ -354,7 +370,8 @@ It is report-only and grants no ability to reply. Decide it independently of
 - Any native permission reply or approval by the Bridge.
 - Any guard release without terminal proof.
 - Any change to ADR-010, ADR-011 or ADR-017.
-- The `idle`-without-proof `running` report in §2. That state comes from
+- The `idle`-without-proof `running` report in §2. That state came from
   `reconcile.go:396-399` at `fb298ed` (405-410 after the option (d) change)
-  and is unreachable with OpenCode 1.19.4 status
-  semantics; it is recorded only as a finding.
+  and was unreachable with OpenCode 1.19.4 status semantics; it was recorded
+  only as a finding. It was fixed by PR #128 (see the Amendment note); this
+  bullet is kept as the original scope statement.
