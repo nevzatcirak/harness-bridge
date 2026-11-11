@@ -136,11 +136,27 @@ New mutation tool, additive.
 | `execution_id` | an execution known to this writer |
 | `permission_id` | the native request ID; must match `[A-Za-z0-9_-]{1,128}` (closed pattern) |
 | `decision` | `reject` or `allow_once` only. **No `always`, ever.** The schema rejects any other value |
+| `supersedes` | **optional.** The `attempt_id` of an earlier attempt of this same `(execution_id, permission_id)` whose outcome was `UNKNOWN_OUTCOME`; closed opaque pattern `[A-Za-z0-9_-]{22}` (the Bridge generates a 22-character base64url value from 16 random bytes). Honored only in the one state described in 4.3; otherwise refused with a closed reason |
 
-Output: `{execution_id, permission_id, decision, outcome, decided_by, human_verified: false}`
-where `outcome` is `replied` and `decided_by` is the literal `chat_client`. The
-two fields are in every successful result so no client can present the answer
-as verified.
+The input object keeps `additionalProperties: false`: these four properties
+(`execution_id`, `permission_id`, `decision`, `supersedes`) are the whole input,
+and any other field is refused. `supersedes` is the only optional one.
+
+Output (success): `{execution_id, permission_id, decision, outcome, attempt_id,
+attempt, decided_by, human_verified: false}` where `outcome` is `replied`,
+`attempt_id` is the 22-character opaque ID of this attempt, `attempt` is `1` or
+`2` (2 only for a superseding attempt), and `decided_by` is the literal
+`chat_client`. The two last fields are in every successful result so no client
+can present the answer as verified.
+
+**The `UNKNOWN_OUTCOME` response carries the token too.** The shared error
+object of CONTRACTS (`code`, `message`, `retryable`, optional `execution_id`)
+gets two **additive optional** fields, used only by `reply_permission`:
+`attempt_id` and `attempt`. A caller therefore always has the value to quote in
+`supersedes`, whether the outcome was the original `UNKNOWN_OUTCOME` or the
+recorded one returned for a same-key call (4.3). No other error code carries
+them, and no error carries native text. The shared error definition stays valid
+for every other tool because the new fields are optional.
 
 ### 4.1 Decision table
 
@@ -187,19 +203,48 @@ as verified.
   - `replied`, same decision: returns the recorded result, **sends nothing**;
   - `replied`, opposite decision: `IDEMPOTENCY_CONFLICT` (`retryable:false`);
   - `unknown` (or `in_flight`, so an overlapping call): returns the recorded
-    `UNKNOWN_OUTCOME` (`retryable:false`) with its `attempt_id`, **sends
-    nothing**, whatever the decision in the new call;
+    `UNKNOWN_OUTCOME` (`retryable:false`) with its `attempt_id` and `attempt`
+    (the error fields of section 4), **sends nothing**, whatever the decision in
+    the new call, unless the call is a valid superseding attempt (below, only
+    from state `unknown`);
   - `refused`: re-evaluated normally (nothing was sent).
   After a restart the record is empty; the native side then answers a reply to
-  a request that is gone with not-found, which is the fail-closed outcome. A
+  a request that is gone with not-found, which is the fail-closed outcome.
+  **Documented residual (post-restart, chosen over an operator-only path):** a
   request that is still pending after a restart is, from the Bridge's view, a
-  fresh request with attempt number 1.
+  fresh request with attempt number 1, with no `supersedes` and no attempt-2
+  accounting, so a caller can send another reply for a request whose earlier
+  reply may have been in flight when the Bridge stopped. This is accepted as a
+  stated limitation, not as a decision, for three reasons: (a) native
+  first-wins at-most-once (`perm:109-114`) means the earlier reply and the new
+  one cannot both apply, so the worst case is that the answer that lands is the
+  one of the two, never a double effect; (b) the Bridge restart is itself a
+  fenced operator action (ADR-010), so it is operator-visible, and the new
+  attempt is checked by the same native still-pending re-read and the same
+  policy as any attempt 1; (c) the audit line carries a `process_start` field
+  (the Bridge process start time), so an auditor can see that attempts of one
+  `(execution_id, permission_id)` straddle a restart even though the Bridge
+  keeps no memory of them. Routing every post-restart pending request through
+  an operator-only path is the stricter alternative and is folded into open
+  question 8; this ADR does not choose it.
 - **Never an automatic or silent re-reply.** The native API has no
   idempotency key and cannot tell a lost response from a request that never
   existed or was dropped (research §5). A timeout or lost response yields
   `UNKNOWN_OUTCOME` with the `attempt_id`, and the Bridge does not resend by
   itself, ever. A caller who wants another try must make a **new, explicit,
   distinctly keyed attempt**:
+  0. **`supersedes` is honored only when the record's state is `unknown`.**
+     In every other state it is refused **before any native call**, with a
+     closed reason: `in_flight` → `INVALID_INPUT`, reason `attempt_in_flight`,
+     `retryable: true` (try again once the first attempt has settled; this stops
+     two concurrent native replies); `replied` → `IDEMPOTENCY_CONFLICT`, reason
+     `already_replied`; `refused` → `INVALID_INPUT`, reason `nothing_to_supersede`
+     (a refused call sent nothing, so retry it normally without `supersedes`);
+     no record → `INVALID_INPUT`, reason `nothing_to_supersede`; a value that is
+     not the record's current `attempt_id` → `INVALID_INPUT`, reason
+     `supersedes_mismatch`; a second supersede (the record already has attempt 2)
+     → `FORBIDDEN`, reason `supersede_limit`. None of these reasons carries
+     native text.
   1. the call carries `supersedes: <attempt_id>` quoting the unknown attempt
      (proof it saw the unknown outcome; a call without it only gets the
      recorded `UNKNOWN_OUTCOME` above);
@@ -285,9 +330,9 @@ answer it natively or Chat can `reject` it.
 AUDIT-01 gets `event=permission_reply`, one line per phase per call on every
 return path (so one call writes `attempt` then `result`, and a refusal before
 the attempt writes one `refused` line). Fields: `tool=reply_permission`,
-`phase`, `attempt` (1, or 2 for a superseding attempt), `supersedes` (the
+`phase`, `attempt` (1, or 2 for a superseding attempt), `attempt_id`, `supersedes` (the
 `attempt_id` it supersedes, when present), `outcome`, `accepted`, `error_code`,
-`decision`, `permission_id`,
+`decision`, `process_start`, `permission_id`,
 `execution_id`, `session_id` (when well formed), `native_tool`, `kind`,
 `scope_digest`, `pattern_count`, `policy_mode`, `policy_rule` (the closed code
 that allowed or refused), and always:
@@ -367,7 +412,7 @@ maintainer needs verified human approval. The maintainer decides.
 |---|---|---|---|
 | S1 | Wire `ObservedPermission` into the manager; `pending_permission` and `pending_permission_count` (no patterns) | `waiting_for_permission` exposes the fields; other states do not; unattributed/conflicting are count-only; no native text | expose a pattern in default mode; show an unattributed request as actionable |
 | S2 | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
-| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native call, second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified` | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified |
+| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native call, second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified`. **Contract tests:** the input schema accepts exactly `execution_id`, `permission_id`, `decision` and the optional `supersedes` (closed `[A-Za-z0-9_-]{22}` pattern) and rejects any other field or a malformed `supersedes`; the success result always carries `attempt_id`, `attempt`, `decided_by=chat_client`, `human_verified=false`; the `UNKNOWN_OUTCOME` envelope carries `attempt_id` and `attempt`, and no other error code does; `supersedes` is refused with the closed reason and **no native call** from `in_flight` (`attempt_in_flight`, retryable), `replied` (`already_replied`), `refused` or no record (`nothing_to_supersede`), a wrong value (`supersedes_mismatch`), and a second supersede (`supersede_limit`); `supersedes` is honored only from `unknown`; the audit line of a post-restart attempt 1 carries `process_start` | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified; **honor `supersedes` while the state is `in_flight` or `replied`; omit `attempt_id` from the `UNKNOWN_OUTCOME` envelope or the success result; accept an unknown input field or a malformed `supersedes`; skip the `supersedes_mismatch` check** |
 | S4 | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native call on refusal | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
 | S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit | one line per phase on every path; no free text | omit `human_verified`; skip the attempt line |
 | S6 | CONTRACTS, runbook, ADR-018 §5 status update after acceptance | doc review | n/a |
@@ -422,7 +467,10 @@ PASS.
 8. After an `UNKNOWN_OUTCOME`, is one explicit, distinctly keyed superseding
    attempt (section 4.3) acceptable, or should the Bridge never send a second
    reply for the same request and leave it to the operator? This ADR specifies
-   the explicit attempt as the recommendation; the maintainer decides.
+   the explicit attempt as the recommendation; the maintainer decides. The same
+   question covers the post-restart path of 4.3: keep the documented residual
+   (a still-pending request after a restart is a fresh attempt 1), or route
+   every post-restart pending request through an operator-only path.
 
 ## 13. Limitations of this record
 
