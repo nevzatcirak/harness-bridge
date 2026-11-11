@@ -37,7 +37,7 @@ Not in MVP: Claude Code adapter, database, broker, frontend, external reasoning 
 
 ### P3 cleanup 2: resolution notes and open items (2026-11-11, appended)
 
-Resolved by PR #PRNUM (`chore: P3 backlog cleanup 2`, task #146):
+Resolved by PR #148 (`chore: P3 backlog cleanup 2`, task #146):
 
 - ADR-020 / admin, from #125 and #126: the socket is `0600` only after bind and the `0700` parent directory is the real fence (CONTRACTS); cancellation of the settle sleep is an `UPSTREAM_TIMEOUT` trigger (CONTRACTS + `TestReleaseSettleSleepCancelledIsUpstreamTimeout`); the 4096-byte request limit counts the trailing newline (CONTRACTS + `TestRequestLimitCountsTrailingNewline`); the `x.op` hold during the second native read is pinned (`TestReleaseSecondReadHoldsOp`); concurrent admin connections are capped at 4 and extra ones are refused with the retryable `TOO_MANY_CONNECTIONS` (`TestConnectionCapRefusesExtra`, mutation: cap removed is RED); no client-side server peer check, same-UID attacker out of scope (CONTRACTS).
 - Tests and seams, from #129, #130, #132 and #133: `guardWindowHook` global seam commented (why it is global); `TestReleaseLateCompletionKeepsNewerGuard` premise reworded (it proves the late promotion leaves the newer guard alone while the newer turn is quiesced; the busy-newer-turn case stays in `TestLateWrongCorrelationCannotReleaseGuard/busy`) and its wait hardened (30 s poll bound, explicit failure message); `TestProbeIdentityFSTimeoutNeverPromotes` V6 made independent of wall-clock timing (all `EvalSymlinks` of `/` block, so a stuck call expiring at `fsTimeout` cannot let a later probe complete the run).
