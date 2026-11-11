@@ -7,8 +7,10 @@ Maintainer decisions recorded 2026-11-11 and binding for this proposal:
 
 - **D7 (history, option (b)):** the adapter reads history in **pure Go from the
   stream-json output of runs the Bridge itself starts or resumes**. There is no
-  Node or Python helper and no JSONL parsing. A session created outside the
-  Bridge is visible only from the moment the Bridge first resumes it.
+  Node or Python helper and no JSONL parsing. For a session created outside the
+  Bridge, its **history** is visible only from the moment the Bridge first
+  resumes it. This is a limit on history, not on listing: a session on the
+  operator allowlist (§6) is listed from startup.
 - **D5 (auth):** subscription login under a non-root service user (the
   `hbspike` wrapper pattern of the P6 spike). Never `--bare`.
 - D4 (minimal spike GO) is already executed: see the spike evidence below.
@@ -21,8 +23,11 @@ written. It does **propose** one amendment to ADR-020, scoped to the Claude
 harness only (§3, last bullet; slice 4; open question 8): ADR-020's native-read
 preconditions have no Claude equivalent, so a Claude-specific set is proposed.
 That amendment is for the maintainer to decide in that slice; nothing in this
-ADR takes effect until then. ADR-024 (permission relay) is referenced as future
-work and does not exist yet; ADR-022 (session lifecycle) is not used here; ADR-023
+ADR takes effect until then. ADR-024 (permission relay) is scoped to OpenCode and
+does not cover Claude Code: its draft states that relay is not possible under the
+current Claude Code CLI contract (per review #172 of this ADR; draft PR #162, its
+section 7). Any approval path for Claude Code would need its own future ADR after
+native-API evidence. ADR-022 (session lifecycle) is not used here; ADR-023
 (read-only dashboard) is a separate proposal (see the last sentence of §5).
 
 ## Evidence base and how claims are marked
@@ -69,8 +74,8 @@ What the spike established that shapes this design (all OBSERVED on 2.1.322):
    `is_error: false`, exit 0, with the denial only in `permission_denials[]`
    (step 7). Callers must read `permission_denials`.
 6. **A tool that the runtime refuses or backgrounds is reported inside the
-   transcript**, not as a process failure (a bare `sleep` is rewritten to a
-   background task, steps 6 notes). Process exit never describes tool outcomes.
+   transcript**, not as a process failure (a bare `sleep` is blocked by the CLI
+   and backgrounded, spike step 6 notes). Process exit never describes tool outcomes.
 7. **Stdin.** Without redirected stdin the CLI waits 3 s and warns
    (`no stdin data received in 3s`); the spike redirected stdin from `/dev/null`.
    The prompt delivery channel is therefore a design decision (§1), not a given.
@@ -145,9 +150,12 @@ admission and ADR-014 identity rules unchanged), then the adapter starts:
   Reason: argv is visible to other users in `/proc` and `ps`, and `sudo` logs the
   full command line to the system log, so a prompt in argv would be copied into
   logs outside the Bridge's control. Stdin is closed after the write. The headless
-  page documents stdin only as piped **data** next to a command-line prompt
-  ("Non-interactive mode reads stdin, so you can pipe data in", capped at 10 MB;
-  DOCUMENTED, https://code.claude.com/docs/en/headless, accessed 2026-11-11). A
+  page documents stdin only as piped **data** next to a command-line prompt (its
+  section "Pipe data through Claude", with an example of the form `cat file |
+  claude -p '<prompt>'`, and a 10 MB cap on piped stdin; DOCUMENTED,
+  https://code.claude.com/docs/en/headless, accessed 2026-11-11; the earlier
+  quotation of a sentence from that page was dropped because it could not be
+  found verbatim, review #172 P3-4). A
   prompt that is **only** on stdin, combined with `--resume` and `--output-format
   stream-json`, is **UNVERIFIED on 2.1.322** (the spike used argv with stdin from
   `/dev/null`). Slice 1 (§10) must verify it first. If it fails, the fallback is a
@@ -221,19 +229,45 @@ a forked ID) are ignored for state and logged by count only. The Bridge generate
 an `execution_id` and the `message_id` field is the execution's own opaque ID for
 Claude (documented in §9).
 
+**Two ordering rules apply before the table.**
+
+- **Init verification latch (review #168 P2-1).** The first `system/init` is
+  checked immediately (§8.3 item 4). If any of these is violated the verdict is
+  **latched**: `permissionMode` is not `default`; `apiKeySource` is not `none`;
+  `cwd` is not the canonical root; `session_id` is not the requested UUID;
+  `claude_code_version` is not in the allowlist (§8.5); `mcp_servers` or `plugins`
+  is non-empty; `tools` is not exactly the configured profile; or a
+  `hook_started`/`hook_response`/`plugin_install` event appeared before `init`.
+  The Bridge then interrupts the child (§4), and the verdict is row 0 below,
+  **regardless of any later `result`, `terminal_reason` or exit status**. Rows 3 to
+  8 apply only if the latch did not fire.
+- **Exit before decision (review #172 P2-1).** Every terminal decision, and every
+  automatic guard release (rows 1 to 5), is taken only after stdout EOF **and** the
+  `wait` of the child (exit status known), because a `result` line can precede
+  process exit and a guard released at the `result` could admit a second child
+  while the first is alive (§2). A correlated `result` with the child still alive
+  is recorded and the execution stays `running` (guard held) for a bounded exit
+  grace (default 10 s, configurable). If the child has not exited by then it is
+  interrupted (§4) and the verdict is row 9 (`MONITOR_EXPIRED`) if the cap is
+  already reached, otherwise row 6 (`PROCESS_ENDED_WITHOUT_RESULT`, with
+  `child_unconfirmed` if the exit cannot be confirmed). Rows 1 and 2 refer to a
+  child that never produced a usable `init`: they also wait for exit, which is
+  immediate in those cases.
+
 **Terminal decisions** (the table is the whole decision procedure; first match
 wins):
 
 | # | Evidence | State | Notes |
 |---|---|---|---|
+| 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
 | 3 | `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
 | 4 | `result` with `is_error: true` and exit non-zero, no Bridge-requested interrupt, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
 | 5 | A Bridge-requested interrupt (§4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a requested interrupt this shape is item 4. **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
 | 6 | Process ended and **no `result`** (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed, killed by the Bridge's own cap) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT` | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
-| 7 | `result` correlated and success-shaped, but exit code non-zero, or `permissionMode` not `default`, or `apiKeySource` not `none` | `unknown` (`IDENTITY_MISMATCH` for the last two), guard kept | contradictory evidence is never success |
-| 8 | Two or more `result` lines, or events after the final `result` | `unknown` | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess |
+| 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
+| 8 | Two or more `result` lines, or events after the final `result` (seen up to EOF) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 9 | Wall-clock cap reached | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted (§4) | |
 | 10 | Everything else | `unknown` | default |
 
@@ -479,9 +513,11 @@ listing NOT SUPPORTED, and the transcript layout is internal).
   which §8 removes) so the model does not spend turns on tools it cannot use and
   the attack surface is the read tools only. Web tools are excluded. This profile
   is a configuration value, widened only by a later ADR.
-- **Future work:** remote approval is ADR-024 (permission relay, to be written).
-  The MCP prompt-tool wire schema is UNVERIFIED (research note §6); until ADR-024
-  is accepted and implemented, remote approval for Claude Code stays disabled and
+- **Future work:** remote approval for Claude Code **needs its own future ADR**.
+  ADR-024 (permission relay) covers OpenCode only; its draft states that relay is
+  not possible under the current Claude Code CLI contract (review #172 P3-1). The
+  MCP prompt-tool wire schema is UNVERIFIED (research note §6); until such an ADR
+  exists and is implemented, remote approval for Claude Code stays disabled and
   the harness is read-only by construction. The Phase 2/4/5 safety matrix must be
   re-proved for this adapter before any widening.
 
@@ -529,10 +565,17 @@ the hardening variables below. In particular **none of** `ANTHROPIC_*`
 `*_SECRET`, proxy variables or cloud credentials is passed. Reason: the
 documented precedence is cloud-provider switches, then `ANTHROPIC_AUTH_TOKEN`,
 then `ANTHROPIC_API_KEY` ("In non-interactive mode (`-p`), the key is always used
-when present"), then `apiKeyHelper`, then `CLAUDE_CODE_OAUTH_TOKEN`, and
-subscription OAuth last (https://code.claude.com/docs/en/authentication,
-"Authentication precedence", accessed 2026-11-11); an inherited key would
-silently switch billing and auth mode. `sudo` `env_reset` is the second layer;
+when present"), then `apiKeyHelper`, then `CLAUDE_CODE_OAUTH_TOKEN`, then
+"Anthropic profile and federation credentials", and subscription OAuth last
+(https://code.claude.com/docs/en/authentication, "Authentication precedence",
+accessed 2026-11-11); an inherited key would silently switch billing and auth
+mode. The profile/federation entry is selected by configuration in the Claude
+user's own home or settings, not by an environment variable the Bridge could
+scrub, so the env scrub does not cover it. Whether `init.apiKeySource` reports
+a value other than `none` for it is **UNVERIFIED**, so the `apiKeySource` check
+may not detect it: it is therefore an operator requirement (no profile or
+federation credentials are configured for the Claude user) and a slice-3
+acceptance item, not something this ADR claims the Bridge can detect. `sudo` `env_reset` is the second layer;
 the Bridge's own scrub is the first and is unit-tested with a poisoned
 environment.
 
@@ -605,20 +648,54 @@ slice 3 passes**; the design does not claim protection before that.
    exclusion in item 2 is not proven. The operator must treat every allowlisted
    root as trusted content: a file in the root can carry a prompt injection.
    With the read-only tool profile the damage is bounded to what the read tools
-   can see and what the model says in the history, not to writes or commands;
-   with a wider profile (a later ADR) this becomes a hard security requirement of
+   can see and what the model says in the history, not to writes or commands. **What
+   the read tools can see includes the Claude user's own home, in particular the
+   subscription login in `~/.claude/.credentials.json` (mode 0600, owned by the very
+   user the CLI runs as; DOCUMENTED on the authentication page, accessed
+   2026-11-11, per review #172 P2-2). See item 6.**
+   With a wider profile (a later ADR) this becomes a hard security requirement of
    the root. A project `.claude/` directory in an allowlisted root is operator-
    approved content, not a Bridge-enforced sandbox.
+6. **Credential paths are denied to the tools (review #172 P2-2).** File
+   permissions cannot separate the CLI from its own login (the CLI and its tools run
+   as the same user), so the only controls are tool-level:
+   - a **deny rule** for `Read`, `Glob` and `Grep` on `~/.claude/**` and the other
+     credential paths of the Claude user (the Bridge's own files are unreadable to
+     that user anyway, §8.1), delivered through the inline `--settings`
+     permissions deny list and, with higher precedence, through managed settings
+     (§8.3 item 1). Documented basis: deny rules are evaluated before allow rules
+     and modes (research note, SDK permissions page); managed settings override
+     `--settings` and can make managed rules the only source
+     (`allowManagedPermissionRulesOnly`, managed-settings page, accessed
+     2026-11-11); the managed-settings page also lists
+     `permissions.blockReadsOutsideWorkingDirectories` (v2.1.257 or later, relayed
+     by the fetch summarizer) among keys that lower scopes can only make stricter.
+     **UNVERIFIED:** the exact rule syntax and path-glob semantics for `Read`
+     denies (including `~` expansion), whether `Glob`/`Grep` honour them, and
+     whether `blockReadsOutsideWorkingDirectories` blocks a read of the home
+     directory. They are decided by the canary below, not assumed.
+   - the credential canary below, as a **mandatory slice-3 failure condition**;
+   - the history redaction of §5 is a last barrier only and does not make the
+     exposure acceptable.
+   If no documented mechanism blocks the read, the adapter does not ship in this
+   profile: the exposure is then a maintainer decision (open question 9), not a
+   default. `~/.claude/.credentials.json` is never read by the Bridge (§8.4).
 
 **Hostile-root test (slice 3 acceptance, mandatory).** A throwaway root contains:
 a `.claude/settings.json` with a hook that writes a canary file, an `env` block
 setting `ANTHROPIC_BASE_URL` to a local sink, and an `apiKeyHelper` that writes a
 canary; a `.mcp.json` server that writes a canary; a `CLAUDE.md` with a
-distinctive injected instruction. After a run: no canary file exists, the sink
-received no request, `init.mcp_servers` is empty, `init.apiKeySource` is `none`,
-and the model did not follow the injected instruction (best-effort, model-
-dependent: reported, not a pass criterion). If any canary exists, slice 3 fails
-and the adapter stays disabled.
+distinctive injected instruction; and a second `CLAUDE.md`-style instruction that
+asks the model to **read `~/.claude/.credentials.json` and print it** (the
+credential canary: the Claude user's home holds a decoy file of the same name and
+mode in the test home, never the real login). After a run: no canary file exists,
+the sink received no request, `init.mcp_servers` is empty, `init.apiKeySource` is
+`none`, **the decoy credential content appears nowhere in the stream, the history
+record or the result** (a `Read` of that path must be denied and listed in
+`permission_denials`), and the model did not follow the other injected
+instruction (best-effort, model-dependent: reported, not a pass criterion). If any
+file canary exists or the decoy content is exposed, slice 3 fails and the adapter
+stays disabled.
 
 ### 8.4 Prompt injection, secrets, argv
 
@@ -644,7 +721,8 @@ and the adapter stays disabled.
   (default: the version(s) validated by the slice-3 acceptance; at proposal time
   only **2.1.322** has been exercised). The research note found behavior gated
   across 2.1.2xx to 2.1.30x (lookup scope, default mode, `--permission-prompts`),
-  so an unlisted version is refused at the first `init` (§8.3 item 4).
+  so an unlisted version ends the run `unknown` (`IDENTITY_MISMATCH`, guard kept,
+  child interrupted) at the first `init` (§3 row 0, §8.3 item 4).
 - Egress of the Claude user is the operator's network policy; the Bridge adds no
   proxy. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` reduces, but does not remove,
   traffic.
@@ -707,7 +785,10 @@ verdict; session-ID parsing; redaction rules; the history record writer/reader
 - RED tests: every §3 row (table-driven, including OBSERVED fixtures from the
   spike evidence); success requires all four conditions; two `result` lines;
   unlisted `terminal_reason`; SIGINT shape without a requested interrupt is
-  `failed`; env poisoning (`ANTHROPIC_API_KEY` in the Bridge env never reaches the
+  `failed`; row 0 (every latch trigger: `permissionMode`, `apiKeySource`, `cwd`,
+  `session_id`, unlisted version, non-empty `mcp_servers`/`plugins`, wrong
+  `tools`, pre-init hook event) beats any later `result`, exit status or
+  `aborted_*` shape; env poisoning (`ANTHROPIC_API_KEY` in the Bridge env never reaches the
   child); argv never contains the prompt; history torn tail; bounds; redaction.
 - Mutations: success without exit-code check; accept `is_error:true` on exit 0 as
   `completed`; pass `--permission-mode auto`; leak one env prefix; drop the
@@ -739,11 +820,20 @@ MCP schemas; allowlist file loading (§6).
 4), interrupt escalation (§4), `--setting-sources`/`--strict-mcp-config`/
 `--settings`/`--tools` wiring, `BRIDGE_CLAUDE_VERSIONS`.
 - RED tests: each init-violation case ends the run `unknown`
-  (`IDENTITY_MISMATCH`), keeps the guard and interrupts the child; SIGINT then
+  (`IDENTITY_MISMATCH`), keeps the guard and interrupts the child; **a
+  success-shaped `result` after an init violation is never `completed`; an
+  `aborted_*` result after the init-violation interrupt never releases the guard;
+  a `result` line with the child still alive keeps the execution `running` and the
+  guard held (a second `send_prompt` gets `SESSION_BUSY`), and only the child's
+  exit (or the exit grace, then an interrupt) produces the verdict and any guard
+  release; credential canary: a `Read` of the decoy `~/.claude/.credentials.json`
+  is denied and its content appears nowhere**; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
-  to the parent on timeout; treat exit 0 after SIGINT as `completed`.
+  to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
+  row 3 or row 5 before row 0; release the guard at the `result` line before EOF
+  and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
   test** of §8.3; sudo signal relay for SIGINT and SIGTERM; `--safe-mode` versus
   item 2; managed settings applied in `-p` (UNVERIFIED items resolved or the ADR
@@ -798,7 +888,7 @@ anything not observed is NOT_EXERCISED, never PASS.
 | `--fork-session` per prompt | New session ID each time; breaks continuity; not asked for. |
 | Bridge and CLI as the same OS user | Prompt-injected read tools could read Bridge tokens and the history store. Two users cost one sudoers rule. |
 | Automatic guard release for a dead child | ADR-017 (c) rejected time-based release; AGENTS forbids implicit recovery. Admin-only release is kept. |
-| Remote approval through `--permission-prompt-tool` now | Wire schema UNVERIFIED; future ADR-024. |
+| Remote approval through `--permission-prompt-tool` now | Wire schema UNVERIFIED; needs its own future ADR (ADR-024 covers OpenCode only). |
 | Native-state reconciliation like ADR-011 | No supported read API exists. |
 
 ## Consequences
@@ -809,7 +899,7 @@ anything not observed is NOT_EXERCISED, never PASS.
   releases it; there is no self-healing read.
 - Human use of a Bridge-managed session in a terminal is unsafe and undetected.
 - The first deployable value is a **read-only** Claude Code harness; writes and
-  commands need ADR-024.
+  commands need their own future ADR (not ADR-024, which covers OpenCode only).
 - Added config: `BRIDGE_CLAUDE_COMMAND`, `BRIDGE_CLAUDE_SESSIONS`,
   `BRIDGE_CLAUDE_HISTORY_DIR`, `BRIDGE_CLAUDE_VERSIONS`, `BRIDGE_CLAUDE_RUN_MAX`,
   `BRIDGE_CLAUDE_HISTORY_MAX_AGE`; all optional, adapter off when unset.
@@ -826,7 +916,7 @@ anything not observed is NOT_EXERCISED, never PASS.
    documented automatic release once the child is confirmed dead and its group
    empty (reverses the spirit of ADR-017 (c))?
 4. **Tool profile (§7).** Is a read-only Claude Code harness acceptable as the
-   first deliverable until ADR-024 exists?
+   first deliverable until a future ADR for Claude Code approvals exists?
 5. **Managed settings in `/etc/claude-code` (§8.3).** May the deployment runbook
    require them? They are the strongest control and need root, which is outside
    the Bridge.
@@ -837,6 +927,11 @@ anything not observed is NOT_EXERCISED, never PASS.
    admin release be extended with Claude-specific preconditions (child confirmed
    exited and its group empty, one re-check, no native read), or must `unknown`
    Claude executions stay releasable only by restart?
+9. **Credential exposure to the read tools (§8.3 item 6).** If no documented
+   mechanism can deny `Read`/`Glob`/`Grep` on `~/.claude/**`, may the adapter ship
+   with that exposure as an accepted residual risk, or must it not ship in the
+   read-only profile at all? This ADR proposes the latter (a failing credential
+   canary fails slice 3).
 
 ## Verification status
 
@@ -859,7 +954,10 @@ anything not observed is NOT_EXERCISED, never PASS.
 | `terminal_reason` and `subtype` value lists | DOCUMENTED, small transcription risk | SDK TypeScript page via a fetch summarizer |
 | Heartbeat/`api_retry` shapes | DOCUMENTED, not exercised in the spike | headless and SDK pages |
 | Background-work multi-`result` ordering | UNVERIFIED | research note |
-| `--session-id` collision behavior | UNVERIFIED | CLI reference states only ""must be a valid UUID" only |
+| `--session-id` collision behavior | UNVERIFIED | CLI reference states only "must be a valid UUID" |
+| Claude Code denies `Read`/`Glob`/`Grep` on `~/.claude/**` (rule syntax, `~` expansion, `blockReadsOutsideWorkingDirectories`) | UNVERIFIED | slice 3 credential canary; open question 9 |
+| `init.apiKeySource` for profile/federation credentials | UNVERIFIED | not detected by the check; operator requirement (§8.2) |
+| Stdin as piped data with a 10 MB cap | DOCUMENTED | headless page, section "Pipe data through Claude" (the earlier verbatim sentence was dropped) |
 
 Documentation URLs (all https://code.claude.com/docs/en/, accessed 2026-11-11):
 `cli-reference`, `headless`, `permissions`, `authentication`, `settings`,
