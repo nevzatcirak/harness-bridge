@@ -248,19 +248,32 @@ Claude (documented in §9).
   while the first is alive (§2). A correlated `result` with the child still alive
   is recorded and the execution stays `running` (guard held) for a bounded exit
   grace (default 10 s, configurable). If the child has not exited by the end of
-  the grace, or its exit status cannot be obtained, the child is interrupted (§4)
-  and the verdict is the dedicated row 6a (`EXIT_UNCONFIRMED`), **not** row 6
-  (row 6 means "no `result`", which is false here). If the wall-clock cap (row 9)
-  is what fired, row 9 wins; if a second `result` or later events were seen, row 8
-  wins (both are `unknown` with the guard kept, so the guard outcome is the same;
-  only the reason differs). Rows 1 and 2 refer to a child that never produced a
-  usable `init`: they also wait for exit, which is immediate in those cases.
-- **Evaluation order (review #177 P2-1).** First match wins **in the order the
-  rows are printed below**, which is `0, 1, 2, 8, 3, 4, 5, 9, 6a, 6, 7, 10`. The
-  numbers are labels, kept stable so that earlier references stay valid; they are
-  not positions. Row 8 precedes 3 to 5 so that "exactly one `result`" in those
-  rows is true by construction, and row 9 precedes 6a and 6 so that a run ended by
-  the Bridge's own cap is `MONITOR_EXPIRED` and never `PROCESS_ENDED_WITHOUT_RESULT`.
+  the grace, or its exit status cannot be obtained, the **grace latch** fires
+  (row 6a below). Rows 1 and 2 refer to a child that never produced a usable
+  `init`: they also wait for exit, which is immediate in those cases.
+- **Interrupt reasons and latched verdicts (reviews #182 P2-1 and #183 P2-1).**
+  Every interrupt the Bridge sends (§4) records exactly one reason: `user`
+  (requested through `interrupt_execution`), `cap` (the wall-clock cap), `grace`
+  (the exit grace expired), `shutdown` (Bridge `Close`) or `latch` (init
+  verification). Five events **latch** a verdict at the moment they happen, not at
+  EOF: the init violation (row 0), the cap (row 9), the end of the exit grace
+  (row 6a), Bridge shutdown (row 9s) and the exhaustion of a `user` interrupt's
+  escalation (row 6b). The earliest latch wins. After a latch, every later
+  `result`, line, `terminal_reason` and the exit status are **audit-only**: they
+  are recorded (`late_lines_after_verdict`, `late_result_seen`; see the audit
+  extension in §8.4), but they cannot re-enter the table, change the verdict or
+  release the guard. A late success is not promoted either (this ADR has no
+  promotion path for Claude; only an operator guard release, open question 8,
+  frees a held guard). In particular an `aborted_*` `result` that answers a `cap`,
+  `grace`, `shutdown` or `latch` interrupt is **not** row 5: row 5 is restricted to
+  a `user` interrupt.
+- **Evaluation order.** The latched rows are evaluated first (the earliest latch
+  wins; the printed order below is only a tie-break), then the table in printed
+  order: `0, 9, 6a, 9s, 6b`, then `1, 2, 8, 3, 4, 5, 6, 7, 10`. The numbers are
+  labels, kept stable so that earlier references stay valid; they are not
+  positions. Because the latched rows come first, the cap, the grace and shutdown
+  outcomes can no longer be pre-empted by rows 3 to 5, and a late exit after the
+  grace cannot match row 3 before 6a.
 
 **Terminal decisions** (the table is the whole decision procedure; first match
 wins):
@@ -268,15 +281,17 @@ wins):
 | # | Evidence | State | Notes |
 |---|---|---|---|
 | 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
+| 9 | The Bridge's wall-clock cap fired (**latched** at that moment), whether or not a `result` was seen before or arrives later | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted with reason `cap` (§4); `child_unconfirmed: true` if the escalation is exhausted | latched: a later success or `aborted_*` `result`, a later exit and any later line are audit-only; never row 3, 4 or 5; never `PROCESS_ENDED_WITHOUT_RESULT` |
+| 6a | The exit grace ended (**latched** at that moment): exactly one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. If a second `result` or a counting event (row 8) was also seen by then, the verdict is row 8 instead (same guard outcome) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees the guard |
+| 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
+| 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
-| 8 | Two or more `result` lines, or events after the final `result` (seen up to EOF, or up to the end of the exit grace) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
-| 3 | `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
-| 4 | `result` with `is_error: true` and exit non-zero, no Bridge-requested interrupt, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
-| 5 | A Bridge-requested interrupt (§4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a requested interrupt this shape is item 4. **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
-| 9 | Wall-clock cap reached (the Bridge's own cap fired and the child was interrupted), whether or not a `result` was seen, unless row 8 matched | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted (§4) | wins over 6a and 6; never `PROCESS_ENDED_WITHOUT_RESULT` |
-| 6a | Exactly one correlated `result` was seen, but the child did not exit within the exit grace, or its exit status could not be obtained (`wait` failed), and neither row 8 nor row 9 applies | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted (§4) | the `result` is recorded but is **not** treated as terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. A second `result` or other line arriving after the grace interrupt does not change the verdict: it is audited (`late_lines_after_verdict`) and the guard stays held; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees it. If the exit is observed later, the verdict is still not promoted |
-| 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT` | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
+| 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: another `result`; `assistant` or `user` message events; `system/init`; background-task or notification events; any event type not on the ignorable list; heartbeat or liveness-only lines such as `tool_progress` and `system/api_retry` do **not** count and only feed `liveness`; the ignorable list is fixed from real-stream fixtures in slice 1 and is empty, that is conservative, until they exist) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
+| 3 | After stdout EOF **and** `wait`, no latch fired: `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
+| 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
+| 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
+| 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT`, or the existing `ABORT_UNCONFIRMED` if the Bridge had sent a `user` interrupt and no proof arrived (§4) | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
 | 10 | Everything else | `unknown` | default |
 
@@ -323,6 +338,10 @@ wins):
 execution state at request time (it can still be `running`), and the client polls
 `get_execution_status`.
 
+- **Interrupt reasons.** Every interrupt the Bridge sends records one reason,
+  `user` (this tool), `cap`, `grace`, `shutdown` or `latch` (§3). Only a `user`
+  interrupt can produce `interrupted` (§3 row 5); the others are latched rows
+  (9, 6a, 9s, 0) whatever the CLI answers.
 - **Escalation:** SIGINT to the child, a bounded wait for a `result` and process
   exit (default 10 s, configurable), then SIGTERM, a second bounded wait (default
   5 s). Never SIGKILL of the `sudo` parent (see below).
@@ -340,13 +359,15 @@ execution state at request time (it can still be `running`), and the client poll
     `aborted_tools` (https://code.claude.com/docs/en/agent-sdk/typescript,
     accessed 2026-11-11; values relayed by a fetch summarizer, small transcription
     risk). The docs give **no SIGINT exit code**; the Bridge must not use one.
-    Mapping: `interrupted` (§3 item 5), only when the Bridge itself sent SIGINT.
+    Mapping: `interrupted` (§3 row 5), only when the Bridge sent SIGINT for reason `user` and no latch fired.
   - SIGTERM: exit **143**, no `result` (OBSERVED; DOCUMENTED at
     https://code.claude.com/docs/en/headless, "Stop a run with SIGTERM",
     accessed 2026-11-11: "leaves the turn that was in progress unfinished and
     records no result"). Mapping: `unknown`, `PROCESS_ENDED_WITHOUT_RESULT`, guard
-    kept (§3 item 6). The ADR-011 `ABORT_UNCONFIRMED` reason is used instead when
-    the Bridge had asked for the interrupt and no proof arrived.
+    kept (§3 row 6). The ADR-011 `ABORT_UNCONFIRMED` reason replaces
+    `PROCESS_ENDED_WITHOUT_RESULT` in row 6 when the Bridge had sent a `user`
+    interrupt and no proof arrived; a `cap`, `grace`, `shutdown` or `latch`
+    interrupt is never row 6 (latched rows).
   - After either signal the session resumed (OBSERVED). The transcript records
     the killed tool differently (SIGINT: "rejected, never ran"; SIGTERM: "killed,
     code 137"), which is **model-reported, not read from the transcript**; it is
@@ -365,13 +386,14 @@ execution state at request time (it can still be `running`), and the client poll
   kills detached grandchildren: the docs say it terminates "running Bash process
   trees" (DOCUMENTED, headless page above); detached ones are not mentioned.
 - **Final escalation does not exist.** If the child is still alive after the
-  SIGTERM wait, the Bridge stops signalling, keeps the guard, reports `unknown`
-  with `unresolved.reason = ABORT_UNCONFIRMED` and surfaces a loud
-  `child_unconfirmed` flag. Killing the `sudo` parent with SIGKILL would orphan the
+  SIGTERM wait, the Bridge stops signalling, keeps the guard and surfaces a loud
+  `child_unconfirmed` flag: `unknown` with `unresolved.reason = ABORT_UNCONFIRMED`
+  for a `user` interrupt (§3 row 6b); for a `cap`, `grace` or `latch` interrupt
+  the latched row keeps its own reason (9, 6a, 0) and gains the flag. Killing the `sudo` parent with SIGKILL would orphan the
   command and is forbidden. Removal of a stuck process is an operator action
   outside the Bridge.
 - **Bridge shutdown** (`Close`): SIGINT then SIGTERM to every live child, then the
-  executions are `MANAGER_CLOSED` as today. An open turn in the history record gets
+  executions are `MANAGER_CLOSED` as today (§3 row 9s). An open turn in the history record gets
   a `restart_gap` marker on the next start (§5).
 
 ## 5. History store (D7)
@@ -674,11 +696,19 @@ slice 3 passes**; the design does not claim protection before that.
 6. **Credential paths are denied to the tools (review #172 P2-2).** File
    permissions cannot separate the CLI from its own login (the CLI and its tools run
    as the same user), so the only controls are tool-level:
-   - a **deny rule** for `Read`, `Glob` and `Grep` on `~/.claude/**` and the other
+   - a **deny rule** for `Read`, `Glob` and `Grep` on `~/.claude/**`, on the
+     Anthropic configuration directory (by default `~/.config/anthropic/**`, which
+     holds the profiles and the `active_config` file; an active profile of auth
+     mode `oidc_federation` ranks above subscription OAuth, per review #183 P3-1),
+     on the directory named by `CLAUDE_CONFIG_DIR` when it is set, and on the other
      credential paths of the Claude user (the Bridge's own files are unreadable to
      that user anyway, §8.1), delivered through the inline `--settings`
      permissions deny list and, with higher precedence, through managed settings
-     (§8.3 item 1). Documented basis: deny rules are evaluated before allow rules
+     (§8.3 item 1). **When `allowManagedPermissionRulesOnly` is used, the deny
+     rule must be present in the managed file itself**: that setting makes Claude
+     Code ignore permission rules from user, project and local files and from
+     `--allowedTools`, and whether a rule passed with inline `--settings` survives
+     it is **UNVERIFIED** (review #183 P3-3). Documented basis: deny rules are evaluated before allow rules
      and modes (research note, SDK permissions page); managed settings override
      `--settings` and can make managed rules the only source
      (`allowManagedPermissionRulesOnly`, managed-settings page, accessed
@@ -704,19 +734,35 @@ setting `ANTHROPIC_BASE_URL` to a local sink, and an `apiKeyHelper` that writes 
 canary; a `.mcp.json` server that writes a canary; a `CLAUDE.md` with a
 distinctive injected instruction; and a second `CLAUDE.md`-style instruction that
 asks the model to **read `~/.claude/.credentials.json` and print it** (the
-credential canary). **Isolation:** the canary runs under an isolated test user
-with its own `HOME`, or under a disposable `CLAUDE_CONFIG_DIR` pointing into the
-throwaway tree, and the decoy `.credentials.json` (same name, mode 0600, fake
-content) exists only there. The real Claude user's `~/.claude` is never created,
-replaced, moved or read by the test, and the test fails closed if its resolved
-config directory is the real one. After a run: no canary file exists,
+credential canary). **Isolation (review #183 P2-2).** `CLAUDE_CONFIG_DIR` relocates the
+configuration directory but does **not** change what `~` means, so it alone would
+leave `~/.claude/.credentials.json` pointing at the real file. Only these forms
+are allowed. **(A, preferred)** an isolated test user with its own `HOME`: its UID
+and `HOME` differ from the Claude service user's, and `HOME` resolves inside the
+throwaway tree; the decoy `~/.claude/.credentials.json` (same name, mode 0600, fake
+content) and a decoy Anthropic profile (`~/.config/anthropic/active_config`, a
+profile of mode `oidc_federation`, fake content) exist only under that `HOME`.
+**(B)** if `CLAUDE_CONFIG_DIR` is also used, `HOME` is set into the throwaway
+tree as well, the injected instruction names the decoy by its **absolute
+throwaway path**, and the same deny rules (same syntax) are applied to that
+absolute path and to the throwaway Anthropic configuration directory. In both
+forms the test harness chooses the paths itself, and a **pre-flight check before
+the run** resolves them (`getuid`, the account's `HOME`, `Lstat` and `EvalSymlinks`
+of the decoy paths; no credential file is opened) and fails closed unless the
+UID differs from the service user's and every resolved path lies inside the
+throwaway tree. The real Claude user's `~/.claude` and `~/.config/anthropic` are
+never created, replaced, moved or read by the test. After a run: no canary file exists,
 the sink received no request, `init.mcp_servers` is empty, `init.apiKeySource` is
 `none`, **the decoy credential content appears nowhere in the stream, the history
 record or the result** (a `Read` of that path must be denied and listed in
-`permission_denials`), and the model did not follow the other injected
-instruction (best-effort, model-dependent: reported, not a pass criterion). If any
-file canary exists or the decoy content is exposed, slice 3 fails and the adapter
-stays disabled.
+`permission_denials`). **Explicit probes** (review #183 P3-2; Claude Code applies
+`Read` deny rules to `Grep` and `Glob` only on a best-effort basis): a `Grep`
+in content mode with a pattern taken from the decoy file, a `Grep` in
+files-with-matches mode, and a `Glob` listing of the decoy directories must each
+return nothing from the decoy paths. Whether the model followed the other
+injected instruction is reported (best-effort, model-dependent, not a pass
+criterion). If any file canary exists, the decoy content is exposed, or any probe
+returns decoy data, slice 3 fails and the adapter stays disabled.
 
 ### 8.4 Prompt injection, secrets, argv
 
@@ -733,8 +779,11 @@ stays disabled.
 - The Bridge never opens, reads or logs the Claude user's home or credential
   files, and the Bridge user has no permission to.
 - Audit: the AUDIT-01 pattern is extended with `harness=claudecode`, `exec`
-  outcome, exit status class and denial count, never prompt text, keys or tool
-  input.
+  outcome, exit status class, denial count, `interrupt_reasons` (the ordered list
+  of reasons of every Bridge-sent interrupt, enum values only: `user`, `cap`,
+  `grace`, `shutdown`, `latch`), `late_lines_after_verdict` (an integer count of
+  stream lines that arrived after a latched verdict) and `late_result_seen` (a
+  boolean), never prompt text, keys, tool input or line content.
 
 ### 8.5 Version pinning and network
 
@@ -806,9 +855,19 @@ machine as a pure function (events, exit status, requested-signal flag) to a
 verdict; session-ID parsing; redaction rules; the history record writer/reader
 (§5) on a temp dir. No `exec`.
 - RED tests: every §3 row (table-driven, including OBSERVED fixtures from the
-  spike evidence); success requires all four conditions; two `result` lines; first-match order `0,1,2,8,3,4,5,9,6a,6,7,10`
-  (a table of overlapping evidence pairs: cap plus no result is row 9, result plus
-  hang is 6a, result plus second result is 8);
+  spike evidence); success requires all four conditions; two `result` lines; the evaluation order (latched rows `0, 9, 6a, 9s, 6b` first, then
+  `1, 2, 8, 3, 4, 5, 6, 7, 10`) as a table of **overlapping evidence**: cap plus
+  success `result` plus exit 0 is row 9; cap plus `aborted_*` result plus exit 0 is
+  row 9; grace expired plus a late `aborted_*` result is 6a; grace expired plus a
+  late success with exit 0 is 6a; shutdown plus `aborted_*` result is 9s; a `user`
+  interrupt plus `aborted_*` result plus exit 0 and no latch is row 5; a `user`
+  interrupt whose escalation is exhausted is 6b; a `user` interrupt and exit 143
+  with no result is row 6 with `ABORT_UNCONFIRMED`; init latch plus `aborted_*`
+  result is row 0; result plus hang is 6a; result plus a second result before the
+  grace ends is row 8; every interrupt records exactly one reason; after any latch
+  every later line, result and exit is audit-only (`late_lines_after_verdict`,
+  `late_result_seen`) and the verdict is unchanged; row 8 counts exactly the events
+  listed in its cell and not heartbeat lines;
   unlisted `terminal_reason`; SIGINT shape without a requested interrupt is
   `failed`; row 0 (every latch trigger: `permissionMode`, `apiKeySource`, `cwd`,
   `session_id`, unlisted version, non-empty `mcp_servers`/`plugins`, wrong
@@ -853,16 +912,24 @@ MCP schemas; allowlist file loading (§6).
   exit (or the exit grace, then an interrupt) produces the verdict and any guard
   release; **a correlated `result` whose child does not exit within the grace (or
   whose `wait` fails) is `unknown` / `EXIT_UNCONFIRMED` with `child_unconfirmed`
-  and the guard kept, never `PROCESS_ENDED_WITHOUT_RESULT`; the same case with the
-  cap fired is `MONITOR_EXPIRED` (row 9 beats 6a); the same case with a second
-  `result` is row 8; a second `result` after the grace interrupt does not change
-  the verdict or release the guard; row 6 stays for runs with no `result`;** credential canary: a `Read` of the decoy `~/.claude/.credentials.json`
-  is denied and its content appears nowhere**; SIGINT then
+  and the guard kept, never `PROCESS_ENDED_WITHOUT_RESULT`; the overlap pairs of
+  slice 1 run against the fake CLI with real signals: cap plus success plus exit 0
+  and cap plus `aborted_*` plus exit 0 are `MONITOR_EXPIRED` with the guard kept
+  (never `completed`, never `interrupted`); grace plus a late `aborted_*` result and
+  grace plus a late exit 0 stay `EXIT_UNCONFIRMED` with the guard held and no second
+  child admitted; shutdown plus `aborted_*` is `MANAGER_CLOSED`; only a `user`
+  interrupt acknowledged by `aborted_*` is `interrupted`; a `user` interrupt whose
+  escalation is exhausted is `ABORT_UNCONFIRMED` with `child_unconfirmed`; row 6
+  stays for runs with no `result` at all;** credential canary: a `Read` of the decoy `~/.claude/.credentials.json`
+  is denied, the `Grep` (both modes) and `Glob` probes and the decoy Anthropic
+  profile return nothing, the pre-flight isolation check fails closed (UID equal to
+  the service user's, or a decoy path that resolves outside the throwaway tree), and
+  the decoy content appears nowhere**; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
   to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
-  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; release the guard at the `result` line before EOF
+  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; release the guard at the `result` line before EOF
   and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
   test** of §8.3; sudo signal relay for SIGINT and SIGTERM; `--safe-mode` versus
@@ -987,6 +1054,9 @@ anything not observed is NOT_EXERCISED, never PASS.
 | `--session-id` collision behavior | UNVERIFIED | CLI reference states only "must be a valid UUID" |
 | Claude Code denies `Read`/`Glob`/`Grep` on `~/.claude/**` (rule syntax, `~` expansion, `blockReadsOutsideWorkingDirectories`) | UNVERIFIED | slice 3 credential canary; open question 9 |
 | `init.apiKeySource` for profile/federation credentials | UNVERIFIED | not detected by the check; operator requirement (§8.2) |
+| `CLAUDE_CONFIG_DIR` relocates the configuration directory but not `~` | DOCUMENTED | authentication and env-vars pages, as read in review #183; basis of the canary isolation rules (§8.3) |
+| Inline `--settings` permission rules survive `allowManagedPermissionRulesOnly` | UNVERIFIED | deny rule is placed in the managed file (§8.3 item 6); slice 3 decides |
+| `Read` deny rules also stop `Grep`/`Glob` | UNVERIFIED (docs say best-effort) | explicit canary probes (§8.3) |
 | Stdin as piped data with a 10 MB cap | DOCUMENTED | headless page, section "Pipe data through Claude" (the earlier verbatim sentence was dropped) |
 
 Documentation URLs (all https://code.claude.com/docs/en/, accessed 2026-11-11):
