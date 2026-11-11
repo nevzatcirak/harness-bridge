@@ -62,6 +62,12 @@ func main() {
 	if adminServer != nil {
 		defer adminServer.Close()
 	}
+	// ADR-023 read-only dashboard: disabled unless BRIDGE_DASHBOARD_SOCKET or
+	// BRIDGE_DASHBOARD_ADDR is set; local transports only.
+	dash, err := openDashboard(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly})
 	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
@@ -72,6 +78,9 @@ func main() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(c)
+		if dash != nil {
+			_ = dash.Shutdown(c)
+		}
 	}()
 	log.Printf("Bridge listening on %s", cfg.addr)
 	var serveErr error
