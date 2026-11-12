@@ -14,10 +14,13 @@ type fake struct {
 	messages                                []opencode.Message
 	status                                  string
 	missing, disconnected, fail, permission bool
-	sends, aborts                           int
-	mid                                     string
-	entered, release                        chan struct{}
-	nativeStatus                            *opencode.Status // overrides status when set
+	// permissionList, when non-nil, replaces the single ses_test request that
+	// permission=true returns (ADR-024 S1 tests).
+	permissionList   []opencode.Permission
+	sends, aborts    int
+	mid              string
+	entered, release chan struct{}
+	nativeStatus     *opencode.Status // overrides status when set
 	// quiesced is a message ID whose native turn ended without a terminal
 	// reply (an OpenCode restart, F-6, or a rejected permission, F-7): the
 	// session reads idle again although the prompt has no terminal reply.
@@ -77,6 +80,9 @@ func (f *fake) Permissions(context.Context) ([]opencode.Permission, error) {
 	defer f.mu.Unlock()
 	f.permissionReads++
 	if f.permission {
+		if f.permissionList != nil {
+			return append([]opencode.Permission(nil), f.permissionList...), nil
+		}
 		return []opencode.Permission{{SessionID: "ses_test"}}, nil
 	}
 	return nil, nil

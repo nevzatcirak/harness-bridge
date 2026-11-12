@@ -66,6 +66,11 @@ type Execution struct {
 	Liveness       *Liveness     `json:"liveness,omitempty"`
 	// PermissionRejection is the ADR-018 (d) report-only block; see rejection.go.
 	PermissionRejection *PermissionRejection `json:"permission_rejection,omitempty"`
+	// PendingPermission and PendingPermissionCount are the ADR-024 S1 report-only
+	// exposure of a pending native permission request; see pendingpermission.go.
+	// They are present only while the state is waiting_for_permission.
+	PendingPermission      *PendingPermission `json:"pending_permission,omitempty"`
+	PendingPermissionCount *int               `json:"pending_permission_count,omitempty"`
 	// GuardReleasedAt is set only by the ADR-020 (b) operator release.
 	GuardReleasedAt *time.Time `json:"guard_released_at,omitempty"`
 }
@@ -113,6 +118,8 @@ type Manager struct {
 	noLiveness     bool
 	// ADR-018 (d): optional in-memory witness for basis native_event.
 	witness rejectionWitness
+	// ADR-024 S1: optional source for the verified pending_permission object.
+	permSource permissionSourceRef
 	// releaseSleep replaces the ADR-020 settle sleep in tests only.
 	releaseSleep func(context.Context, time.Duration) error
 }

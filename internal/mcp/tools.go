@@ -53,6 +53,10 @@ type Session struct {
 	// assistant message without time.completed (F-5). Such a session is never
 	// reported idle; send_prompt admission refuses it with SESSION_BUSY.
 	NativeUnfinishedMessage bool `json:"native_unfinished_message,omitempty"`
+
+	// PendingPermissionCount is set only by get_session, only while state is
+	// waiting_for_permission (ADR-024 S1). A count, never request details.
+	PendingPermissionCount *int `json:"pending_permission_count,omitempty"`
 }
 type Sessions struct {
 	Sessions []Session `json:"sessions"`

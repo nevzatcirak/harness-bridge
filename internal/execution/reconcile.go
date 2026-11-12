@@ -51,6 +51,14 @@ func snapshot(v Execution) Execution {
 	}
 	v.Liveness = copyLiveness(v.Liveness)
 	v.PermissionRejection = copyRejection(v.PermissionRejection)
+	// ADR-024 S1: present only while waiting for permission; any other state,
+	// including a stale value, reports neither field.
+	if v.State == "waiting_for_permission" {
+		v.PendingPermission = copyPending(v.PendingPermission)
+		v.PendingPermissionCount = copyCount(v.PendingPermissionCount)
+	} else {
+		v.PendingPermission, v.PendingPermissionCount = nil, nil
+	}
 	return v
 }
 
@@ -209,6 +217,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	x.mu.Lock()
 	already := terminal(x.view.State) || !x.submissionAttempted
 	messageID := x.view.MessageID
+	executionID := x.view.ID
 	x.mu.Unlock()
 	if already {
 		return nil
@@ -225,6 +234,8 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			}
 			m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
 			x.view.PermissionRejection = nil
+			// Observation failed: never keep a stale actionable detail or count.
+			x.view.PendingPermission, x.view.PendingPermissionCount = nil, nil
 		}
 		return err
 	}
@@ -292,6 +303,14 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		}
 		cwds[msg.Info.Path.Cwd] = resolved
 	}
+	// ADR-024 S1: the pending count comes from the permission read above; the
+	// actionable detail needs the observer's own bounded reads, so it is resolved
+	// here, before run.mu is taken. An observer failure only drops the detail.
+	pendingN := pendingCount(permissions, x.native)
+	var pendingDetail *PendingPermission
+	if pendingN > 0 {
+		pendingDetail = m.pendingDetail(ctx, x.native, executionID)
+	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if terminal(x.view.State) {
@@ -324,6 +343,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 				}
 				m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
 				x.view.PermissionRejection = nil
+				x.view.PendingPermission, x.view.PendingPermissionCount = nil, nil
 				return Fail("FORBIDDEN", "correlated assistant workspace differs")
 			}
 		}
@@ -369,6 +389,9 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 				x.view.Unresolved = nil
 			}
 			x.view.State = "waiting_for_permission"
+			n := pendingN
+			x.view.PendingPermissionCount = &n
+			x.view.PendingPermission = pendingDetail
 			x.view.Updated = now
 			return nil
 		}
