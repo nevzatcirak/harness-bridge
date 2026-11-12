@@ -50,6 +50,10 @@ Open items recorded here, not fixed:
 | ADR-018 evidence table versus idle-as-absent: the evidence-table row for `TestF7PermissionRejectIdleStatus` (`docs/adr/ADR-018-permission-rejection-outcome.md:146`, and the `idle`-without-proof `running` report referenced at `:357`) says that native `idle` with no proof reports `running` until monitor expiry. Since PR #128 (2026-11-08) an explicit `idle` without terminal proof is treated exactly like an absent entry (`unknown`, `OBSERVATION_UNAVAILABLE`, never `running`). | #86 finding 3, PR #128 | P3 | Needs a maintainer amendment decision; ADR text is not changed by this task. ADR-018 stays as accepted. |
 | P6 spike evidence file `docs/evidence/P6_SPIKE_EVIDENCE_2026-11-10.md`: three cosmetic P3s from review #144 (line numbers as cited there): a dangling `r1create` reference (the Step 1 text points to a block label that is not defined as such), malformed bold at :36 (the step 5 verdict-table row), and a stale "last writer wins" wording at :100 (the step 5 text, which the re-run block later says is not established). | #144 | P3 (cosmetic) | Recorded, not fixed: evidence files are immutable. |
 
+### ADR-018 / idle-as-absent: resolution notes (2026-11-11, appended)
+
+- ADR-018 evidence table versus idle-as-absent (the `TestF7PermissionRejectIdleStatus` row and the "Out of scope" bullet that still said `running` after PR #128; recorded as an open item in the "P3 cleanup 2" section above, from PR #148): resolved by the ADR-018 "Amendment 2026-11-11" (maintainer decision D10, text alignment only, no behavior change; the amendment was written together with ADR-024).
+
 ### ADR-023 slice 1 (dashboard skeleton): deferred items (2026-11-11, appended)
 
 - `BRIDGE_DASHBOARD_SOCKET` and `BRIDGE_DASHBOARD_ADDR` are not yet documented in `docs/CONTRACTS.md` or the deployment docs; that is slice 5 (docs and live acceptance R-DASH, ADR-023 §7). Slice 1 only validates and serves the skeleton page.
