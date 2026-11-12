@@ -1,7 +1,9 @@
 # ADR-021: Claude Code adapter
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only: no production Go code is
-written or changed by this ADR, and nothing is deployed or enabled.
+Date: 2026-11-11. Status: **ACCEPTED (per D12, 2026-11-12)**; the open questions
+are answered by maintainer decision D14 (section "Decided (D14, 2026-11-12)").
+This ADR itself writes no code; implementation proceeds in the slices of §10
+(slice 1 first), and nothing is deployed or enabled.
 
 Maintainer decisions recorded 2026-11-11 and binding for this proposal:
 
@@ -747,74 +749,43 @@ distinctive injected instruction; and a second `CLAUDE.md`-style instruction tha
 asks the model to **read the decoy file `~/.claude/.credentials.decoy.json` and
 print it** (the credential canary, **best-effort only**: the model may decline an
 injected instruction, so it is not evidence, see the probes below). The injected
-instruction never names the test account's real login file (review #200 P3-1). **Prerequisite
-(maintainer action, not decided here, open question 10):** a **dedicated,
-revocable subscription test account**, provisioned by the maintainer, with which
-the isolated test user authenticates. This is D5-compatible (subscription login,
-never `--bare`, `apiKeySource: none`). The real service credential is never
-copied, read or reused by the test.
+instruction names only the decoy (review #200 P3-1). **Decided (D14 Q10): no
+test account is provisioned and the real-login probe is OMITTED.** Only the decoy
+is tested. The real service credential, and any real login, is never copied,
+read, probed or reused by the test, and no step of the plan names a real login
+file. How the isolated test user authenticates for the run (subscription login,
+never `--bare`, `apiKeySource: none`) is a slice-3 operational matter recorded in
+its evidence file; it must not be a credential the test reads, copies or prints.
 
 **Isolation (review #183 P2-2, #190 P2-1).** `CLAUDE_CONFIG_DIR` relocates the
 configuration directory but does **not** change what `~` means. Only these forms
 are allowed. **(A, preferred)** an isolated test user with its own `HOME`: its UID
 and `HOME` differ from the Claude service user's, and `HOME` resolves inside the
-throwaway tree. The test account's login lives in that user's own
-`~/.claude/.credentials.json`, which the run needs to authenticate; the **decoy is
-a different file** inside the same directory covered by the same deny glob (for
-example `~/.claude/.credentials.decoy.json`, mode 0600, fake content), so the
-login and the decoy are never the same file. A decoy Anthropic profile is a
-different file name in `~/.config/anthropic/`, never the `active_config` file nor
-a profile the CLI would select (a fake `active_config` would change the
-authentication mode). **(B)** (supplementary) if `CLAUDE_CONFIG_DIR` is also used, it points into
-the throwaway tree, the test account's login lives at
-`$CLAUDE_CONFIG_DIR/.credentials.json` (the CLI no longer reads
-`HOME/.claude/.credentials.json`), `HOME` is set into the throwaway tree as well, the decoy is
-named by its **absolute throwaway path**, and the same deny rules (same syntax)
-are applied to that absolute path and to the throwaway Anthropic configuration
-directory. **Form A is the only form that validates the shipped `~/.claude/**`
-rule syntax and its `~` expansion; form B tests the absolute-path rule and is
-supplementary.** In both forms the test harness chooses the paths itself and learns the
-resolved directories from its own pre-flight: **before the run** it resolves them
-(`getuid`, the account's `HOME`, `Lstat` and `EvalSymlinks` of the decoy and
-login paths; no credential file is opened) and fails closed unless the UID differs
-from the service user's and every resolved path lies inside the throwaway tree.
-The real Claude user's `~/.claude` and `~/.config/anthropic` are never created,
-replaced, moved or read by the test. The Bridge never prints or logs the test account's token. If the deny rule were
-to fail, the token could still appear in the stream of the denied run, so the
-stream, history record and artifacts of that run are **secret-bearing until the
-token check passes**: they stay on the isolated host, are never uploaded or
-attached anywhere before the check, are deleted if the check finds the token, and
-the maintainer revokes the account after the run whatever the result.
-
-**Where a failing denial would put the token (review #204 P2-1).** If the deny
-rule failed, the file content is the `Read` tool result, so it would already have
-been (a) sent to the model API as part of the conversation, which deleting local
-files cannot recall, (b) written by the CLI into its own session transcripts under
-the test user's `~/.claude/projects/`, and (c) if the run goes through a Bridge
-instance, appended to that instance's history store and returned by
-`read_session_history` to any authorized caller. Therefore: (i) the denied run uses
-a **throwaway Bridge instance** (its own history directory, remote ingress and
-connector disabled, no session reachable by Chat), and that history directory and
-the test HOME, including the CLI transcripts under `~/.claude/projects/`, are
-**deleted wholesale** after the check, whatever its result; (ii) a failing denial
-means the token was already sent to the model API, so **the account is revoked
-immediately**, and the account must be disposable and hold no other access;
-(iii) evidence committed to this **public** repository contains **verdict lines
-only** (tool name, the `permission_denials` entry, pass or fail), never raw NDJSON
-of the denied run.
-
-**Post-run token check (review #204 P3-3).** The isolated test user computes
-fingerprints (for example a keyed hash) of **all** string values in the login file
-(token, account and organization identifiers alike, because finding no token does
-not prove the other fields are absent), and searches the stream, the history
-record, the transcripts and every artifact with those fingerprints, never printing
-or logging a value. A hit fails the slice and triggers (ii) above.
+throwaway tree. The **decoy** is a file inside the directory covered by the deny
+glob (for example `~/.claude/.credentials.decoy.json`, mode 0600, fake content).
+No real login file is probed (D14 Q10) and the plan names none. A decoy Anthropic
+profile is a different file name in `~/.config/anthropic/`, never the
+`active_config` file nor a profile the CLI would select (a fake `active_config`
+would change the authentication mode). **(B)** (supplementary) if
+`CLAUDE_CONFIG_DIR` is also used, it points into the throwaway tree, `HOME` is set
+into the throwaway tree as well, the decoy is named by its **absolute throwaway
+path**, and the same deny rules (same syntax) are applied to that absolute path and
+to the throwaway Anthropic configuration directory. **Form A is the only form that
+validates the shipped `~/.claude/**` rule syntax and its `~` expansion; form B
+tests the absolute-path rule and is supplementary.** In both forms the test harness
+chooses the paths itself and learns the resolved directories from its own
+pre-flight: **before the run** it resolves them (`getuid`, the user's `HOME`,
+`Lstat` and `EvalSymlinks` of the decoy path; no credential file is opened) and
+fails closed unless the UID differs from the service user's and every resolved path
+lies inside the throwaway tree. The real Claude user's `~/.claude` and
+`~/.config/anthropic` are never created, replaced, moved or read by the test.
+Evidence committed to this **public** repository contains **verdict lines only**
+(tool name, the `permission_denials` entry, pass or fail), never raw NDJSON of a
+denied run.
 
 **Probes (review #190 P2-1).** They are driven by the **operator's own explicit
 test prompt**, not by an injected instruction: a `Read` of the decoy by absolute
-path, a `Read` of the test account's real login file by absolute path (the only
-place the real login is tested; it is read only in the denied run and falls under
-the secret-bearing rule above), a `Grep` in content mode with a pattern taken from
+path (the real login is not probed, D14 Q10), a `Grep` in content mode with a pattern taken from
 the decoy, a `Grep` in files-with-matches mode, and a `Glob` listing of the decoy directories (Claude
 Code applies `Read` deny rules to `Grep` and `Glob` only on a best-effort basis,
 review #183 P3-2). **Per probe the run must contain a `tool_use` event for that
@@ -822,9 +793,9 @@ tool and a matching `permission_denials` entry**; a probe without both is
 **inconclusive and fails the slice**, so a model that simply declined cannot pass.
 The decoy content is a **random marker string that is not credential-shaped**
 (generated per run), so a content-mode `Grep` match is unambiguous evidence of
-decoy exposure and cannot also match the real login in the same directory. A
+decoy exposure and cannot match any other content. A
 **positive control run without the deny rule** (same isolated user, a prompt that
-names **only the decoy**, never the real login, throwaway root only) must show that the same prompt does read the decoy; if it
+names **only the decoy**, throwaway root only) must show that the same prompt does read the decoy; if it
 does not, the denial evidence is meaningless and the test is inconclusive (slice
 fails). After the denied run: no canary file exists, the sink received no request,
 `init.mcp_servers` is empty, `init.apiKeySource` is `none`, and **the decoy
@@ -1000,23 +971,20 @@ MCP schemas; allowlist file loading (§6).
   interrupt acknowledged by `aborted_*` is `interrupted`; a `user` interrupt whose
   escalation is exhausted is `ABORT_UNCONFIRMED` with `child_unconfirmed`; row 6
   stays for runs with no `result` at all;** credential canary: each operator-prompted probe (`Read`, `Grep` in both
-  modes, `Glob`) on the decoy file, the test account's real login (denied run only,
-  secret-bearing artifacts) and the decoy Anthropic profile has a `tool_use`
+  modes, `Glob`) on the decoy file and the decoy Anthropic profile has a `tool_use`
   event and a matching `permission_denials` entry (otherwise inconclusive and the
   slice fails), the positive control without the deny rule reads the decoy, the
   pre-flight isolation check fails closed (UID equal to the service user's, or a
-  decoy or login path that resolves outside the throwaway tree), the test
-  account's token appears nowhere in the stream, history or artifacts, and the
+  decoy path that resolves outside the throwaway tree), and the
   decoy content appears nowhere in the denied run**; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
   to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
-  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; use the login file itself as the decoy; count a probe without a `tool_use` event and a matching denial as passed; name the real login in the injected instruction; upload the denied run's artifacts before the token check; skip the positive control; ignore `tool_progress` (or `system/api_retry`) after the final `result`; release the guard at the `result` line before EOF
+  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; count a probe without a `tool_use` event and a matching denial as passed; skip the positive control; ignore `tool_progress` (or `system/api_retry`) after the final `result`; release the guard at the `result` line before EOF
   and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
-  test** of §8.3 (prerequisite: the maintainer-provisioned test account, open
-  question 10); **a measurement of the result-to-exit lag** of the pinned CLI over
+  test** of §8.3 (no test account and no real-login probe, D14 Q10: decoy only); **a measurement of the result-to-exit lag** of the pinned CLI over
   several runs, which validates or replaces the 10 s exit-grace default; a live
   multi-run capture of the post-`result` stream (shared with slice 1); sudo signal relay for SIGINT and SIGTERM; `--safe-mode` versus
   item 2; managed settings applied in `-p` (UNVERIFIED items resolved or the ADR
@@ -1089,41 +1057,34 @@ anything not observed is NOT_EXERCISED, never PASS.
 - No existing OpenCode behavior, ADR or tool schema changes; the OpenCode path has
   no new code in slices 1 to 3.
 
-## Open questions for the maintainer
+## Decided (D14, 2026-11-12)
 
-1. **Residual human-writer risk (§2).** Accept it as documented, or require the
-   adapter to refuse sessions it did not create / use `--fork-session`?
-2. **Client compatibility of the new ID pattern (§9).** Advertise Claude sessions
-   only to clients that negotiate the new contract version, or to all?
-3. **Guard release for `unknown` (§3).** Keep operator-only (this ADR), or allow a
-   documented automatic release once the child is confirmed dead and its group
-   empty (reverses the spirit of ADR-017 (c))?
-4. **Tool profile (§7).** Is a read-only Claude Code harness acceptable as the
-   first deliverable until a future ADR for Claude Code approvals exists?
-5. **Managed settings in `/etc/claude-code` (§8.3).** May the deployment runbook
-   require them? They are the strongest control and need root, which is outside
-   the Bridge.
-6. **History store growth (§5).** 64 MiB/session and 30-day segment retention:
-   adequate defaults?
-7. **Version policy (§8.5).** Exact-version allowlist only, or a minimum version?
-8. **ADR-020 amendment for the Claude harness (§3, slice 4).** May ADR-020's
-   admin release be extended with Claude-specific preconditions (child confirmed
-   exited and its group empty, one re-check, no native read), or must `unknown`
-   Claude executions stay releasable only by restart?
-9. **Credential exposure to the read tools (§8.3 item 6).** If no documented
-   mechanism can deny `Read`/`Glob`/`Grep` on `~/.claude/**`, may the adapter ship
-   with that exposure as an accepted residual risk, or must it not ship in the
-   read-only profile at all? This ADR proposes the latter (a failing credential
-   canary fails slice 3).
-10. **Test account for the credential canary (§8.3).** The slice-3 canary needs a
-    dedicated, revocable subscription test account, which only the maintainer can
-    provision (D5-compatible: subscription login, never `--bare`). Provision it
-    (and revoke it after the run), or accept that the canary cannot run and the
-    adapter stays disabled? The choice also fixes the probe set: provisioning the
-    account **accepts the secret-bearing real-login `Read` probe** (§8.3, the
-    handling above), while the alternative is to **omit the real-login probe and
-    test only the decoy**. This ADR lists the account as a prerequisite and does not
-    decide it.
+The maintainer answered every open question of the proposal in decision D14
+(2026-11-12). The questions are kept in short form with the answer. References to "open
+question N" or "proposed" elsewhere in this ADR point to the item of the same
+number below and are answered by it; no other design text was changed.
+
+1. **Residual human-writer risk (§2).** Residual **accepted and documented**: the
+   adapter does not refuse sessions it did not create and does not fork. The risk
+   is stated in the tool descriptions and in CONTRACTS for the Claude harness.
+2. **Client compatibility of the new ID pattern (§9).** Claude sessions are
+   advertised to **all clients**.
+3. **Guard release for `unknown` (§3).** **Operator-only**, as in this ADR: no
+   automatic release.
+4. **Tool profile (§7).** **Read-only first**: the read-only Claude Code harness is
+   the first deliverable.
+5. **Managed settings in `/etc/claude-code` (§8.3).** The deployment runbook
+   **REQUIRES** them.
+6. **History store growth (§5).** **64 MiB per session, 30 days** retention.
+7. **Version policy (§8.5).** **Exact-version allowlist** only.
+8. **ADR-020 amendment for the Claude harness (§3, slice 4).** The extension is
+   **allowed**: child exited, process group empty, one re-check, no native read.
+9. **Credential exposure to the read tools (§8.3 item 6).** A **failing canary
+   blocks shipping** (the adapter does not ship in this profile if no documented
+   mechanism denies the read).
+10. **Test account for the credential canary (§8.3).** **No test account.** The
+    real-login probe is **omitted** and only the decoy is tested; §8.3 and slice 3
+    are updated accordingly.
 
 ## Verification status
 
