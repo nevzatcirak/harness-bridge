@@ -41,7 +41,10 @@ func replay(t *testing.T, name string, cfg Config, pre []Step, exitStep Step) Ve
 	return m.Verdict()
 }
 
-// Recorded OBSERVED shapes map to the OBSERVED verdicts.
+// The spike excerpts map to the verdicts the evidence observed. Steps 2, 3, 4 and 7
+// quote the evidence file (with the additions listed in testdata/spike/README.md);
+// the SIGINT and SIGTERM files of step 6 are RECONSTRUCTED from the evidence prose,
+// not recorded.
 func TestSpikeFixtureReplay(t *testing.T) {
 	t.Run("step 2 resume ok, exit 0 -> completed", func(t *testing.T) {
 		assertVerdict(t, replay(t, "step2_resume_ok.ndjson", spikeCfg(spikeSession), nil, exit(0)), "3", "completed", "", true)

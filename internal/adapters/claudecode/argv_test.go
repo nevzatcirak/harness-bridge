@@ -105,6 +105,13 @@ func TestCheckArgvRejectsEveryDeviation(t *testing.T) {
 		"turns 0":              replace("4", "0"),
 		"duplicate mode":       append(append([]string(nil), good...), "--permission-mode", "auto"),
 		"mode glued":           replace("--permission-mode", "--permission-mode=auto"),
+		"model with space":     replace("sonnet", "son net"),
+		"model is a flag":      replace("sonnet", "--bare"),
+		"model empty":          replace("sonnet", ""),
+		"model too long":       replace("sonnet", strings.Repeat("m", 65)),
+		"resume replaced":      replace("--resume", "--session-id"),
+		"resume replaced fork": replace("--resume", "--fork-session"),
+		"output-format text":   replace("--output-format", "--input-format"),
 	}
 	for name, argv := range cases {
 		if err := CheckArgv(argv); err == nil {

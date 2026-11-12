@@ -399,6 +399,12 @@ func (m *Machine) settle() {
 	switch {
 	case m.exit.ExitUnknown:
 		m.decide("10", "unknown", "", "", "exit_status_unavailable", false)
+	case m.broken && m.results >= 1:
+		// The stream ended on a bound (oversized line or total) after a correlated
+		// result. The line that broke it was never decoded, so it cannot be
+		// counted by countAfter; a non-empty line after the final result counts
+		// (row 8), decodable or not. Without a result the run stays row 6.
+		m.decide("8", "unknown", "", "", "stream_broken_after_result", false)
 	case m.row2():
 		m.decide("2", "failed", "NOT_FOUND", "", "session_not_found", true)
 	case m.results >= 2:
