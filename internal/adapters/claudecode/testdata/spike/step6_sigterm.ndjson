@@ -1,0 +1,4 @@
+{"type": "system", "subtype": "init", "cwd": "/opt/developer/hb-work/a/p6-spike/proj-x", "session_id": "4e59c1bd-4333-4a71-875d-cba9301bd4a9", "model": "claude-sonnet-5-5", "permissionMode": "default", "apiKeySource": "none", "claude_code_version": "2.1.322", "original_cwd": "/opt/developer/hb-work/a/p6-spike/proj-x", "mcp_servers": [], "plugins": [], "tools": ["Read", "Glob", "Grep"]}
+{"type":"system","subtype":"task_started","session_id":"4e59c1bd-4333-4a71-875d-cba9301bd4a9"}
+{"type":"system","subtype":"task_notification","session_id":"4e59c1bd-4333-4a71-875d-cba9301bd4a9"}
+{"type":"user","message":{"role":"user","content":"tool killed"},"session_id":"4e59c1bd-4333-4a71-875d-cba9301bd4a9"}
