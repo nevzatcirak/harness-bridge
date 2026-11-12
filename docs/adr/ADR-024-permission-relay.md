@@ -1,7 +1,8 @@
 # ADR-024: Permission relay (Claude Chat answers a native permission request)
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code,
-nothing deployed. No change to existing fields or semantics. **The whole
+Date: 2026-11-11. Status: **ACCEPTED (per D12, 2026-11-12, planner task #205)**.
+Design; implementation proceeds in the slices of section 10 (S1 first); nothing
+deployed. No change to existing fields or semantics. **The whole
 additive surface, listed once:** the tool `reply_permission` (input `execution_id`,
 `permission_id`, `decision`, optional `supersedes`; success output `outcome`,
 `attempt_id`, `attempt`, `decided_by`, `human_verified`); three optional fields
@@ -15,6 +16,19 @@ maintainer requirement D11. Decision in force: D12 (maintainer decision, recorde
 (b), enabling any `allow_once` policy stays with the maintainer; a
 `reject_only` default may be implemented. This ADR does not enable any
 `allow_once` policy.
+
+**Acceptance note (2026-11-12, planner task #205).** The Planning Desk accepted
+this ADR under decision D12 (issue #117): PR #162 was merged (`479e917`) after
+independent reviews #179 (B) and #197 (A), both PASS-WITH-NITS with no open
+P0-P2, and the `reject_only` default conforms to D11. Acceptance covers the
+**`reject_only` design only**. Open questions 1-8 stay with the maintainer and are
+not decided by this acceptance. D12 exception (b), enabling any `allow_once`
+policy, stays with the maintainer: S2 and S4 stay gated on open question 1. S3
+and S5 additionally depend on the open ROADMAP item `:499-502` (Mutation Gate
+integration and the attempt writer), on open question 8 (superseding attempt)
+and on open question 3 (registration default); this task does **not** start them.
+The text nits of review #197 are applied in this revision (text only: no decision
+changed, no option added or removed).
 
 Numbering: ADR-024 is reserved for this decision. It builds on ADR-018 §5
 (pending permission detail, PROPOSED until now) and may amend ADR-018 §5 if
@@ -79,7 +93,7 @@ narrowly, per root.
 | Pending list: `GET /permission` returns pending requests **across all sessions** of the instance | `grp-p` (`list`: "Get all pending permission requests across all sessions") |
 | Legacy route named in the task: `POST /session/:sessionID/permissions/:permissionID`, body `{response}`. **Marked `deprecated: true`.** The handler only calls `requireSession(sessionID)` and then replies by `permissionID`; it does **not** check that the request belongs to that session | `grp-s:101` (path), `:395-408` (endpoint, `deprecated: true` at `:406`), `hnd-s:362-378` (`requireSession` at `:366`, `reply` by `requestID: ctx.params.permissionID` at `:367`) |
 | Request fields available natively: the request ID (`id`, which must start with `per`, `schema/v1/permission.ts:10`), `sessionID`, `permission` (the permission kind, a string), `patterns[]`, `metadata`, `always[]`, optional `tool {messageID, callID}`. The Bridge's observer maps `permission` to one of 11 known kinds (`read`, `edit`, `write`, `bash`, `external_directory`, `doom_loop`, `webfetch`, `websearch`, `task`, `glob`, `grep`) and everything else to `unrecognized` (`internal/adapters/opencode/permission_observation_codec.go:180-187`) | `schema/v1/permission.ts:10,27-36` |
-| A malformed request ID is rejected by the native route with `BadRequest` (400) | `grp-p` (the `reply` endpoint declares `HttpApiError.BadRequest`) |
+| A malformed request ID is rejected by the native route with `BadRequest` (400) | the ID schema `isStartsWith("per")` (`schema/v1/permission.ts:10`), the `reply` endpoint declaring `HttpApiError.BadRequest` (`grp-p`), and the schema-error layer that turns a decode failure into a 400 for non-`/api/` paths (`middleware/schema-error.ts`); whether that layer is applied to the permission group was **not traced** (UNVERIFIED) |
 | Reply is first-wins and at most once per pending request in one process: the entry is looked up, deleted, then resolved; a second reply gets `NotFoundError` | `perm:109-114` |
 | No idempotency key; a retried reply after a lost response is indistinguishable from "never existed" or "dropped by instance disposal" | `perm:109-114` (not-found path), research §5 |
 | `always` adds allow rules and auto-approves other pending requests of the session that now match; `reject` cascades to every other pending request of the session | `perm:121-166` (as recorded in research §5) |
@@ -200,19 +214,30 @@ startup.
 
 ### 4.2 Binding and checks (all fail closed, in this order, before any native write)
 
-The cheap refusals come first, so that "no native call" is true for them; the
-native re-read comes only after them; every refusal before step 8 makes **no
-native write**.
+The refusals that need no native read come first; the native permission re-read
+(step 5) comes only after them; every refusal before step 8 makes **no native
+write**. "Zero native calls" is true only for refusals **before step 3**: step 3's
+session authorization is the existing `authorized` check, which reads the session
+natively (`GET /session/:id`) and checks the workspace (`internal/mcp/server.go:57-70`,
+`:142-153`). Refusals at steps 4 and later therefore make no permission read
+and no native write, but are not "zero native calls".
 
 1. Authenticate; `BRIDGE_READ_ONLY=1` returns `FORBIDDEN` for the tool
    (reject included, because it is a native mutation, as for `interrupt_execution`).
-2. Validate inputs (closed patterns, no extra fields).
+   Implementation requirement (review #197): `reply_permission` must be added to
+   `mutating()` (`internal/mcp/audit.go:31`), which gates both the read-only
+   refusal (`server.go:102`) and the audit middleware; a tool missing there would
+   be neither blocked in read-only mode nor audited. S3 test: refused under
+   `BRIDGE_READ_ONLY` with no native read; mutation: omit it from `mutating()`.
+2. Validate inputs (closed patterns, no extra fields) and refuse `allow_once`
+   while the mode is `reject_only` (`FORBIDDEN`, reason `allow_once_disabled`):
+   this needs only configuration and input, so it makes **zero native calls**.
 3. The execution exists in this writer, its session is authorized (ADR-012
    ACL, extended by ADR-022 root authorization if accepted), and its state is
    `waiting_for_permission` with the guard held by this execution.
-4. **In-memory refusals (no native call):** `allow_once` while the mode is
-   `reject_only` → `FORBIDDEN`, reason `allow_once_disabled`; the same-key rules
-   and the `supersedes` rule 0 of 4.3, which read only the Bridge's own record.
+4. **In-memory refusals (no permission read, no native write):** the same-key
+   rules and the `supersedes` rule 0 of 4.3, which read only the Bridge's own
+   record (step 3's session read has already happened).
 5. **Fresh native re-read** (never trust a cached observation) through the
    `PermissionObserver` of that session, with the session's own directory and
    workspace routing (section 3), inside the observer's 5 s bound. The request
@@ -220,9 +245,13 @@ native write**.
    execution's native session, **and** its `tool.messageID`/`callID` must be
    present and correlate to the execution's assistant message (`attribution =
    verified`, required unconditionally; a tool-less request is refused with
-   `FORBIDDEN`, reason `not_verified`). Otherwise `NOT_FOUND` or `FORBIDDEN`
-   (reason from the closed set; no native text is returned). This is the binding
-   the legacy route lacks.
+   `FORBIDDEN`, reason `not_verified`). Mapping (a proposal, closed set, no native
+   text): request absent on a first attempt → `NOT_FOUND`, reason
+   `resolved_elsewhere_or_dropped`; request of another session, `unattributed` or
+   `conflicting` attribution → `FORBIDDEN`, reason `not_verified`; observer
+   unavailable or timed out → `UPSTREAM_FAILURE` or `UPSTREAM_TIMEOUT` with no
+   `reason`. Refusals raised by the SDK's input validation carry no `reason`. This
+   is the binding the legacy route lacks.
 6. For `allow_once`: evaluate the policy against the **live native request**
    (observer `Kind`, tool, patterns), never against values supplied by the
    caller. A `Kind` of `unrecognized` is always refused (`FORBIDDEN`, reason
@@ -245,7 +274,10 @@ native write**.
    returns the real outcome (it cannot be unsent), the in-memory record is kept,
    the failure is logged loudly, and **every later `reply_permission` call is
    refused with `audit_unavailable` until the writer recovers**, because a
-   missing durable witness blocks further permission mutations.
+   missing durable witness blocks further permission mutations. **Open (review
+   #197):** how recovery is detected, whether the block is process-wide (as
+   written) and whether `reject` and same-key replays that send nothing are still
+   served are **not specified here**; S5 designs them with the attempt writer.
 
 **This is a new ordering and a new requirement, not a description of today's
 code.** AUDIT-01 is written **after** the call, by a deferred middleware, through
@@ -286,9 +318,10 @@ open item and is a prerequisite of S3 and S5.
   Bridge's view, a fresh request with attempt number 1, with no `supersedes` and
   no attempt-2 accounting, so a caller can send another reply for a request
   whose earlier reply may have been in flight when the Bridge stopped. ROADMAP
-  `:205` says missing IDs do not mean non-delivery; here the evidence of
-  non-delivery is not the missing Bridge record but the **native** fact that the
-  request is still pending (a delivered reply deletes it first). The residual is
+  `:205` says missing IDs do not mean non-delivery; here the only evidence is not the missing Bridge record but the **native** fact
+  that the request is still pending (a delivered reply deletes it first), which
+  shows the earlier reply was **not applied yet**, not that it was never delivered
+  (it may still land; first-wins makes that harmless). The residual is
   stated, not decided, and the operator-only alternative is open question 8, for
   three reasons: (a) native
   first-wins at-most-once (`perm:109-114`) means the earlier reply and the new
@@ -407,7 +440,7 @@ Default `deny` for everything not listed. A refused `allow_once` returns
 `FORBIDDEN` with a closed reason code (`policy_tool`, `policy_pattern`,
 `policy_scope`, `policy_rate`, `unrecognized_kind`, `allow_once_disabled`),
 writes an audit line and makes **no native write**: `allow_once_disabled` is
-refused before any native call (step 4 of 4.2), but the policy rules need the
+refused before any native call (step 2 of 4.2), but the policy rules need the
 live request, so the native read of step 5 has already happened. The request
 stays pending so the operator can answer it natively or Chat can `reject` it.
 `allow_tools` is matched against the observer's `Kind` (the 11 known kinds, section
@@ -502,8 +535,10 @@ maintainer needs verified human approval. The maintainer decides.
 
 Where this ADR meets, or departs from, the rules recorded in `docs/ROADMAP.md`
 and the P4-PERM research. A "deviation: yes" is **not resolved here**: it is a
-maintainer question (D12 exception (c) for any recommendation that deviates from
-a recorded rule or D-item) and stays open.
+maintainer question and stays open. D12 exception (c) is "any ADR whose
+recommendation deviates from the **D-items**"; deviations from ROADMAP rules are
+not D-items (D11 itself is the D-item that relaxes `:183-184`), so they are
+reported to the maintainer through the open questions rather than by (c).
 
 | Rule | ADR-024 behavior | Deviation |
 |---|---|---|
@@ -520,9 +555,9 @@ a recorded rule or D-item) and stays open.
 |---|---|---|---|
 | S1 | Wire `ObservedPermission` into the manager; `pending_permission` and `pending_permission_count` (no patterns) | `waiting_for_permission` exposes the fields; other states do not; unattributed/conflicting are count-only; no native text | expose a pattern in default mode; show an unattributed request as actionable |
 | S2 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
-| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native write (the still-pending re-read is a read), second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified`. **Contract tests:** the input schema accepts exactly `execution_id`, `permission_id`, `decision` and the optional `supersedes` (closed `[A-Za-z0-9_-]{22}` pattern) and rejects any other field or a malformed `supersedes`; the success result always carries `attempt_id`, `attempt`, `decided_by=chat_client`, `human_verified=false`; the `UNKNOWN_OUTCOME` envelope carries `attempt_id` and `attempt`, and no other error code does; `supersedes` is refused with the closed reason and **no native call** from `in_flight` (`SESSION_BUSY`, `attempt_in_flight`, retryable), for an `allow_once` record (`supersede_allow_once_not_offered`), `replied` (`already_replied`), `refused` or no record (`nothing_to_supersede`), a wrong value (`supersedes_mismatch`), and a second supersede (`supersede_limit`); `supersedes` is honored only from `unknown`; the audit line of a post-restart attempt 1 carries `process_start` (RFC 3339 UTC); `reason` is always one of the closed enum; **attempt-record failure: when the `phase=attempt` write fails (writer error or unavailable witness) there are zero native writes, the call returns `UPSTREAM_FAILURE`/`audit_unavailable`, and the record is `refused`; when the `phase=result` write fails after the native call the real outcome is still returned and every later call is refused with `audit_unavailable`**; `permission_id` must match `^per[A-Za-z0-9_-]{1,125}$` and a native 400 maps to `UPSTREAM_FAILURE`; the re-read and the reply use the session's directory/workspace routing; cheap refusals (`allow_once_disabled`, same-key, `supersedes` rule 0) make zero native calls | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified; **continue to the native write when the attempt record write fails; honor `supersedes` while the state is `in_flight` or `replied`; offer `supersedes` for `allow_once`; perform the re-read before the in-memory refusals; route the re-read with the default directory instead of the session's; omit `attempt_id` from the `UNKNOWN_OUTCOME` envelope or the success result; accept an unknown input field or a malformed `supersedes`; skip the `supersedes_mismatch` check** |
+| S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native write (the still-pending re-read is a read), second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified`. **Contract tests:** the input schema accepts exactly `execution_id`, `permission_id`, `decision` and the optional `supersedes` (closed `[A-Za-z0-9_-]{22}` pattern) and rejects any other field or a malformed `supersedes`; the success result always carries `attempt_id`, `attempt`, `decided_by=chat_client`, `human_verified=false`; the `UNKNOWN_OUTCOME` envelope carries `attempt_id` and `attempt`, and no other error code does; `supersedes` is refused with the closed reason and **no native call** from `in_flight` (`SESSION_BUSY`, `attempt_in_flight`, retryable), for an `allow_once` record (`supersede_allow_once_not_offered`), `replied` (`already_replied`), `refused` or no record (`nothing_to_supersede`), a wrong value (`supersedes_mismatch`), and a second supersede (`supersede_limit`); `supersedes` is honored only from `unknown`; the audit line of a post-restart attempt 1 carries `process_start` (RFC 3339 UTC); `reason` is always one of the closed enum; **attempt-record failure: when the `phase=attempt` write fails (writer error or unavailable witness) there are zero native writes, the call returns `UPSTREAM_FAILURE`/`audit_unavailable`, and the record is `refused`; when the `phase=result` write fails after the native call the real outcome is still returned and every later call is refused with `audit_unavailable`**; `permission_id` must match `^per[A-Za-z0-9_-]{1,125}$` and a native 400 maps to `UPSTREAM_FAILURE`; the re-read and the reply use the session's directory/workspace routing; `allow_once_disabled` (step 2) makes zero native calls, and the same-key and `supersedes` rule 0 refusals make no permission read and no native write; `reply_permission` is refused under `BRIDGE_READ_ONLY` with no native read (it is in `mutating()`) | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified; **continue to the native write when the attempt record write fails; honor `supersedes` while the state is `in_flight` or `replied`; offer `supersedes` for `allow_once`; perform the re-read before the in-memory refusals; omit `reply_permission` from `mutating()`; route the re-read with the default directory instead of the session's; omit `attempt_id` from the `UNKNOWN_OUTCOME` envelope or the success result; accept an unknown input field or a malformed `supersedes`; skip the `supersedes_mismatch` check** |
 | S4 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native write on refusal (the policy rules need the live request, so the native read has happened; `allow_once_disabled` makes no native call at all) | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
-| S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit; **an attempt writer that reports failure (synchronous record or Mutation Gate witness)** | one line per phase on every path; no free text; the attempt line is written before the native call and its failure blocks the write; the result-line failure blocks later calls | omit `human_verified`; skip the attempt line; log-and-continue on a failed attempt write |
+| S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit; **an attempt writer that reports failure (synchronous record or Mutation Gate witness)** | `reply_permission` is in `mutating()` so the audit middleware wraps it; one line per phase on every path; no free text; the attempt line is written before the native call and its failure blocks the write; the result-line failure blocks later calls | omit `human_verified`; skip the attempt line; log-and-continue on a failed attempt write |
 | S6 | CONTRACTS, runbook, ADR-018 §5 status update after acceptance | doc review | n/a |
 
 Each slice is one task, one branch, one PR; security-critical slices (S3, S4)
@@ -543,12 +578,14 @@ PASS.
    `decided_by=chat_client`, `human_verified=false`; the execution is reported
    through ADR-018's `permission_rejection` and the guard is not released by
    the Bridge.
-3. `reply_permission(allow_once)` in `reject_only`: refused with `allow_once_disabled`, **zero native calls** (the request log shows none).
+3. `reply_permission(allow_once)` in `reject_only`: refused with `allow_once_disabled` at step 2, **zero native calls** (the request log shows none).
 4. Mode `policy`, allowlisted harmless tool in-root: `allow_once` sent, the
    native tool runs once, a second identical request is a new request and needs
    a new decision.
-5. Negative runs: wrong execution ID and wrong session are refused with **no
-   native call**; denied pattern, out-of-root path, unlisted tool, `unrecognized`
+5. Negative runs: an unknown execution ID or a session outside the ACL are
+   refused before any native read of the request (the ACL check itself reads
+   `GET /session/:id`); a request of another session is refused at step 5 with
+   **no native write**; denied pattern, out-of-root path, unlisted tool, `unrecognized`
    kind and rate cap are refused with **no native write** (the request log shows
    only the native read of step 5).
 6. Race: answer in the native TUI first, then call the Bridge: `NOT_FOUND`
