@@ -42,12 +42,15 @@ type Capabilities struct {
 
 // directoryEvidence is request-local. Sharing it never claims an atomic native snapshot.
 type directoryEvidence struct {
-	status        map[string]opencode.Status
-	statusOK      bool
-	permissions   map[string]bool
-	permissionsOK bool
-	repository    *repository.Repository
-	workspace     *repository.Workspace
+	status      map[string]opencode.Status
+	statusOK    bool
+	permissions map[string]bool
+	// permissionCounts counts this directory's pending requests per authorized
+	// member (ADR-024 S1; get_session only). Count only: no ID, tool or pattern.
+	permissionCounts map[string]int
+	permissionsOK    bool
+	repository       *repository.Repository
+	workspace        *repository.Workspace
 	// history holds completed F-5 checks by session ID. A session whose state
 	// would be idle and that has no completed check is reported unknown.
 	history map[string]historyEvidence
@@ -58,7 +61,7 @@ type directoryEvidence struct {
 func workspaceBound(v opencode.Session) bool { return v.WorkspaceID != "" }
 
 func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, members ...string) directoryEvidence {
-	d := directoryEvidence{status: map[string]opencode.Status{}, permissions: map[string]bool{}, history: map[string]historyEvidence{}}
+	d := directoryEvidence{status: map[string]opencode.Status{}, permissions: map[string]bool{}, permissionCounts: map[string]int{}, history: map[string]historyEvidence{}}
 	if !workspaceBound(v) {
 		// Directory-scoped native reads load (bootstrap) the OpenCode instance for
 		// v.Directory. A workspace-bound session lives in its workspace's instance,
@@ -84,6 +87,7 @@ func (s *Server) inspectDirectory(ctx context.Context, v opencode.Session, membe
 		for _, p := range permissions {
 			if allowed[p.SessionID] {
 				d.permissions[p.SessionID] = true
+				d.permissionCounts[p.SessionID]++
 			}
 		}
 	}
@@ -183,7 +187,14 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.C
 		cancel()
 	}
 	runGuardWindowHook()
-	return s.view(v, d, visible)
+	out := s.view(v, d, visible)
+	// ADR-024 S1: only while waiting for permission and only when the permission
+	// read succeeded; otherwise the field is absent (never a fabricated zero).
+	if out.State == "waiting_for_permission" && d.permissionsOK && d.permissionCounts[v.ID] > 0 {
+		n := d.permissionCounts[v.ID]
+		out.PendingPermissionCount = &n
+	}
+	return out
 }
 
 // parallel performs at most four jobs concurrently, with no per-session goroutine.
