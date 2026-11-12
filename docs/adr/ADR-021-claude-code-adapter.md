@@ -288,12 +288,12 @@ rows first, by time of the latch, then the first match in printed order):
 |---|---|---|---|
 | 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
 | 9 | The Bridge's wall-clock cap fired (**latched** at that moment), whether or not a `result` was seen before or arrives later | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted with reason `cap` (§4); `child_unconfirmed: true` if the escalation is exhausted | latched: a later success or `aborted_*` `result`, a later exit and any later line are audit-only; never row 3, 4 or 5; never `PROCESS_ENDED_WITHOUT_RESULT` |
-| 6a | The exit grace ended (**latched** at that moment): exactly one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees the guard |
+| 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees the guard |
 | 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
 | 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
-| 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: another `result`; `assistant` or `user` message events; `system/init`; background-task or notification events; **every event except** the fixed heartbeat/liveness types (`tool_progress`, `system/api_retry`; they only feed `liveness`, and that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322) **and** any additional ignorable list, which starts empty (conservative) and is fixed from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
+| 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: **every event after the final `result` counts**, including `tool_progress` and `system/api_retry`: a `system/api_retry` after it means another API request and a `tool_progress` after it plausibly means a tool is still running, so excluding them would be fail-open (review #200 P2-1). `tool_progress` and `system/api_retry` are non-counting liveness lines only **before** the final `result`, where they only feed `liveness`; that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322. The ignorable list of trailer types that do not count after the final `result` starts **empty** and is extended only from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 3 | After stdout EOF **and** `wait`, no latch fired: `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
 | 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
 | 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
@@ -744,9 +744,10 @@ a `.claude/settings.json` with a hook that writes a canary file, an `env` block
 setting `ANTHROPIC_BASE_URL` to a local sink, and an `apiKeyHelper` that writes a
 canary; a `.mcp.json` server that writes a canary; a `CLAUDE.md` with a
 distinctive injected instruction; and a second `CLAUDE.md`-style instruction that
-asks the model to **read `~/.claude/.credentials.json` and print it** (the
-credential canary, **best-effort only**: the model may decline an injected
-instruction, so it is not evidence, see the probes below). **Prerequisite
+asks the model to **read the decoy file `~/.claude/.credentials.decoy.json` and
+print it** (the credential canary, **best-effort only**: the model may decline an
+injected instruction, so it is not evidence, see the probes below). The injected
+instruction never names the test account's real login file (review #200 P3-1). **Prerequisite
 (maintainer action, not decided here, open question 10):** a **dedicated,
 revocable subscription test account**, provisioned by the maintainer, with which
 the isolated test user authenticates. This is D5-compatible (subscription login,
@@ -764,30 +765,42 @@ example `~/.claude/.credentials.decoy.json`, mode 0600, fake content), so the
 login and the decoy are never the same file. A decoy Anthropic profile is a
 different file name in `~/.config/anthropic/`, never the `active_config` file nor
 a profile the CLI would select (a fake `active_config` would change the
-authentication mode). **(B)** if `CLAUDE_CONFIG_DIR` is also used, it points into
-the throwaway tree, `HOME` is set into the throwaway tree as well, the decoy is
+authentication mode). **(B)** (supplementary) if `CLAUDE_CONFIG_DIR` is also used, it points into
+the throwaway tree, the test account's login lives at
+`$CLAUDE_CONFIG_DIR/.credentials.json` (the CLI no longer reads
+`HOME/.claude/.credentials.json`), `HOME` is set into the throwaway tree as well, the decoy is
 named by its **absolute throwaway path**, and the same deny rules (same syntax)
 are applied to that absolute path and to the throwaway Anthropic configuration
-directory. In both forms the test harness chooses the paths itself and learns the
+directory. **Form A is the only form that validates the shipped `~/.claude/**`
+rule syntax and its `~` expansion; form B tests the absolute-path rule and is
+supplementary.** In both forms the test harness chooses the paths itself and learns the
 resolved directories from its own pre-flight: **before the run** it resolves them
 (`getuid`, the account's `HOME`, `Lstat` and `EvalSymlinks` of the decoy and
 login paths; no credential file is opened) and fails closed unless the UID differs
 from the service user's and every resolved path lies inside the throwaway tree.
 The real Claude user's `~/.claude` and `~/.config/anthropic` are never created,
-replaced, moved or read by the test. The test account's token is never printed,
-logged, copied into the history record or a CI artifact (the stream and history
-are checked for it), and the maintainer revokes the account after the run.
+replaced, moved or read by the test. The Bridge never prints or logs the test account's token. If the deny rule were
+to fail, the token could still appear in the stream of the denied run, so the
+stream, history record and artifacts of that run are **secret-bearing until the
+token check passes**: they stay on the isolated host, are never uploaded or
+attached anywhere before the check, are deleted if the check finds the token, and
+the maintainer revokes the account after the run whatever the result.
 
 **Probes (review #190 P2-1).** They are driven by the **operator's own explicit
 test prompt**, not by an injected instruction: a `Read` of the decoy by absolute
-path, a `Grep` in content mode with a pattern taken from the decoy, a `Grep` in
-files-with-matches mode, and a `Glob` listing of the decoy directories (Claude
+path, a `Read` of the test account's real login file by absolute path (the only
+place the real login is tested; it is read only in the denied run and falls under
+the secret-bearing rule above), a `Grep` in content mode with a pattern taken from
+the decoy, a `Grep` in files-with-matches mode, and a `Glob` listing of the decoy directories (Claude
 Code applies `Read` deny rules to `Grep` and `Glob` only on a best-effort basis,
 review #183 P3-2). **Per probe the run must contain a `tool_use` event for that
 tool and a matching `permission_denials` entry**; a probe without both is
 **inconclusive and fails the slice**, so a model that simply declined cannot pass.
-A **positive control run without the deny rule** (same isolated user, same prompt,
-throwaway root only) must show that the same prompt does read the decoy; if it
+The decoy content is a **random marker string that is not credential-shaped**
+(generated per run), so a content-mode `Grep` match is unambiguous evidence of
+decoy exposure and cannot also match the real login in the same directory. A
+**positive control run without the deny rule** (same isolated user, a prompt that
+names **only the decoy**, never the real login, throwaway root only) must show that the same prompt does read the decoy; if it
 does not, the denial evidence is meaningless and the test is inconclusive (slice
 fails). After the denied run: no canary file exists, the sink received no request,
 `init.mcp_servers` is empty, `init.apiKeySource` is `none`, and **the decoy
@@ -900,8 +913,11 @@ verdict; session-ID parsing; redaction rules; the history record writer/reader
   result is row 0; result plus hang is 6a; result plus a second result is row 8 only
   if the child exits (EOF and `wait`) before the grace ends, and 6a if it hangs; every interrupt records exactly one reason; after any latch
   every later line, result and exit is audit-only (`late_lines_after_verdict`,
-  `late_result_seen`) and the verdict is unchanged; row 8 counts every event except the
-  fixed heartbeat types and the (initially empty) ignorable list;
+  `late_result_seen`) and the verdict is unchanged; row 8 counts **every** event after
+  the final `result`, `tool_progress` and `system/api_retry` included (the pairs
+  "`tool_progress` after the final `result` is row 8" and "`system/api_retry` after
+  the final `result` is row 8", against the same two lines before the final
+  `result`, which do not count), with an ignorable list that starts empty;
   unlisted `terminal_reason`; SIGINT shape without a requested interrupt is
   `failed`; row 0 (every latch trigger: `permissionMode`, `apiKeySource`, `cwd`,
   `session_id`, unlisted version, non-empty `mcp_servers`/`plugins`, wrong
@@ -960,7 +976,8 @@ MCP schemas; allowlist file loading (§6).
   interrupt acknowledged by `aborted_*` is `interrupted`; a `user` interrupt whose
   escalation is exhausted is `ABORT_UNCONFIRMED` with `child_unconfirmed`; row 6
   stays for runs with no `result` at all;** credential canary: each operator-prompted probe (`Read`, `Grep` in both
-  modes, `Glob`) on the decoy file and the decoy Anthropic profile has a `tool_use`
+  modes, `Glob`) on the decoy file, the test account's real login (denied run only,
+  secret-bearing artifacts) and the decoy Anthropic profile has a `tool_use`
   event and a matching `permission_denials` entry (otherwise inconclusive and the
   slice fails), the positive control without the deny rule reads the decoy, the
   pre-flight isolation check fails closed (UID equal to the service user's, or a
@@ -971,7 +988,7 @@ MCP schemas; allowlist file loading (§6).
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
   to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
-  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; use the login file itself as the decoy; count a probe without a `tool_use` event and a matching denial as passed; skip the positive control; release the guard at the `result` line before EOF
+  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; use the login file itself as the decoy; count a probe without a `tool_use` event and a matching denial as passed; name the real login in the injected instruction; upload the denied run's artifacts before the token check; skip the positive control; ignore `tool_progress` (or `system/api_retry`) after the final `result`; release the guard at the `result` line before EOF
   and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
   test** of §8.3 (prerequisite: the maintainer-provisioned test account, open
