@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 )
@@ -128,7 +129,8 @@ func TestVerifiedPendingPermissionForThisExecution(t *testing.T) {
 	got := waitState(t, m, x.ID, "waiting_for_permission")
 	// The probe that set the state may have raced the ID assignment; wait for the
 	// detail with the correct ID.
-	for i := 0; i < 500 && got.PendingPermission == nil; i++ {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && got.PendingPermission == nil; {
+		time.Sleep(2 * time.Millisecond)
 		got, _ = m.Get(context.Background(), x.ID)
 	}
 	p := got.PendingPermission
@@ -142,8 +144,11 @@ func TestVerifiedPendingPermissionForThisExecution(t *testing.T) {
 	if got.PendingPermissionCount == nil || *got.PendingPermissionCount != 1 {
 		t.Fatalf("count = %v", got.PendingPermissionCount)
 	}
-	if len(src.sessions) == 0 || src.sessions[0] != "ses_test" {
-		t.Fatalf("source asked for sessions %v, want the execution's native session", src.sessions)
+	src.mu.Lock()
+	asked := append([]string(nil), src.sessions...)
+	src.mu.Unlock()
+	if len(asked) == 0 || asked[0] != "ses_test" {
+		t.Fatalf("source asked for sessions %v, want the execution's native session", asked)
 	}
 	// Serialized output: exactly the ADR-024 section 3 keys; no pattern, no
 	// metadata, no native text, no diagnostic reason, no user message ID.
