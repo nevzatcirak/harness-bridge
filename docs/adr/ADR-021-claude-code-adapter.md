@@ -292,8 +292,8 @@ rows first, by time of the latch, then the first match in printed order):
 | 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
 | 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
-| 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1 | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
-| 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: **every event after the final `result` counts**, including `tool_progress` and `system/api_retry`: a `system/api_retry` after it means another API request and a `tool_progress` after it plausibly means a tool is still running, so excluding them would be fail-open (review #200 P2-1). `tool_progress` and `system/api_retry` are non-counting liveness lines only **before** the final `result`, where they only feed `liveness`; that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322. The ignorable list of trailer types that do not count after the final `result` starts **empty** and is extended only from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
+| 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1, **and no counting event after that `result`** (a trailing line makes it row 8, review #204 P3-1) | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
+| 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: **any non-empty stdout line after the final `result` counts, decodable as an event or not** (garbage or a truncated line included; review #204 P3-2), and **every event after the final `result` counts**, including `tool_progress` and `system/api_retry`: a `system/api_retry` after it means another API request and a `tool_progress` after it plausibly means a tool is still running, so excluding them would be fail-open (review #200 P2-1). `tool_progress` and `system/api_retry` are non-counting liveness lines only **before** the final `result`, where they only feed `liveness`; that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322. The ignorable list of trailer types that do not count after the final `result` starts **empty** and is extended only from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 3 | After stdout EOF **and** `wait`, no latch fired: `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
 | 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
 | 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
@@ -786,6 +786,30 @@ token check passes**: they stay on the isolated host, are never uploaded or
 attached anywhere before the check, are deleted if the check finds the token, and
 the maintainer revokes the account after the run whatever the result.
 
+**Where a failing denial would put the token (review #204 P2-1).** If the deny
+rule failed, the file content is the `Read` tool result, so it would already have
+been (a) sent to the model API as part of the conversation, which deleting local
+files cannot recall, (b) written by the CLI into its own session transcripts under
+the test user's `~/.claude/projects/`, and (c) if the run goes through a Bridge
+instance, appended to that instance's history store and returned by
+`read_session_history` to any authorized caller. Therefore: (i) the denied run uses
+a **throwaway Bridge instance** (its own history directory, remote ingress and
+connector disabled, no session reachable by Chat), and that history directory and
+the test HOME, including the CLI transcripts under `~/.claude/projects/`, are
+**deleted wholesale** after the check, whatever its result; (ii) a failing denial
+means the token was already sent to the model API, so **the account is revoked
+immediately**, and the account must be disposable and hold no other access;
+(iii) evidence committed to this **public** repository contains **verdict lines
+only** (tool name, the `permission_denials` entry, pass or fail), never raw NDJSON
+of the denied run.
+
+**Post-run token check (review #204 P3-3).** The isolated test user computes
+fingerprints (for example a keyed hash) of **all** string values in the login file
+(token, account and organization identifiers alike, because finding no token does
+not prove the other fields are absent), and searches the stream, the history
+record, the transcripts and every artifact with those fingerprints, never printing
+or logging a value. A hit fails the slice and triggers (ii) above.
+
 **Probes (review #190 P2-1).** They are driven by the **operator's own explicit
 test prompt**, not by an injected instruction: a `Read` of the decoy by absolute
 path, a `Read` of the test account's real login file by absolute path (the only
@@ -910,14 +934,14 @@ verdict; session-ID parsing; redaction rules; the history record writer/reader
   interrupt plus `aborted_*` result plus exit 0 and no latch is row 5; a `user`
   interrupt whose escalation is exhausted is 6b; a `user` interrupt and exit 143
   with no result is row 6 with `ABORT_UNCONFIRMED`; init latch plus `aborted_*`
-  result is row 0; result plus hang is 6a; result plus a second result is row 8 only
+  result is row 0; the row-2 shape plus a trailing line is row 8, not row 2; result plus hang is 6a; result plus a second result is row 8 only
   if the child exits (EOF and `wait`) before the grace ends, and 6a if it hangs; every interrupt records exactly one reason; after any latch
   every later line, result and exit is audit-only (`late_lines_after_verdict`,
   `late_result_seen`) and the verdict is unchanged; row 8 counts **every** event after
   the final `result`, `tool_progress` and `system/api_retry` included (the pairs
   "`tool_progress` after the final `result` is row 8" and "`system/api_retry` after
   the final `result` is row 8", against the same two lines before the final
-  `result`, which do not count), with an ignorable list that starts empty;
+  `result`, which do not count), with an ignorable list that starts empty; a non-empty undecodable line after the final `result` is row 8 too, with its own fixture (a success-shaped run, exit 0, then one undecodable line, must not be row 3);
   unlisted `terminal_reason`; SIGINT shape without a requested interrupt is
   `failed`; row 0 (every latch trigger: `permissionMode`, `apiKeySource`, `cwd`,
   `session_id`, unlisted version, non-empty `mcp_servers`/`plugins`, wrong
@@ -1095,7 +1119,10 @@ anything not observed is NOT_EXERCISED, never PASS.
     dedicated, revocable subscription test account, which only the maintainer can
     provision (D5-compatible: subscription login, never `--bare`). Provision it
     (and revoke it after the run), or accept that the canary cannot run and the
-    adapter stays disabled? This ADR lists it as a prerequisite and does not
+    adapter stays disabled? The choice also fixes the probe set: provisioning the
+    account **accepts the secret-bearing real-login `Read` probe** (§8.3, the
+    handling above), while the alternative is to **omit the real-login probe and
+    test only the decoy**. This ADR lists the account as a prerequisite and does not
     decide it.
 
 ## Verification status
