@@ -1,0 +1,4 @@
+/* Harness Bridge dashboard, slice 1: skeleton styles. No remote resources. */
+body { font-family: sans-serif; margin: 1.5rem; }
+header { display: flex; align-items: baseline; gap: 1rem; }
+.badge { border: 1px solid currentColor; padding: 0 .4rem; font-size: .8rem; }
