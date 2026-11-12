@@ -53,3 +53,10 @@ Open items recorded here, not fixed:
 ### ADR-018 / idle-as-absent: resolution notes (2026-11-11, appended)
 
 - ADR-018 evidence table versus idle-as-absent (the `TestF7PermissionRejectIdleStatus` row and the "Out of scope" bullet that still said `running` after PR #128; recorded as an open item in the "P3 cleanup 2" section above, from PR #148): resolved by the ADR-018 "Amendment 2026-11-11" (maintainer decision D10, text alignment only, no behavior change; the amendment was written together with ADR-024).
+
+### ADR-023 slice 1 (dashboard skeleton): deferred items (2026-11-11, appended)
+
+- `BRIDGE_DASHBOARD_SOCKET` and `BRIDGE_DASHBOARD_ADDR` are not yet documented in `docs/CONTRACTS.md` or the deployment docs; that is slice 5 (docs and live acceptance R-DASH, ADR-023 §7). Slice 1 only validates and serves the skeleton page.
+- The dashboard has no data source yet: `Source` has one reader (`Sessions`) and the Bridge wires `NullSource`; the session views, diffs, audit ring and polling are slices 2 to 5.
+- The unix-socket transport is Linux-only (like the admin socket); other platforms get a startup error that points at the loopback TCP address.
+- The Host allowlist applies to the TCP transport only (ADR-023 T3, T9); on the unix socket the 0700 directory is the fence.

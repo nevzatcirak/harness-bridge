@@ -1,7 +1,18 @@
 # ADR-023: read-only session dashboard
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code in this
-change.
+Date: 2026-11-11. Status: **ACCEPTED (per D12, 2026-11-11, Planning Desk;
+reviews #161/#169, merged #157)**. Implementation proceeds in the slices of §7;
+this change adds slice 1 (skeleton) only.
+
+**Acceptance note (2026-11-11).** The Planning Desk accepted this ADR under
+decision D12 (ADR acceptance delegated to the Planning Desk; no D12 exception
+applies): review #169 (A) is PASS-WITH-NITS on `4742b04` with no P0-P2, the
+recommendation conforms to D9 (a separate read-only dashboard), and PR #157 is
+merged (`12fea90`). **The open questions below stay open** and remain maintainer
+questions; acceptance does not decide them, and slices 2-5 must not assume an
+answer. The #169 nits R1-R3 are fixed in this revision, the Bridge file:line
+citations are re-pinned to main `12fea90` (the OpenCode citations stay pinned to
+`148842ef`), and the audit-ring attribute allowlist is enumerated in §1.1.
 
 **Maintainer decision D9 (2026-11-11, via Planning Desk):** a separate
 **dashboard UI**, "like the Claude Code coder view", that shows which sessions
@@ -55,10 +66,10 @@ made for display.
 | Data | Source | Notes |
 | --- | --- | --- |
 | Session IDs, harness, root, ACL | The existing read-only discovery path (`internal/mcp/discovery.go`, ADR-012 policy) plus the operator allowlist | Only ACL-authorized sessions are shown. An unavailable discovery result is shown as `unknown`; the dashboard never invents a session. Discovery is bounded like today's MCP discovery; a stall renders "discovery unavailable", never an empty list silently. |
-| Executions (id, session, state, started/updated/ended, unresolved, permission rejection, guard-release time) | The execution manager's in-memory records (`internal/execution/manager.go:53-71`) | The dashboard needs a new **read-only enumeration** (`DashboardSnapshot`) that returns copies; today the manager exposes only per-ID `Snapshot`, `Get`, `SessionGuard` (`manager.go:492`, `:511`, `:532`). Lock order (review #161 F3): copy the run pointers under `m.mu`, **release `m.mu`**, then lock each run's `x.mu` alone for the copy; the code never holds `m.mu` and a run's mutex together (`manager.go:369-391`, `:505-527`). It never takes `x.op`. |
+| Executions (id, session, state, started/updated/ended, unresolved, permission rejection, guard-release time) | The execution manager's in-memory records (`internal/execution/manager.go:53-71`) | The dashboard needs a new **read-only enumeration** (`DashboardSnapshot`) that returns copies; today the manager exposes only per-ID `Snapshot`, `Get`, `SessionGuard` (`manager.go:492`, `:511`, `:532`). Lock order (review #161 F3, corrected by review #169 R1): existing code either **nests** the two mutexes in the order run mutex then manager mutex (`finalizeUnsubmitted`, `manager.go:369-391`, takes `x.mu` at `:370` and `m.mu` at `:387-391`; `commitRelease`, `release.go:280-285`) or holds **one at a time** (`SessionGuard`, `manager.go:505-527`, whose comment says it never holds `m.mu` and `run.mu` together). The enumeration copies the run pointers under `m.mu`, **releases `m.mu`**, then locks each run's `x.mu` alone for the copy, so it holds one mutex at a time and cannot invert the nested order. It never takes `x.op`. |
 | Current execution | The newest non-terminal execution for the session, by `Started` | Computed in the view model, not stored. |
 | Guard | `Manager.SessionGuard(session)` (`manager.go:511-527`) | Shows `held` plus the state that holds it. |
-| Audit | AUDIT-01 lines (`docs/CONTRACTS.md:188`), including the admin `guard_release` lines | The dashboard replaces the process default logger with a **fan-out handler**: the original journal handler stays one branch (no double output), and the second branch copies into a bounded in-memory ring (1000 entries, drop-oldest). Because AUDIT-01 is written through the package-global `slog.Info` (`internal/mcp/audit.go:160`) and the admin server's `slog.Default()` (`internal/admin/admin.go:144`), the tee sees **every** slog record; it therefore keeps only records whose `event` attribute is in a closed allowlist (`guard_release`, `prompt_submission`, `interrupt`, and the future lifecycle/permission events) and copies only an allowlisted attribute set. The admin server must be constructed with the process default logger (or the same tee), not a separate one. Everything else is discarded. It never re-reads the journal, never opens the journal file, and never persists entries. The ring is display-only and is lost on restart, which is acceptable because the journal remains the audit authority. |
+| Audit | AUDIT-01 lines (`docs/CONTRACTS.md:188`), including the admin `guard_release` lines | The dashboard replaces the process default logger with a **fan-out handler**: the original journal handler stays one branch (no double output), and the second branch copies into a bounded in-memory ring (1000 entries, drop-oldest). Because AUDIT-01 is written through the package-global `slog.Info` (`internal/mcp/audit.go:160`) and the admin server's `slog.Default()` (`internal/admin/admin.go:191-195`, `logger()`), the tee sees **every** slog record; it therefore keeps only records whose `event` attribute is in a closed allowlist (`guard_release`, `prompt_submission`, `interrupt`, and the future lifecycle/permission events) and copies only an allowlisted attribute set. **The attribute allowlist (enumerated from the existing AUDIT-01 writers, `internal/mcp/audit.go:117-160` and `internal/admin/admin.go:310-340`):** `event`, `tool`, `outcome`, `accepted`, `error_code`, `session_id`, `execution_id`, `idem` (the short idempotency tag, never the key), `principal`, and for `guard_release` also `native_state`, `unfinished`, `permission_pending`, `correlated_user`, `settle_ms`, `allow_missing_user_message` and `ticket`; plus the record time and message. Any other attribute is dropped, and a future event name or attribute is not shown until this list is amended. The admin server must be constructed with the process default logger (or the same tee), not a separate one. Everything else is discarded. It never re-reads the journal, never opens the journal file, and never persists entries. The ring is display-only and is lost on restart, which is acceptable because the journal remains the audit authority. |
 
 ### 1.2 Native OpenCode (v1.19.4, `148842ef7cb1bc34192b3fff57d0f9721ab9c801`)
 
@@ -71,7 +82,7 @@ source reading only (OpenCode was not run).
 | Session detail | `GET /session/:sessionID` | `.../groups/session.ts:132` | Root/cwd from the session record. |
 | Status map | `GET /session/status` | `.../groups/session.ts:121` | OpenCode **deletes** idle entries (`packages/opencode/src/session/status.ts:32,42-44`), so absence means idle; the dashboard must not report `running` from absence (same rule as the Bridge's ADR-017/018 logic). |
 | Messages | `GET /session/:sessionID/message` | `.../groups/session.ts:179` | Needed to enumerate user-message IDs for diffs. |
-| **Session diff** | `GET /session/:sessionID/diff?messageID=<id>` | `.../groups/session.ts:84` (path) and `:168-178` (endpoint); handler `.../handlers/session.ts:99-104`; query `DiffQuery` `:39-42` | **Per user message, not session-wide.** `SessionSummary.diff` returns `[]` when `messageID` is omitted (`packages/opencode/src/session/summary.ts:129-131`) and otherwise returns the diffs stored on that user message (`:135-141`). The diffs are computed at summarize time from `step-start`/`step-finish` snapshot hashes (`:82-100`) and stored on the user message (`:102-127`); if the snapshot feature is disabled (`config.snapshot === false`, `:115`) the result is always empty. Response items are `Snapshot.FileDiff`: optional `file`, optional `patch`, `additions`, `deletions`, optional `status` added/deleted/modified (`packages/schema/src/file-diff.ts:6-12`). The route's `[]` is ambiguous: it is the same for "no changes", snapshot disabled, an absent/wrong `messageID` and a message whose diffs were never computed (review #161 F2). The dashboard must therefore first read each user message's native `info.summary.diffs` from the message list: `summary`/`diffs` absent → *not computed / unavailable*; `diffs: []` → *computed, no changes*; non-empty → call the diff route with that `messageID`. Three fixtures must render three distinct labels. |
+| **Session diff** | `GET /session/:sessionID/diff?messageID=<id>` | `.../groups/session.ts:84` (path) and `:168-178` (endpoint); handler `.../handlers/session.ts:99-104`; query `DiffQuery` `:39-42` | **Per user message, not session-wide.** `SessionSummary.diff` returns `[]` when `messageID` is omitted (`packages/opencode/src/session/summary.ts:129-131`) and otherwise returns the diffs stored on that user message (`:135-141`). The diffs are computed at summarize time from `step-start`/`step-finish` snapshot hashes (`:82-100`) and stored on the user message (`:102-127`); if the snapshot feature is disabled (`config.snapshot === false`, `:115`) the result is always empty. Response items are `Snapshot.FileDiff`: optional `file`, optional `patch`, `additions`, `deletions`, optional `status` added/deleted/modified (`packages/schema/src/file-diff.ts:6-12`). The route's `[]` is ambiguous: it is the same for "no changes", snapshot disabled, an absent/wrong `messageID` and a message whose diffs were never computed (review #161 F2). The dashboard must therefore first read each user message's native `info.summary.diffs` from the message list: `summary`/`diffs` absent → *not computed / unavailable*; `diffs: []` → *computed, no changes*; non-empty → call the diff route with that `messageID`. Three fixtures must render three distinct labels (*computed, no changes*; *not computed*; *changes*), and **"unavailable" (timeout, error, snapshot disabled) is a fourth, separate label** (review #169 R3). |
 | Working-tree diff | `GET /vcs/diff?mode=git\|branch&context=N` and `GET /vcs/diff/raw` | `.../groups/instance.ts:48-49` (paths), `:104-121` (endpoints); handler `.../handlers/instance.ts:51-59`; implementation `packages/opencode/src/project/vcs.ts:235,373-390` | Repo-level VCS diff (`mode=git` or `branch`), not attributable to a turn; 10 MB patch caps (`vcs.ts:12-13`). `GET /vcs/status` and `/vcs` help label it. |
 
 **Directory query binding (review #161 F8).** Every native call that accepts a
@@ -79,6 +90,17 @@ source reading only (OpenCode was not run).
 `/session/:id/diff`, `/vcs/*`) sends only the **ACL-validated root of the
 requested session**, never a value taken from the dashboard request. An
 unlisted session is `404` before any native call (T4).
+
+**Deployment assumption for `/vcs/diff*` (review #169 R2).** The Bridge runs no
+git (§1.3), but these two routes make **OpenCode** run git in the session root
+(`vcs.ts:378,383,390`); whether OpenCode hardens those invocations is
+UNVERIFIED. A hostile `.git/config` in a session root would therefore be
+executed inside the OpenCode process, once per dashboard poll that uses these
+routes. That stays inside the agent's own trust domain and is **not** the F1
+boundary crossing, **provided the OpenCode user is not the Bridge user** (the
+ADR-021 two-user pattern). This is a stated deployment assumption of the
+dashboard, not something it enforces; it also bears on the per-poll cost
+question in open question 2.
 
 **Never exposed:** `POST /vcs/apply` (`groups/instance.ts:50`), `/session/:id/abort`,
 `/session/:id/revert`, prompt routes and any other mutating route. See §4.
@@ -279,10 +301,14 @@ Columns: harness, session ID + title (truncated), root, state, guard, current
 execution ID, last activity, changed-files count if a diff is available.
 Filters are client-side only (no query-driven server work beyond pagination
 limits). Session `state` is one of `idle|running|waiting_for_permission|unknown`;
-`completed` is an **execution** state (`docs/CONTRACTS.md:579-591`), never a
-session state. `idle` means only that the Bridge holds no guard and runs no
-child; it is **not proof that the previous task succeeded** (ADR-011) and must
-not be rendered as success (review #161 F5).
+`completed` is an **execution** state (`docs/CONTRACTS.md:594`, "Session state
+and the Bridge guard"), never a session state. `idle` is **not proof that the
+previous task succeeded** (ADR-011) and must not be rendered as success (review
+#161 F5). What it means depends on the harness (review #169 R3): for an
+OpenCode session with no Bridge guard it comes from the native status, an
+explicit `idle` **or an absent entry** (OpenCode deletes idle entries,
+`docs/CONTRACTS.md:594-616`); for a Claude Code session it means only that the
+Bridge holds no guard and runs no child.
 
 ### 5.2 Session detail (`GET /session/<harness>/<id>`)
 
@@ -349,7 +375,7 @@ mutation check and an acceptance step. No slice changes the MCP tool contract.
 | --- | --- | --- | --- |
 | 1 | `internal/dashboard` skeleton: config (`BRIDGE_DASHBOARD_SOCKET`/`ADDR`, disabled by default), listener validation (0700 unix socket or loopback only), route table, CSP/middleware, read-only `Source` interface | route-table test fails if any non-GET route exists; bind `0.0.0.0` refused; mutation: add a POST route → test RED | server starts on a 0700 socket, `curl` GET `/` returns HTML with CSP; TCP bind to 0.0.0.0 exits with an error |
 | 2 | Sessions list + detail view model; read-only manager enumeration | XSS fixtures RED; mutation: remove escaping → fixture test RED; lock-order test (enumeration vs `send_prompt`/finalize, 5 s deadline) RED on an `m.mu`→`x.mu` inversion; manager method copies, no aliasing | list matches MCP `list_sessions` for the ACL; detail shows state/guard/current execution |
-| 3 | Diffs: OpenCode per-turn session diff (enumerate user messages, read `info.summary.diffs` presence), `/vcs/diff`, caps, binary, redaction; **no Bridge-side git subprocess**; Claude Code is an open ADR-021 requirement | `summary.diffs` fixtures (undefined / `[]` / non-empty) RED; mutation: treat undefined as empty, or add a `git` shell-out → test RED; a session root with `core.fsmonitor` and `filter.*.clean` canaries must stay unwritten because nothing runs git | diff matches `GET /session/:id/diff` for a known turn; three distinct labels (computed-empty, not-computed, unavailable); no subprocess is spawned |
+| 3 | Diffs: OpenCode per-turn session diff (enumerate user messages, read `info.summary.diffs` presence), `/vcs/diff`, caps, binary, redaction; **no Bridge-side git subprocess**; Claude Code is an open ADR-021 requirement | `summary.diffs` fixtures (undefined / `[]` / non-empty) RED; mutation: treat undefined as empty, or add a `git` shell-out → test RED; a session root with `core.fsmonitor` and `filter.*.clean` canaries must stay unwritten because nothing runs git | diff matches `GET /session/:id/diff` for a known turn; the four labels (computed-empty, not-computed, changes, and unavailable for timeout/error); no subprocess is spawned |
 | 4 | Audit ring (tee handler with `event`/key allowlist), polling JSON + `ETag`/`If-None-Match`, single-flight, 503 | mutation: add a mutating method to the interface → compile/test RED; journal test | audit feed shows AUDIT-01 lines; no mutation lines from dashboard traffic |
 | 5 | Hardening sweep (Host/Origin, timeouts, race), docs, live acceptance | full route sweep; race detector | live acceptance below |
 
@@ -436,4 +462,17 @@ lands.
   `/vcs/diff` route (or a future, separately reviewed least-privilege fallback).
 - The ADR-021 dashboard interface does not exist; Claude diffs are an open
   requirement, not an available source.
+- Unix-socket listener residual (slice 1 review #194 P3-2/P3-3). The socket
+  directory is checked (owner, mode exactly 0700, opened with `O_NOFOLLOW`) and
+  then the socket is bound **by path**. `O_NOFOLLOW` refuses a symlink only as
+  the **final** directory component; ancestor components are followed, as for the
+  ADR-020 admin socket. After the bind the directory is opened again and must
+  have the same device, inode, owner and mode, and the socket must be a socket
+  owned by the service user, otherwise startup is refused: this detects a swap
+  that happened before the re-check. It does not close the window after it, and
+  an ancestor or the directory itself that another user (or root) can replace is
+  outside what the dashboard can defend: the **same-UID/root residual of the
+  ADR-020 trust boundary**, an operator duty (the socket directory and its
+  ancestors must not be replaceable by agent users). The TCP transport accepts
+  only `127.0.0.1` and `::1`, the two literals on the Host allowlist.
 - Browser compatibility, mobile layout and accessibility were not tested.
