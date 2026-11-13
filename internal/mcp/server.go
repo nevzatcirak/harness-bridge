@@ -13,6 +13,7 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/repository"
@@ -48,6 +49,10 @@ type args struct {
 }
 
 func native(s string) (string, error) {
+	if _, err := claudecode.ParseSessionID(s); err == nil {
+		// The schema accepts the shape (ADR-021 §9); no Claude session is served yet.
+		return "", execution.Fail("INVALID_INPUT", "claudecode sessions are not enabled on this Bridge")
+	}
 	id := strings.TrimPrefix(s, "opencode:")
 	if !strings.HasPrefix(s, "opencode:") || !opencode.ValidID(id, "ses") {
 		return "", execution.Fail("INVALID_INPUT", "invalid session_id")

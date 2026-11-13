@@ -121,3 +121,25 @@ func TestDenialSummaryIsBoundedAndRedacted(t *testing.T) {
 		t.Fatalf("summary not bounded/redacted: %d %q", len(s), s)
 	}
 }
+
+func TestDecodeAssistantAndToolResultBlocks(t *testing.T) {
+	a := DecodeLine([]byte(`{"type":"assistant","session_id":"s","message":{"content":[{"type":"text","text":"hello"},{"type":"tool_use","name":"Read","input":{"file_path":"/r/a"}},{"type":"thinking","thinking":"x"}]}}`))
+	if len(a.Blocks) != 2 || a.Blocks[0].Text != "hello" || a.Blocks[1].Name != "Read" || a.Blocks[1].Input != `{"file_path":"/r/a"}` {
+		t.Fatalf("blocks = %+v", a.Blocks)
+	}
+	u := DecodeLine([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"plain"},{"type":"tool_result","tool_use_id":"tu2","content":[{"type":"text","text":"a"},{"type":"text","text":"b"},{"type":"image"}]},{"type":"text","text":"ignored"}]}}`))
+	if len(u.ToolResults) != 2 || u.ToolResults[0].Content != "plain" || u.ToolResults[1].Content != "ab" || u.ToolResults[1].ToolUseID != "tu2" {
+		t.Fatalf("tool results = %+v", u.ToolResults)
+	}
+	// Malformed or oversized content never panics and stays bounded.
+	big := strings.Repeat("a", 200000)
+	b := DecodeLine([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"` + big + `"}]}}`))
+	if len(b.Blocks) != 1 || len(b.Blocks[0].Text) > maxBlockText {
+		t.Fatalf("text not bounded: %d", len(b.Blocks[0].Text))
+	}
+	for _, bad := range []string{`{"type":"assistant","message":5}`, `{"type":"assistant"}`, `{"type":"user","message":{"content":"s"}}`} {
+		if e := DecodeLine([]byte(bad)); len(e.Blocks)+len(e.ToolResults) != 0 {
+			t.Errorf("%s decoded blocks", bad)
+		}
+	}
+}

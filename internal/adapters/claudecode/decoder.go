@@ -70,13 +70,29 @@ type ResultInfo struct {
 	Denials        []Denial
 }
 
-// Event is one decoded stdout line.
+// ToolResult is one tool_result content block of a user event, bounded; the
+// history store redacts it again on write.
+type ToolResult struct {
+	ToolUseID string
+	Content   string
+}
+
+// Event is one decoded stdout line. Blocks and ToolResults carry what the history
+// records (§5): assistant text and tool_use blocks, and tool_result blocks.
 type Event struct {
 	Type, Subtype, SessionID string
 	Undecodable              bool
 	Init                     *InitInfo
 	Result                   *ResultInfo
+	Blocks                   []Block
+	ToolResults              []ToolResult
 }
+
+const (
+	maxBlockText  = 32 << 10 // per text block; the store's record bound applies on top
+	maxBlockInput = 4 << 10  // per tool_use input summary
+	maxBlocks     = 64       // per event
+)
 
 // Decoder reads NDJSON lines with per-line and total bounds. Blank lines are
 // skipped. After a bound error every further call returns the same error.
@@ -200,8 +216,92 @@ func DecodeLine(b []byte) Event {
 			r.Denials = append(r.Denials, Denial{ToolName: boundedASCII(d.ToolName, 128), ToolUseID: boundedASCII(d.ToolUseID, 128), InputSummary: summarize(d.Input)})
 		}
 		e.Result = r
+	case e.Type == "assistant":
+		e.Blocks = decodeBlocks(m["message"])
+	case e.Type == "user":
+		e.ToolResults = decodeToolResults(m["message"])
 	}
 	return e
+}
+
+type contentItem struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+}
+
+func contentOf(msg json.RawMessage) []contentItem {
+	var m struct {
+		Content []contentItem `json:"content"`
+	}
+	if len(msg) == 0 || json.Unmarshal(msg, &m) != nil {
+		return nil
+	}
+	if len(m.Content) > maxBlocks {
+		m.Content = m.Content[:maxBlocks]
+	}
+	return m.Content
+}
+
+func decodeBlocks(msg json.RawMessage) []Block {
+	var out []Block
+	for _, c := range contentOf(msg) {
+		switch c.Type {
+		case "text":
+			out = append(out, Block{Type: "text", Text: boundedASCII(c.Text, maxBlockText)})
+		case "tool_use":
+			out = append(out, Block{Type: "tool_use", Name: boundedASCII(c.Name, 128), Input: compactBounded(c.Input, maxBlockInput)})
+		}
+	}
+	return out
+}
+
+func decodeToolResults(msg json.RawMessage) []ToolResult {
+	var out []ToolResult
+	for _, c := range contentOf(msg) {
+		if c.Type != "tool_result" {
+			continue
+		}
+		text := ""
+		var asString string
+		var parts []contentItem
+		switch {
+		case json.Unmarshal(c.Content, &asString) == nil && c.Content != nil:
+			text = asString
+		case json.Unmarshal(c.Content, &parts) == nil:
+			for _, p := range parts {
+				if p.Type == "text" {
+					text += p.Text
+				}
+			}
+		}
+		out = append(out, ToolResult{ToolUseID: boundedASCII(c.ToolUseID, 128), Content: boundedASCII(text, maxBlockText)})
+	}
+	return out
+}
+
+// compactBounded compacts a JSON value and bounds it, without redacting (the
+// store redacts every record it writes).
+func compactBounded(in json.RawMessage, max int) string {
+	if len(in) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if json.Compact(&buf, in) != nil {
+		return ""
+	}
+	s := buf.String()
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 func boundedASCII(s string, max int) string {
