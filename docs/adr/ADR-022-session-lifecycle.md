@@ -1,7 +1,12 @@
 # ADR-022: Session lifecycle (launcher, catalog, close and archive)
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only; no production code,
-nothing deployed. It proposes additive contract changes (new tools
+Date: 2026-11-11. Status: **ACCEPTED (per D12, 2026-11-12)**. Design;
+implementation proceeds in the slices of section 10 (S1 first); nothing
+deployed. The maintainer answered every open question in decision D16
+(2026-11-12); the answers are in section 12 ("Decided (D16)") and govern
+wherever an earlier section still describes a point as open or as options (those
+sections are kept unchanged as the record of the options considered). It
+proposes additive contract changes (new tools
 `create_session`, `list_catalog`, `archive_session`, the error code
 `SESSION_LIMIT`, the closed refusal reasons `non_git` and `not_in_root` on
 existing codes, and `session_ref` in the catalog); the seven original tool
@@ -9,6 +14,15 @@ shapes do not change. Written for maintainer decision D8 (Phase 7 scope).
 Revised 2026-11-11 after review #160 (findings P2-1..P2-3, P3-1..P3-6; see the
 fix report on issue #164) and again after reviews #171 and #170 (see the fix
 report on issue #174).
+
+**Acceptance note (2026-11-12, planner task #212).** Accepted under decision D12
+(delegated acceptance) with the maintainer's answers D16 to all nine open
+questions. The design text of sections 1-9 and 11 is unchanged by this
+acceptance; only this header, section 10 (slice table) and section 12 (open
+questions, now decided) were edited. Nothing in this ADR is deployed or enabled
+by accepting it: lifecycle tools exist only after their slices are merged, and
+the existing-tool authorization widening (O2) additionally requires an ADR-012
+amendment before any code relies on it (section 10, slice S9).
 
 Numbering: ADR-022 is reserved for this decision. ADR-021 (Claude Code
 adapter) is a separate record; this ADR does not depend on it, and the Claude
@@ -678,17 +692,21 @@ practical. Mutations are the ones a reviewer should re-run.
 
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
-| S1 | Lifecycle config parser and root validation (no tools) | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode) | accept an overlapping root; skip the canonical check |
-| S2 | Lifecycle authorization (3.2 rules 1-3), including the Git top level procedure (no subprocess, confined reads) and the non-git exclusion. The existing-tool part (O1/O2/O3) is **not** in S2: it waits for the maintainer decision (open question 7) and, if O1 or O2 is chosen, for an ADR-012 amendment | RED test for each of: **the new lifecycle-root session-less opener and the `inspect` variant: a path outside the lifecycle root (refused even if it lies under `BRIDGE_ALLOWED_ROOTS`), a lifecycle root replaced after startup (refused), a symlink component (refused), a session-less call (works, unlike `OpenStorage`), and the existing session-bound `OpenStorage` behavior unchanged**; plain `.git` directory; `.git` file (linked worktree) inside the root; `.git` file whose `gitdir:` leaves the root (refused `not_in_root`); `commondir` leaving the root; `.git` symlink (refused); malformed or multi-line `gitdir:`; unsupported layout (reftable/bare); nested repository (inner wins); ascent reaching the root with no `.git` (`non_git`); depth limit; if open question 9 option (i) is chosen, `core.worktree` and `include` present (refused). Also symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots; the existing-tool check shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass; follow a `gitdir:` pointer outside the root; ascend past a symlinked `.git`; run a `git` subprocess; **make the new opener fall back to `BRIDGE_ALLOWED_ROOTS`; skip the root-identity check; skip the symlink-component check** |
-| S3 | `list_catalog` read-only, instance-qualified `session_ref`, bounds | limit/offset/deadline, filters, no silent partial result, archived not visible | remove the deadline; drop a filter |
-| S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is included only if O1 or O2 is chosen; under O3 it is absent | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY`; a 128-byte create key still yields a valid first-prompt key (hash-derived, 32 bytes); an incomplete or timed-out native count refuses the create with no native write; a returned directory that differs from the request is `UNKNOWN_OUTCOME` with `bootstrap_may_be_outside_root`; the fully resolved path is what is sent | retry on timeout; accept a caller `permission`; cap disabled; derive the first-prompt key by concatenation; treat an incomplete count as zero; ignore the directory mismatch |
-| S5 | Audit lines for create and archive | one line per call on every return path, no free text | skip an audit on a refusal path |
-| S6 | `archive_session` under a lifecycle reservation kind in the manager (never `x.op`, never an execution ID) | preconditions 7.3 each refuse with no native write; a concurrent `send_prompt` gets `SESSION_BUSY` while the PATCH is in flight; re-check before write; rate cap; `UNKNOWN_OUTCOME`; `FORBIDDEN` under `BRIDGE_READ_ONLY`; **the PATCH body is exactly `{"time":{"archived":<n>}}` whatever the caller sends (a spy native records the body)**; while the reservation is held `get_session` shows `submitting` with `guard_reason: archive`, `releaseHolder`/the admin release/reconcile never act on it, and it is released on every exit path including panic | drop the pre-write re-check; archive while a guard is held; skip the reservation; **forward a caller-supplied `title`/`metadata`/`permission` in the body**; store the reservation as a fake execution ID that ADR-020 release could match |
-| S7 | CONTRACTS and runbook; ADR status update after acceptance | doc review | n/a |
-| S8 (only if the maintainer picks 7.2 B) | overlay persistence design, its own ADR | | |
+| S1 | Lifecycle config parser and root validation (no tools, not yet wired into startup). Config keys as implemented: per root `path`, `modes`, `max_sessions`, `max_depth`, and the per-root operator flag `existing_tools` (D16 Q7, O2; default false; parsed only, it grants nothing until slice S9); global `create_per_hour`, `archive_per_hour`, `max_total_sessions` | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode of the config file), config file ownership and size, strict JSON, and `existing_tools` parsing | accept an overlapping root; skip the canonical check; skip the owner check |
+| S2 | Lifecycle authorization (3.2 rules 1-3), including the Git top level procedure (no subprocess, confined reads) and the non-git exclusion. The existing-tool part (O2, D16 Q7) is **not** in S2: it waits for the ADR-012 amendment (slice S9). S2 does include the Q9 option (i) scan: a bounded, include-free read of the git `config` that refuses repositories using `core.worktree` or `include` (fail closed) | RED test for each of: **the new lifecycle-root session-less opener and the `inspect` variant: a path outside the lifecycle root (refused even if it lies under `BRIDGE_ALLOWED_ROOTS`), a lifecycle root replaced after startup (refused), a symlink component (refused), a session-less call (works, unlike `OpenStorage`), and the existing session-bound `OpenStorage` behavior unchanged**; plain `.git` directory; `.git` file (linked worktree) inside the root; `.git` file whose `gitdir:` leaves the root (refused `not_in_root`); `commondir` leaving the root; `.git` symlink (refused); malformed or multi-line `gitdir:`; unsupported layout (reftable/bare); nested repository (inner wins); ascent reaching the root with no `.git` (`non_git`); depth limit; `core.worktree` and `include` present (refused, D16 Q9 option (i)); the config scan stays bounded (size and line limits), follows no `include`, and runs no subprocess. Also symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots; the existing-tool check shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass; follow a `gitdir:` pointer outside the root; ascend past a symlinked `.git`; run a `git` subprocess; **make the new opener fall back to `BRIDGE_ALLOWED_ROOTS`; skip the root-identity check; skip the symlink-component check** |
+| S3 | `list_catalog` read-only, instance-qualified `session_ref`, bounds | limit/offset/deadline, filters, no silent partial result, overlay-archived sessions hidden by default and listed only with `include_archived` (D16 Q5) | remove the deadline; drop a filter |
+| S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is accepted only for a root whose operator flag `existing_tools` is set (O2, D16 Q7) and only after slice S9; otherwise it is absent | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY`; a 128-byte create key still yields a valid first-prompt key (hash-derived, 32 bytes); an incomplete or timed-out native count refuses the create with no native write; a returned directory that differs from the request is `UNKNOWN_OUTCOME` with `bootstrap_may_be_outside_root`; the fully resolved path is what is sent | retry on timeout; accept a caller `permission`; cap disabled; derive the first-prompt key by concatenation; treat an incomplete count as zero; ignore the directory mismatch |
+| S5 | Audit lines for create, archive and close | one line per call on every return path, no free text | skip an audit on a refusal path |
+| S6 (after S8) | The **reversible Bridge archive overlay** (D16 Q1 option B) for Chat: `archive_session` and `close_session` (interrupt a running execution, then overlay archive), under a lifecycle reservation kind in the manager (never `x.op`, never an execution ID). **No native write**: native archive (`PATCH time.archived`) is operator-only and is not an MCP tool | preconditions 7.3 each refuse with no overlay change; **a spy native records no write of any kind (no `PATCH`, no `DELETE`, no `POST`) for `archive_session` and for the archive step of `close_session`**; `close_session` calls the existing interrupt path first and archives only after it is settled, and a failed or uncertain interrupt leaves the session un-archived; a concurrent `send_prompt` gets `SESSION_BUSY` while the overlay change is in flight; re-check before the overlay write; rate cap; `FORBIDDEN` under `BRIDGE_READ_ONLY`; while the reservation is held `get_session` shows `submitting` with `guard_reason: archive`, `releaseHolder`/the admin release/reconcile never act on it, and it is released on every exit path including panic; any session under a lifecycle root with the `archive` mode may be overlay-archived (D16 Q6) | drop the pre-write re-check; archive while a guard is held; skip the reservation; **issue a native `PATCH` from either tool**; **archive after a failed interrupt in `close_session`**; store the reservation as a fake execution ID that ADR-020 release could match |
+| S7 | CONTRACTS and runbook | doc review | n/a |
+| S8 (mandatory, **before S6**) | Overlay persistence design, its own ADR: where the overlay lives, how it survives a restart without becoming an authority (no grant restoration from journal history alone, ADR-010 memory-only records), how `include_archived` and un-archive use it | design review | n/a |
+| S9 | ADR-012 amendment (docs, maintainer-visible) for the wide existing-tool grant O2 behind the per-root operator flag `existing_tools` (D16 Q7), then the existing-tool check that honors the flag. No code may rely on O2 before the amendment is accepted | amendment review; with the flag unset the existing-tool check is unchanged (`policy.go` conjunction); with it set, only sessions whose live directory is under that root; other roots unaffected | honor the flag for a root that has it unset; treat the flag as global |
 
-Delete (7.4 b or c) is a separate slice and ADR amendment, only on a
-maintainer decision.
+Delete is not exposed (D16 Q2); a deleting command (7.4 b or c) would be a
+separate slice and ADR amendment, only on a new maintainer decision.
+
+Slice order: S1, S2, S3, S4, S5, S8, S6, S7, with S9 before any code that relies
+on O2.
 
 ## 11. Live acceptance outline (R7)
 
@@ -720,37 +738,42 @@ H4 did (native DB, filesystem, journal, independent rebuild).
    request (documented).
 8. Skips and anything not run are reported as UNVERIFIED, not PASS.
 
-## 12. Open questions for the maintainer
+## 12. Decided (D16, 2026-11-12)
 
-1. **Archive semantics (7.2):** accept (A), a native archive that is one-way
-   through the API, or require (B), a reversible Bridge overlay? This overturns
-   the "reversible" premise in D8.
-2. **Delete (7.4):** confirm option (a), not exposed to Chat.
-3. **Default caps (section 8):** are 10 creates/hour, 10 archives/hour, 20
-   sessions per root and 50 total acceptable starting points?
-4. **Provenance label:** is a best-effort `metadata` label acceptable, given it
-   is never authoritative?
-5. **Archived visibility:** is it acceptable that archived sessions drop out of
-   the Bridge catalog (6.3), or is a read path for them required?
-6. **Scope of archive:** may Chat archive sessions it did not create but that
-   live under an `archive` root, or only sessions the Bridge created in this
-   process (a stricter, restart-fragile rule)?
-7. **Existing-tool authorization for created sessions (section 3.2):** O1 (narrow,
-   in-process grant for sessions this writer created; proposed ADR-012
-   amendment), O2 (wide, every session under a lifecycle root; proposed
-   ADR-012 amendment, beyond D8), or O3 (no widening; the operator lists the ID
-   and restarts)? The ADR does not choose.
+The nine questions that this section listed as open for the maintainer were
+answered by decision D16 (2026-11-12), delivered with planner task #212. The
+question text is kept short; the option text stays in the section named.
 
-8. **`close_session` (section 7.1):** keep "close" as abort (`interrupt_execution`)
-   plus archive with no separate tool, or add a `close_session` that
-   interrupts a running execution and then archives? D8 lists close; this draft
-   proposes no separate tool, which is a design choice, not an upstream limit.
-9. **`core.worktree` and git `include` in the top-level computation
-   (section 3.2):** (i) a lifecycle-only, bounded, include-free scan of the git
-   `config` that refuses such repositories (a narrow exception to ADR-012's
-   "no config consulted"), or (ii) accept the residual and require the operator
-   to keep such repositories out of every lifecycle root? The ADR does not
-   choose.
+1. **Archive semantics (7.2): (B), a reversible Bridge archive overlay** for
+   Chat. Native archive (`PATCH time.archived`) is **operator-only** and is not
+   an MCP tool. Consequence: the overlay needs its own persistence design
+   (slice S8, mandatory and before S6), and Chat tools make no native write for
+   archive.
+2. **Delete (7.4): not exposed** to Chat (option a).
+3. **Default caps (section 8): as proposed:** 10 creates/hour, 10 archives/hour,
+   20 sessions per root, 50 total.
+4. **Provenance label:** a best-effort `metadata` label is acceptable; it is
+   never authoritative.
+5. **Archived visibility: an `include_archived` read path** for overlay-archived
+   sessions (slice S3 lists them only on request).
+6. **Scope of archive:** any session under a lifecycle root that has the
+   `archive` mode may be overlay-archived, not only sessions this process
+   created.
+7. **Existing-tool authorization (3.2): O2** (wide grant for sessions under a
+   lifecycle root), **behind a per-root operator flag** (config key
+   `existing_tools`, default off). O2 is an **ADR-012 amendment**, which is
+   required before any code relies on it: it is listed as slice S9. Until S9 is
+   accepted and merged the flag is parsed (S1) and grants nothing.
+8. **`close_session`: add it** (7.1). It interrupts a running execution (the
+   existing interrupt path), then overlay-archives the session (slice S6).
+9. **`core.worktree` and git `include` (3.2): option (i)**, fail-closed refusal
+   of repositories that use them, through a bounded, include-free scan of the git
+   `config` (a narrow, lifecycle-only exception to ADR-012's "no config
+   consulted"). The scan is in slice S2.
+
+The choices that remain with the maintainer are not changed by this section: any
+future relaxation of the above (for example exposing delete, or granting O2
+without the per-root flag) needs a new decision.
 
 ## 13. Limitations of this record
 
