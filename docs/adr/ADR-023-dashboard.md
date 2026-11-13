@@ -8,11 +8,21 @@ this change adds slice 1 (skeleton) only.
 decision D12 (ADR acceptance delegated to the Planning Desk; no D12 exception
 applies): review #169 (A) is PASS-WITH-NITS on `4742b04` with no P0-P2, the
 recommendation conforms to D9 (a separate read-only dashboard), and PR #157 is
-merged (`12fea90`). **The open questions below stay open** and remain maintainer
-questions; acceptance does not decide them, and slices 2-5 must not assume an
-answer. The #169 nits R1-R3 are fixed in this revision, the Bridge file:line
+merged (`12fea90`). At that date the open questions stayed open: acceptance did
+not decide them. **They were answered by maintainer decision D17 on 2026-11-12
+(dated note below; section "Decided (D17, 2026-11-12)").** The #169 nits R1-R3
+are fixed in this revision, the Bridge file:line
 citations are re-pinned to main `12fea90` (the OpenCode citations stay pinned to
 `148842ef`), and the audit-ring attribute allowlist is enumerated in §1.1.
+
+**Decision note (2026-11-12, planner task #220).** The maintainer answered all
+nine open questions in decision D17 (recorded in issue #117), all as
+recommended; the answers are in "Decided (D17, 2026-11-12)" and replace the old
+"Open questions" section. This note, the sentence of the acceptance note above
+that said the questions stay open, and that section are the only edits made for
+it: no other decision, the threat model, the slice plan and every other section
+are unchanged. References elsewhere in this ADR to "open question N" point to
+the item of the same number in the Decided section.
 
 **Maintainer decision D9 (2026-11-11, via Planning Desk):** a separate
 **dashboard UI**, "like the Claude Code coder view", that shows which sessions
@@ -418,29 +428,29 @@ lands.
 - Adds no MCP tool, no database, no external service, no Node build chain, and
   no git subprocess.
 
-## Open questions
+## Decided (D17, 2026-11-12)
 
-1. **Transport.** Is the unix socket + SSH forwarding acceptable, or does the
-   maintainer want 127.0.0.1 plus a small token? Is the host single-operator?
-2. **Diff source default.** Should the detail view default to the per-turn
-   native diff (requires enumerating user messages and snapshots) or the
-   working-tree `/vcs/diff`? May the dashboard call the native diff per visible
-   turn on every poll, or must it cache turn diffs for the poll interval?
-3. **ADR-021 dependency (open requirement).** ADR-021 as proposed has no
-   dashboard query and starts with a read-only tool profile that emits no
-   file-edit events. Must ADR-021 add a read-only query/file-edit capture, or
-   does the dashboard show Claude diffs as unavailable until a later ADR?
-4. **Audit scope and retention.** 1000-entry ring OK? Include admin
-   `guard_release` lines? Drop oldest or stop when full?
-5. **Redaction.** On by default or opt-in, and who owns the pattern list?
-6. **Session scope.** All ACL-authorized sessions, or only Bridge-created ones?
-   Discovery cost on a large host.
-7. **ADR-022.** Archived/closed sessions: shown, hidden, or a separate filter?
-8. **Multi-harness display.** Is `opencode:`/`claudecode:` in the ID enough, or
-   should harnesses get distinct columns/badges?
-9. **Working-tree diff without Bridge-side git.** Is the native `/vcs/diff`
-   route sufficient, or should a future harness-user (least-privilege) fallback
-   with config/attribute refusal be designed and reviewed separately?
+The maintainer answered every open question of the proposal in decision D17
+(2026-11-12, recorded in issue #117), all as recommended. The questions are kept
+in short form with the answer.
+
+1. **Transport.** **Unix socket plus SSH `-L` forwarding**; the host is a single
+   operator. No `127.0.0.1` token transport.
+2. **Diff source default.** The detail view defaults to the native working-tree
+   `/vcs/diff`; **per-turn diffs load on demand** and are cached for the poll
+   interval.
+3. **ADR-021 dependency.** **Claude Code diffs show as unavailable** until a
+   later ADR; ADR-021 is not required to add a dashboard query now.
+4. **Audit scope and retention.** A **1000-entry ring**, including the admin
+   `guard_release` lines, **drop-oldest**.
+5. **Redaction.** **On by default**, with a shipped default list and patterns in
+   the operator configuration.
+6. **Session scope.** **All ACL-authorized sessions plus the ADR-022 lifecycle
+   roots.**
+7. **ADR-022 archived sessions.** **Hidden by default, with a filter.**
+8. **Multi-harness display.** **Distinct harness badges and columns.**
+9. **Working-tree diff without Bridge-side git.** The **native `/vcs/diff` is
+   sufficient**; there is no Bridge-side git fallback.
 
 ## Limitations / UNVERIFIED
 
