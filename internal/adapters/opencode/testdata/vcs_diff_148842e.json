@@ -1,0 +1,5 @@
+[
+  {"file": "README.md", "patch": "Index: README.md\n===================================================================\n--- README.md\n+++ README.md\n@@ -1,1 +1,2 @@\n title\n+added line\n", "additions": 1, "deletions": 0, "status": "modified"},
+  {"file": "assets/logo.png", "patch": "Index: assets/logo.png\n===================================================================\nBinary files assets/logo.png and assets/logo.png differ\n", "additions": 0, "deletions": 0, "status": "modified"},
+  {"file": "big/generated.txt", "patch": "Index: big/generated.txt\n===================================================================\n--- big/generated.txt\n+++ big/generated.txt\n", "additions": 120000, "deletions": 0, "status": "added"}
+]

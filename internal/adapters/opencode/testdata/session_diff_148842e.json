@@ -1,0 +1,7 @@
+[
+  {"file": "h4/NOTE.md", "patch": "Index: h4/NOTE.md\n===================================================================\n--- h4/NOTE.md\n+++ h4/NOTE.md\n@@ -1,1 +1,2 @@\n existing\n+MARK-ee3f40\n", "additions": 1, "deletions": 0, "status": "modified"},
+  {"file": "src/new.go", "patch": "Index: src/new.go\n===================================================================\n--- src/new.go\n+++ src/new.go\n@@ -0,0 +1,2 @@\n+package src\n+// token sk-ant-FAKE0123456789abcdef is fake\n", "additions": 2, "deletions": 0, "status": "added"},
+  {"file": "old.txt", "patch": "Index: old.txt\n===================================================================\n--- old.txt\n+++ old.txt\n@@ -1,1 +0,0 @@\n-gone\n", "additions": 0, "deletions": 1, "status": "deleted"},
+  {"file": "no-patch.bin", "additions": 0, "deletions": 0},
+  {"patch": "Index: ???\n", "additions": 0, "deletions": 0}
+]
