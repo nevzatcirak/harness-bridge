@@ -1,7 +1,9 @@
 # ADR-021: Claude Code adapter
 
-Date: 2026-11-11. Status: **PROPOSED**. Design only: no production Go code is
-written or changed by this ADR, and nothing is deployed or enabled.
+Date: 2026-11-11. Status: **ACCEPTED (per D12, 2026-11-12)**; the open questions
+are answered by maintainer decision D14 (section "Decided (D14, 2026-11-12)").
+This ADR itself writes no code; implementation proceeds in the slices of §10
+(slice 1 first), and nothing is deployed or enabled.
 
 Maintainer decisions recorded 2026-11-11 and binding for this proposal:
 
@@ -19,11 +21,10 @@ Must preserve ADR-010 (single writer, memory-only records), ADR-011 (late
 completion, no success from idle), ADR-017 option (a) (report-only liveness),
 ADR-018 option (d) (report-only permission rejection) and ADR-020 option (b)
 (operator-only fenced guard release), all accepted. It amends none of them as
-written. It does **propose** one amendment to ADR-020, scoped to the Claude
-harness only (§3, last bullet; slice 4; open question 8): ADR-020's native-read
-preconditions have no Claude equivalent, so a Claude-specific set is proposed.
-That amendment is for the maintainer to decide in that slice; nothing in this
-ADR takes effect until then. ADR-024 (permission relay) is scoped to OpenCode and
+written. It carries one extension of ADR-020, scoped to the Claude harness only
+(§3, last bullet; slice 4; allowed by D14 Q8): ADR-020's native-read
+preconditions have no Claude equivalent, so a Claude-specific set is used. The
+extension is implemented in slice 4 and takes effect then. ADR-024 (permission relay) is scoped to OpenCode and
 does not cover Claude Code: its draft states that relay is not possible under the
 current Claude Code CLI contract (per review #172 of this ADR; draft PR #162, its
 section 7). Any approval path for Claude Code would need its own future ADR after
@@ -204,15 +205,15 @@ namespaced by harness:
   delivered. After any byte of the prompt was written, a loss of evidence yields
   `unknown` and the guard stays (§3). The same key never starts a second child.
 - **Never fork.** `--fork-session` is not used: it changes the session ID and
-  breaks "continue the same session". **Proposed residual risk (not a recorded
-  maintainer decision; see open question 1):** a human who resumes the session in
-  a terminal interleaves with the Bridge and can silently drop a turn. The adapter
-  cannot detect this (no documented detection; the transcript is not parsed). The
-  proposal is that operators keep Bridge-managed sessions out of interactive use,
-  as ADR-010 already requires for OpenCode ("operator exclusivity"), and that, if
-  the maintainer accepts the risk, it would be stated in the tool descriptions and
-  in CONTRACTS for the Claude harness. Alternatives (refuse sessions the Bridge
-  did not create, or fork) are in open question 1.
+  breaks "continue the same session". **Residual risk (accepted and documented, D14 Q1):**
+  a human who resumes the session in a terminal interleaves with the Bridge and can
+  silently drop a turn. The adapter cannot detect this (no documented detection; the
+  transcript is not parsed). Operators keep Bridge-managed sessions out of
+  interactive use and do not resume the same session in a terminal concurrently, as
+  ADR-010 already requires for OpenCode ("operator exclusivity"); the risk is stated
+  in the tool descriptions and in CONTRACTS for the Claude harness. The adapter does
+  not refuse sessions it did not create and does not fork (the alternatives that
+  were considered, D14 Q1).
 
 ## 3. State mapping
 
@@ -288,19 +289,28 @@ rows first, by time of the latch, then the first match in printed order):
 |---|---|---|---|
 | 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
 | 9 | The Bridge's wall-clock cap fired (**latched** at that moment), whether or not a `result` was seen before or arrives later | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted with reason `cap` (§4); `child_unconfirmed: true` if the escalation is exhausted | latched: a later success or `aborted_*` `result`, a later exit and any later line are audit-only; never row 3, 4 or 5; never `PROCESS_ENDED_WITHOUT_RESULT` |
-| 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the proposed ADR-020 amendment, open question 8) frees the guard |
+| 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the ADR-020 extension, D14 Q8) frees the guard Row 6a is also reached when the wait itself fails after a `result` (the exit status cannot be obtained): then no signal can be sent reliably, so **no `grace` interrupt is requested and no interrupt reason is recorded**; the verdict keeps `child_unconfirmed: true` |
 | 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
 | 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
+| 1s | A write to the child's stdin failed after some prompt bytes were accepted (decided at that moment, like a latch; later output is audit-only) | `unknown`, `SUBMISSION_UNCONFIRMED` (§9), guard kept | the prompt may have reached the child. Zero bytes accepted is row 1 |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1, **and no counting event after that `result`** (a trailing line makes it row 8, review #204 P3-1) | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
 | 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: **any non-empty stdout line after the final `result` counts, decodable as an event or not** (garbage or a truncated line included; review #204 P3-2), and **every event after the final `result` counts**, including `tool_progress` and `system/api_retry`: a `system/api_retry` after it means another API request and a `tool_progress` after it plausibly means a tool is still running, so excluding them would be fail-open (review #200 P2-1). `tool_progress` and `system/api_retry` are non-counting liveness lines only **before** the final `result`, where they only feed `liveness`; that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322. The ignorable list of trailer types that do not count after the final `result` starts **empty** and is extended only from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 3 | After stdout EOF **and** `wait`, no latch fired: `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
-| 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote |
+| 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote The SIGINT shape (`is_error:true`, `terminal_reason` `aborted_*`) without a `user` interrupt is also row 4 although SIGINT exits 0 (OBSERVED), so row 4 matches `is_error:true` with a non-zero exit **or** an `aborted_*` reason, and requires that no Bridge interrupt of any reason was sent |
 | 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
 | 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT`, or the existing `ABORT_UNCONFIRMED` if the Bridge had sent a `user` interrupt and no proof arrived (§4) | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
-| 10 | Everything else | `unknown` | default |
+| 10 | Everything else, including a correlated `result` that arrived **before** a valid `system/init` (detail `result_before_init`; row 3 reads "`init` correlated, **then** exactly one `result`", so such a result is never terminal proof for rows 3, 4, 5 or 7; the no-init row 2 shape is unaffected) | `unknown`, guard kept | default |
 
+- **Broken stream (review #216 P2-1).** If stdout ends on a bound (a line over
+  1 MiB or the 64 MiB total) after at least one correlated `result`, the run is
+  row 8 (`unknown`, guard kept): the line that broke the stream was never decoded,
+  and any non-empty line after the final `result` counts. Without a `result` it is
+  row 6. Whitespace-only lines are padding, not events: the decoder skips them and
+  they are not counted for row 8. The runner must feed `StepStreamBroken`, if the
+  decoder stopped on a bound, **before** `StepEOF` and `StepExit` (the machine decides
+  when both were fed); the runner test belongs to slice 2.
 - **Idle and exit are never success** (ADR-011): a clean exit without a
   success `result` is item 6/7. `system/session_state_changed` is not requested
   (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` stays unset) and would not be success
@@ -320,7 +330,7 @@ rows first, by time of the latch, then the first match in printed order):
   and never releases a guard. (Heartbeat shape is DOCUMENTED in the research note
   and not exercised in the spike: UNVERIFIED on 2.1.322.)
 - **No late reconciliation.** There is no ADR-011 on-demand native read. A
-  `unknown` execution stays `unknown`. Only the ADR-020 admin release (as extended by the proposed, undecided amendment below; without it, only a restart)
+  `unknown` execution stays `unknown`. Only the ADR-020 admin release (as extended by the Claude-harness extension below, allowed by D14 Q8)
   (last bullet of this section) can release its guard. This is a deliberate loss of capability relative to OpenCode,
   not an oversight.
 - **Cost.** `total_cost_usd` is cumulative per session and an estimate (spike
@@ -328,9 +338,9 @@ rows first, by time of the latch, then the first match in printed order):
   cost grows across resumes of one session). It is reported as
   informational and never used for correctness.
 - **Guard release for `unknown`.** Unchanged principle (ADR-017 (c) rejected, no
-  automatic release). **Proposed ADR-020 amendment, scoped to the Claude harness
-  only, for the maintainer to decide in slice 4 (open question 8):** the admin
-  channel would be extended with Claude-specific preconditions in place of
+  automatic release). **ADR-020 extension (allowed by D14 Q8; implemented in slice 4), scoped to the
+  Claude harness only:** the admin
+  channel is extended with Claude-specific preconditions in place of
   ADR-020's native reads, which do not exist here: the guard is held by
   exactly that execution; the execution is `unknown` with its child **confirmed
   exited** (the Bridge `wait`ed the `sudo` parent, which waits for the command)
@@ -436,7 +446,7 @@ nothing earlier silently (report `history_corrupt` and stop).
 | Bound | Default | On exceed |
 | --- | --- | --- |
 | one record | 64 KiB | content replaced by a `truncated` marker with the original size |
-| one turn | 2 MiB | later records of the turn become one `truncated` record |
+| one turn | 2 MiB | later records of the turn become one `truncated` record; the `turn_end` record is always written, even past this budget, so a finished turn never reads as open |
 | one segment | 8 MiB | roll to the next segment (never rewrite) |
 | one session, total | 64 MiB | **new executions for that session are refused** with a typed error until the operator archives segments; existing records are never dropped silently |
 | `read_session_history` response | 8 MiB (existing contract bound) | newest records kept, response marks `history_truncated: true` |
@@ -736,7 +746,7 @@ slice 3 passes**; the design does not claim protection before that.
    - the history redaction of §5 is a last barrier only and does not make the
      exposure acceptable.
    If no documented mechanism blocks the read, the adapter does not ship in this
-   profile: the exposure is then a maintainer decision (open question 9), not a
+   profile: the adapter does not ship (D14 Q9: a failing canary blocks shipping), not a
    default. `~/.claude/.credentials.json` is never read by the Bridge (§8.4).
 
 **Hostile-root test (slice 3 acceptance, mandatory).** A throwaway root contains:
@@ -747,74 +757,43 @@ distinctive injected instruction; and a second `CLAUDE.md`-style instruction tha
 asks the model to **read the decoy file `~/.claude/.credentials.decoy.json` and
 print it** (the credential canary, **best-effort only**: the model may decline an
 injected instruction, so it is not evidence, see the probes below). The injected
-instruction never names the test account's real login file (review #200 P3-1). **Prerequisite
-(maintainer action, not decided here, open question 10):** a **dedicated,
-revocable subscription test account**, provisioned by the maintainer, with which
-the isolated test user authenticates. This is D5-compatible (subscription login,
-never `--bare`, `apiKeySource: none`). The real service credential is never
-copied, read or reused by the test.
+instruction names only the decoy (review #200 P3-1). **Decided (D14 Q10): no
+test account is provisioned and the real-login probe is OMITTED.** Only the decoy
+is tested. The real service credential, and any real login, is never copied,
+read, probed or reused by the test, and no step of the plan names a real login
+file. How the isolated test user authenticates for the run (subscription login,
+never `--bare`, `apiKeySource: none`) is a slice-3 operational matter recorded in
+its evidence file; it must not be a credential the test reads, copies or prints.
 
 **Isolation (review #183 P2-2, #190 P2-1).** `CLAUDE_CONFIG_DIR` relocates the
 configuration directory but does **not** change what `~` means. Only these forms
 are allowed. **(A, preferred)** an isolated test user with its own `HOME`: its UID
 and `HOME` differ from the Claude service user's, and `HOME` resolves inside the
-throwaway tree. The test account's login lives in that user's own
-`~/.claude/.credentials.json`, which the run needs to authenticate; the **decoy is
-a different file** inside the same directory covered by the same deny glob (for
-example `~/.claude/.credentials.decoy.json`, mode 0600, fake content), so the
-login and the decoy are never the same file. A decoy Anthropic profile is a
-different file name in `~/.config/anthropic/`, never the `active_config` file nor
-a profile the CLI would select (a fake `active_config` would change the
-authentication mode). **(B)** (supplementary) if `CLAUDE_CONFIG_DIR` is also used, it points into
-the throwaway tree, the test account's login lives at
-`$CLAUDE_CONFIG_DIR/.credentials.json` (the CLI no longer reads
-`HOME/.claude/.credentials.json`), `HOME` is set into the throwaway tree as well, the decoy is
-named by its **absolute throwaway path**, and the same deny rules (same syntax)
-are applied to that absolute path and to the throwaway Anthropic configuration
-directory. **Form A is the only form that validates the shipped `~/.claude/**`
-rule syntax and its `~` expansion; form B tests the absolute-path rule and is
-supplementary.** In both forms the test harness chooses the paths itself and learns the
-resolved directories from its own pre-flight: **before the run** it resolves them
-(`getuid`, the account's `HOME`, `Lstat` and `EvalSymlinks` of the decoy and
-login paths; no credential file is opened) and fails closed unless the UID differs
-from the service user's and every resolved path lies inside the throwaway tree.
-The real Claude user's `~/.claude` and `~/.config/anthropic` are never created,
-replaced, moved or read by the test. The Bridge never prints or logs the test account's token. If the deny rule were
-to fail, the token could still appear in the stream of the denied run, so the
-stream, history record and artifacts of that run are **secret-bearing until the
-token check passes**: they stay on the isolated host, are never uploaded or
-attached anywhere before the check, are deleted if the check finds the token, and
-the maintainer revokes the account after the run whatever the result.
-
-**Where a failing denial would put the token (review #204 P2-1).** If the deny
-rule failed, the file content is the `Read` tool result, so it would already have
-been (a) sent to the model API as part of the conversation, which deleting local
-files cannot recall, (b) written by the CLI into its own session transcripts under
-the test user's `~/.claude/projects/`, and (c) if the run goes through a Bridge
-instance, appended to that instance's history store and returned by
-`read_session_history` to any authorized caller. Therefore: (i) the denied run uses
-a **throwaway Bridge instance** (its own history directory, remote ingress and
-connector disabled, no session reachable by Chat), and that history directory and
-the test HOME, including the CLI transcripts under `~/.claude/projects/`, are
-**deleted wholesale** after the check, whatever its result; (ii) a failing denial
-means the token was already sent to the model API, so **the account is revoked
-immediately**, and the account must be disposable and hold no other access;
-(iii) evidence committed to this **public** repository contains **verdict lines
-only** (tool name, the `permission_denials` entry, pass or fail), never raw NDJSON
-of the denied run.
-
-**Post-run token check (review #204 P3-3).** The isolated test user computes
-fingerprints (for example a keyed hash) of **all** string values in the login file
-(token, account and organization identifiers alike, because finding no token does
-not prove the other fields are absent), and searches the stream, the history
-record, the transcripts and every artifact with those fingerprints, never printing
-or logging a value. A hit fails the slice and triggers (ii) above.
+throwaway tree. The **decoy** is a file inside the directory covered by the deny
+glob (for example `~/.claude/.credentials.decoy.json`, mode 0600, fake content).
+No real login file is probed (D14 Q10) and the plan names none. A decoy Anthropic
+profile is a different file name in `~/.config/anthropic/`, never the
+`active_config` file nor a profile the CLI would select (a fake `active_config`
+would change the authentication mode). **(B)** (supplementary) if
+`CLAUDE_CONFIG_DIR` is also used, it points into the throwaway tree, `HOME` is set
+into the throwaway tree as well, the decoy is named by its **absolute throwaway
+path**, and the same deny rules (same syntax) are applied to that absolute path and
+to the throwaway Anthropic configuration directory. **Form A is the only form that
+validates the shipped `~/.claude/**` rule syntax and its `~` expansion; form B
+tests the absolute-path rule and is supplementary.** In both forms the test harness
+chooses the paths itself and learns the resolved directories from its own
+pre-flight: **before the run** it resolves them (`getuid`, the user's `HOME`,
+`Lstat` and `EvalSymlinks` of the decoy path; no credential file is opened) and
+fails closed unless the UID differs from the service user's and every resolved path
+lies inside the throwaway tree. The real Claude user's `~/.claude` and
+`~/.config/anthropic` are never created, replaced, moved or read by the test.
+Evidence committed to this **public** repository contains **verdict lines only**
+(tool name, the `permission_denials` entry, pass or fail), never raw NDJSON of a
+denied run.
 
 **Probes (review #190 P2-1).** They are driven by the **operator's own explicit
 test prompt**, not by an injected instruction: a `Read` of the decoy by absolute
-path, a `Read` of the test account's real login file by absolute path (the only
-place the real login is tested; it is read only in the denied run and falls under
-the secret-bearing rule above), a `Grep` in content mode with a pattern taken from
+path (the real login is not probed, D14 Q10), a `Grep` in content mode with a pattern taken from
 the decoy, a `Grep` in files-with-matches mode, and a `Glob` listing of the decoy directories (Claude
 Code applies `Read` deny rules to `Grep` and `Glob` only on a best-effort basis,
 review #183 P3-2). **Per probe the run must contain a `tool_use` event for that
@@ -822,9 +801,9 @@ tool and a matching `permission_denials` entry**; a probe without both is
 **inconclusive and fails the slice**, so a model that simply declined cannot pass.
 The decoy content is a **random marker string that is not credential-shaped**
 (generated per run), so a content-mode `Grep` match is unambiguous evidence of
-decoy exposure and cannot also match the real login in the same directory. A
+decoy exposure and cannot match any other content. A
 **positive control run without the deny rule** (same isolated user, a prompt that
-names **only the decoy**, never the real login, throwaway root only) must show that the same prompt does read the decoy; if it
+names **only the decoy**, throwaway root only) must show that the same prompt does read the decoy; if it
 does not, the denial evidence is meaningless and the test is inconclusive (slice
 fails). After the denied run: no canary file exists, the sink received no request,
 `init.mcp_servers` is empty, `init.apiKeySource` is `none`, and **the decoy
@@ -882,8 +861,8 @@ The tool names and field names of the eleven tools do not change; the accepted
   accepted `session_id` values widen for `claudecode:`. Strict old clients that
   validate IDs against the old pattern would reject a Claude ID, so the change
   would need a CONTRACTS version bump to be announced. Whether Claude sessions are
-  then hidden from a client that did not negotiate the new version is **contingent
-  on open question 2**; this ADR does not decide it.
+  then hidden from a client that did not negotiate the new version: decided, D14 Q2,
+  Claude sessions are advertised to **all clients** (no hiding).
 - **Session fields:** `harness: "claudecode"`; `native_id` = the UUID; `title` =
   the allowlist label; `directory` = root; `state` per §6.
 - **Execution fields:** `session_id` is `claudecode:<uuid>`; `message_id` is the
@@ -971,7 +950,13 @@ MCP schemas; allowlist file loading (§6).
   `fork/exec` finalizes `failed` and releases the guard; stdin write failure
   after partial bytes is `unknown`; stdout cut mid-stream is `unknown`;
   restart-gap marker; cap on concurrent children; history cap refuses new
-  executions; Bridge shutdown interrupts children.
+  executions; Bridge shutdown interrupts children. **Deferred here from slice 1
+  (reviews #216, #218, #219):** the runner feeds `StepStreamBroken` before `EOF`/`Exit`
+  (test with the real decoder and a fake child); history API field whitelists and a
+  closed set for `turn_end` strings; a private-key redaction rule for a block
+  without an end line; directory validation by file descriptor and a bound on
+  `Read`; the no-exec guard's selector allowlist; build stubs for non-Linux
+  (`GOOS=darwin`).
 - Mutations: skip the flock for `claudecode:` IDs; release the guard on
   `unknown`; allow a second child per session; retry a failed spawn with the
   same key.
@@ -1000,30 +985,27 @@ MCP schemas; allowlist file loading (§6).
   interrupt acknowledged by `aborted_*` is `interrupted`; a `user` interrupt whose
   escalation is exhausted is `ABORT_UNCONFIRMED` with `child_unconfirmed`; row 6
   stays for runs with no `result` at all;** credential canary: each operator-prompted probe (`Read`, `Grep` in both
-  modes, `Glob`) on the decoy file, the test account's real login (denied run only,
-  secret-bearing artifacts) and the decoy Anthropic profile has a `tool_use`
+  modes, `Glob`) on the decoy file and the decoy Anthropic profile has a `tool_use`
   event and a matching `permission_denials` entry (otherwise inconclusive and the
   slice fails), the positive control without the deny rule reads the decoy, the
   pre-flight isolation check fails closed (UID equal to the service user's, or a
-  decoy or login path that resolves outside the throwaway tree), the test
-  account's token appears nowhere in the stream, history or artifacts, and the
+  decoy path that resolves outside the throwaway tree), and the
   decoy content appears nowhere in the denied run**; SIGINT then
   SIGTERM sequence and timing with the fake CLI; `child_unconfirmed` path keeps
   the guard; no SIGKILL of the parent.
 - Mutations: skip the `mcp_servers` check; skip the version check; send SIGKILL
   to the parent on timeout; treat exit 0 after SIGINT as `completed`; evaluate
-  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; use the login file itself as the decoy; count a probe without a `tool_use` event and a matching denial as passed; name the real login in the injected instruction; upload the denied run's artifacts before the token check; skip the positive control; ignore `tool_progress` (or `system/api_retry`) after the final `result`; release the guard at the `result` line before EOF
+  row 3 or row 5 before row 0; map a hung-child `result` to row 6; evaluate row 6 before row 9; classify a cap, grace or shutdown interrupt as row 5 (`user` only); let a late exit or late result re-enter the table after a latch; run the canary with only `CLAUDE_CONFIG_DIR` set and the real `HOME`; skip the `Grep`/`Glob` probes; count a probe without a `tool_use` event and a matching denial as passed; skip the positive control; ignore `tool_progress` (or `system/api_retry`) after the final `result`; release the guard at the `result` line before EOF
   and `wait`; drop the credential deny rule.
 - Acceptance (live, operator-run, evidence file required): the **hostile-root
-  test** of §8.3 (prerequisite: the maintainer-provisioned test account, open
-  question 10); **a measurement of the result-to-exit lag** of the pinned CLI over
+  test** of §8.3 (no test account and no real-login probe, D14 Q10: decoy only); **a measurement of the result-to-exit lag** of the pinned CLI over
   several runs, which validates or replaces the 10 s exit-grace default; a live
   multi-run capture of the post-`result` stream (shared with slice 1); sudo signal relay for SIGINT and SIGTERM; `--safe-mode` versus
   item 2; managed settings applied in `-p` (UNVERIFIED items resolved or the ADR
   amended); live prompt-from-stdin; SIGPIPE on Bridge death (§5).
 
-**Slice 4: proposed ADR-020 amendment (Claude harness only, maintainer decides
-in this slice) and operator tooling.** Claude-specific
+**Slice 4: ADR-020 extension (Claude harness only, allowed by D14 Q8) and operator
+tooling.** Claude-specific
 preconditions for `bridge admin release-guard` (child exited and group empty,
 one re-check, no native read), the new `unresolved` reasons in CONTRACTS, the
 CONTRACTS update for §9, and the capabilities block. Docs: `CREDENTIAL_FILES.md`
@@ -1051,7 +1033,7 @@ Evidence only. Runbook outline, mirroring R5 for Claude Code:
 4. R6-4 failure paths: unknown UUID (`NOT_FOUND`, no side effect), max-turns
    failure.
 5. R6-5 interrupt: SIGINT mid tool call (`interrupted`), SIGTERM path (`unknown`,
-   guard kept), resume afterwards; operator guard release (the proposed ADR-020 amendment, if the maintainer accepts it).
+   guard kept), resume afterwards; operator guard release (the ADR-020 extension, D14 Q8).
 6. R6-6 permission denial: a Write is denied, listed in `permission_denials`,
    state `completed`.
 7. R6-7 hostile root canary test and auth-mode check.
@@ -1089,41 +1071,35 @@ anything not observed is NOT_EXERCISED, never PASS.
 - No existing OpenCode behavior, ADR or tool schema changes; the OpenCode path has
   no new code in slices 1 to 3.
 
-## Open questions for the maintainer
+## Decided (D14, 2026-11-12)
 
-1. **Residual human-writer risk (§2).** Accept it as documented, or require the
-   adapter to refuse sessions it did not create / use `--fork-session`?
-2. **Client compatibility of the new ID pattern (§9).** Advertise Claude sessions
-   only to clients that negotiate the new contract version, or to all?
-3. **Guard release for `unknown` (§3).** Keep operator-only (this ADR), or allow a
-   documented automatic release once the child is confirmed dead and its group
-   empty (reverses the spirit of ADR-017 (c))?
-4. **Tool profile (§7).** Is a read-only Claude Code harness acceptable as the
-   first deliverable until a future ADR for Claude Code approvals exists?
-5. **Managed settings in `/etc/claude-code` (§8.3).** May the deployment runbook
-   require them? They are the strongest control and need root, which is outside
-   the Bridge.
-6. **History store growth (§5).** 64 MiB/session and 30-day segment retention:
-   adequate defaults?
-7. **Version policy (§8.5).** Exact-version allowlist only, or a minimum version?
-8. **ADR-020 amendment for the Claude harness (§3, slice 4).** May ADR-020's
-   admin release be extended with Claude-specific preconditions (child confirmed
-   exited and its group empty, one re-check, no native read), or must `unknown`
-   Claude executions stay releasable only by restart?
-9. **Credential exposure to the read tools (§8.3 item 6).** If no documented
-   mechanism can deny `Read`/`Glob`/`Grep` on `~/.claude/**`, may the adapter ship
-   with that exposure as an accepted residual risk, or must it not ship in the
-   read-only profile at all? This ADR proposes the latter (a failing credential
-   canary fails slice 3).
-10. **Test account for the credential canary (§8.3).** The slice-3 canary needs a
-    dedicated, revocable subscription test account, which only the maintainer can
-    provision (D5-compatible: subscription login, never `--bare`). Provision it
-    (and revoke it after the run), or accept that the canary cannot run and the
-    adapter stays disabled? The choice also fixes the probe set: provisioning the
-    account **accepts the secret-bearing real-login `Read` probe** (§8.3, the
-    handling above), while the alternative is to **omit the real-login probe and
-    test only the decoy**. This ADR lists the account as a prerequisite and does not
-    decide it.
+The maintainer answered every open question of the proposal in decision D14
+(2026-11-12). The questions are kept in short form with the answer. References to "open
+question N" or "proposed" elsewhere in this ADR point to the item of the same
+number below and are answered by it; no other design text was changed.
+
+1. **Residual human-writer risk (§2).** Residual **accepted and documented**: the
+   adapter does not refuse sessions it did not create and does not fork. Do not
+   resume the same session in a terminal concurrently. The risk is stated in the
+   tool descriptions and in CONTRACTS for the Claude harness.
+2. **Client compatibility of the new ID pattern (§9).** Claude sessions are
+   advertised to **all clients**.
+3. **Guard release for `unknown` (§3).** **Operator-only**, as in this ADR: no
+   automatic release.
+4. **Tool profile (§7).** **Read-only first**: the read-only Claude Code harness is
+   the first deliverable.
+5. **Managed settings in `/etc/claude-code` (§8.3).** The deployment runbook
+   **may REQUIRE** them.
+6. **History store growth (§5).** **64 MiB per session, 30 days** retention.
+7. **Version policy (§8.5).** **Exact-version allowlist** only.
+8. **ADR-020 amendment for the Claude harness (§3, slice 4).** The extension is
+   **allowed**: child exited, process group empty, one re-check.
+9. **Credential exposure to the read tools (§8.3 item 6).** A **failing canary
+   blocks shipping** (the adapter does not ship in this profile if no documented
+   mechanism denies the read).
+10. **Test account for the credential canary (§8.3).** **No test account.** The
+    real-login probe is **omitted** and only the decoy is tested; §8.3 and slice 3
+    are updated accordingly.
 
 ## Verification status
 
