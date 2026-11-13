@@ -21,14 +21,14 @@ type Exit struct {
 	Unknown bool   // the status could not be obtained
 }
 
-// Signal is one of the two signals the runner ever sends, to the child's process
-// group: SigInt (the §3 interrupt) and SigKill (resource reaping only, after the
-// verdict is decided; it is not the §4 escalation, which is slice 3).
+// Signal is the only signal the runner sends, to the child's process group: SigInt (the
+// §3 interrupt). There is deliberately no SIGKILL: ADR-021 §4 forbids killing the wrapper
+// (a kill of the `sudo` parent orphans the command), and removing a stuck process is an
+// operator action. The SIGINT to SIGTERM escalation is slice 3.
 type Signal int
 
 const (
 	SigInt Signal = iota + 1
-	SigKill
 )
 
 // Child is a started process.

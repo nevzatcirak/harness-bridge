@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // ExecSpawner starts the wrapper with exec.Command (no shell, no PATH lookup:
@@ -14,7 +15,14 @@ import (
 //
 // This is the only file in the module's Claude Code adapter that imports os/exec
 // (TestExecIsConfinedToTheSpawnFile).
-type ExecSpawner struct{}
+type ExecSpawner struct {
+	// WaitDelay bounds how long Wait lingers for the child's stderr after it exited (a
+	// descendant that keeps the pipe open would otherwise make Wait unbounded). Its
+	// expiry is an unknown wait, never a confirmed reap. Zero means 5 s.
+	WaitDelay time.Duration
+
+	stderr io.Writer // tests only: replaces the stderr ring
+}
 
 type execChild struct {
 	cmd    *exec.Cmd
@@ -27,7 +35,7 @@ type execChild struct {
 }
 
 // Start implements Spawner.
-func (ExecSpawner) Start(s Spec) (Child, error) {
+func (s2 ExecSpawner) Start(s Spec) (Child, error) {
 	if s.Path == "" || s.Path[0] != '/' {
 		return nil, errors.New("runner: the wrapper path must be absolute")
 	}
@@ -44,7 +52,15 @@ func (ExecSpawner) Start(s Spec) (Child, error) {
 		return nil, err
 	}
 	ring := newRing(64 << 10)
-	cmd.Stderr = ring
+	var sink io.Writer = ring
+	if s2.stderr != nil {
+		sink = s2.stderr
+	}
+	cmd.Stderr = sink
+	cmd.WaitDelay = s2.WaitDelay
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = 5 * time.Second
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -65,11 +81,10 @@ func (c *execChild) Signal(sig Signal) error {
 	if c.done || c.cmd.Process == nil {
 		return errors.New("runner: the child was already reaped")
 	}
-	s := syscall.SIGINT
-	if sig == SigKill {
-		s = syscall.SIGKILL
+	if sig != SigInt {
+		return errors.New("runner: only SIGINT is ever sent (ADR-021 §4 forbids killing the wrapper)")
 	}
-	return syscall.Kill(-c.cmd.Process.Pid, s)
+	return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGINT)
 }
 
 // markReaped records a confirmed reap: only then is a signal to the group refused. An
@@ -87,18 +102,38 @@ func (c *execChild) Wait() Exit {
 		c.markReaped()
 		return Exit{Code: 0}
 	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The child exited but a descendant still holds a pipe: nothing is confirmed
+		// about the group, so the guard of the run stays held.
+		return Exit{Unknown: true}
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
-			if ws.Signaled() {
-				c.markReaped()
-				return Exit{Code: 128 + int(ws.Signal()), Signal: ws.Signal().String()}
-			}
-			if ws.Exited() {
-				c.markReaped()
-				return Exit{Code: ws.ExitStatus()}
-			}
+		if x, ok := statusOf(ee.Sys()); ok {
+			c.markReaped()
+			return x
+		}
+	}
+	// Another error (for example a stderr copy error): cmd.Wait has still reaped the
+	// process when ProcessState is set, which is a known status.
+	if ps := c.cmd.ProcessState; ps != nil {
+		if x, ok := statusOf(ps.Sys()); ok {
+			c.markReaped()
+			return x
 		}
 	}
 	return Exit{Unknown: true}
+}
+
+func statusOf(sys any) (Exit, bool) {
+	ws, ok := sys.(syscall.WaitStatus)
+	switch {
+	case !ok:
+		return Exit{}, false
+	case ws.Signaled():
+		return Exit{Code: 128 + int(ws.Signal()), Signal: ws.Signal().String()}, true
+	case ws.Exited():
+		return Exit{Code: ws.ExitStatus()}, true
+	}
+	return Exit{}, false
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +46,7 @@ type Config struct {
 
 	RunMax      time.Duration // wall-clock cap per child (default 15 min)
 	Grace       time.Duration // exit grace after a result (default 10 s)
-	ReapAfter   time.Duration // SIGKILL of the group this long after an interrupt (default 15 s)
+	CloseWait   time.Duration // how long Close waits for interrupted children before it abandons them (default 15 s); nothing is ever killed
 	MaxChildren int           // concurrent children (default 4)
 	Now         func() time.Time
 }
@@ -93,8 +94,8 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Grace <= 0 {
 		cfg.Grace = 10 * time.Second
 	}
-	if cfg.ReapAfter <= 0 {
-		cfg.ReapAfter = 15 * time.Second
+	if cfg.CloseWait <= 0 {
+		cfg.CloseWait = 15 * time.Second
 	}
 	if cfg.MaxChildren <= 0 {
 		cfg.MaxChildren = 4
@@ -363,10 +364,12 @@ func (e *Executor) SessionGuard(session string) (held bool, state string) {
 	return true, r.snapshot().State
 }
 
-// Close stops admitting, interrupts every live child (reason shutdown, §3 row
-// 9s) and waits until every child was reaped. The guard of an interrupted run
-// stays held: the verdict is unknown. Close is idempotent.
-func (e *Executor) Close() {
+// Close stops admitting and interrupts every live child (SIGINT, reason shutdown, §3
+// row 9s). It waits up to CloseWait for them to be reaped, then ABANDONS the wait: a child
+// that ignores SIGINT is not killed (ADR-021 §4), its run keeps its guard held, and its
+// execution ID is returned so the caller can log the abandonment. The guard of an
+// interrupted run stays held in any case: the verdict is unknown. Close is idempotent.
+func (e *Executor) Close() []string {
 	e.mu.Lock()
 	e.closed = true
 	runs := make([]*run, 0, len(e.runs))
@@ -377,7 +380,23 @@ func (e *Executor) Close() {
 	for _, r := range runs {
 		r.shutdown()
 	}
-	e.wg.Wait()
+	done := make(chan struct{})
+	go func() { e.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(e.cfg.CloseWait):
+	}
+	var abandoned []string
+	for _, r := range runs {
+		select {
+		case <-r.done:
+		default:
+			abandoned = append(abandoned, r.id)
+		}
+	}
+	sort.Strings(abandoned)
+	return abandoned
 }
 
 func (e *Executor) newRun(uuid string, req Request) *run {

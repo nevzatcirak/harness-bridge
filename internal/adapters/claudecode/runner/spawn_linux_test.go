@@ -109,7 +109,7 @@ func newInteg(t *testing.T, scenario, fixture string, mod func(*Config)) *integ 
 		t.Fatal(err)
 	}
 	h.ex = ex
-	t.Cleanup(ex.Close)
+	t.Cleanup(func() { ex.Close() })
 	return &integ{harness: h, bin: bin}
 }
 
@@ -216,7 +216,7 @@ func TestRealForkExecFailure(t *testing.T) {
 	}
 }
 
-// The cap interrupts a real child with SIGINT; a child that ignores it is killed.
+// The cap interrupts a real child with SIGINT; a child that ignores it is NOT killed.
 func TestRealCapAndReap(t *testing.T) {
 	t.Run("SIGINT ends a hanging child", func(t *testing.T) {
 		i := newInteg(t, "hang", fixturePath("step2_resume_ok.ndjson"), func(c *Config) { c.RunMax = 300 * time.Millisecond })
@@ -226,22 +226,29 @@ func TestRealCapAndReap(t *testing.T) {
 			t.Fatalf("state %s verdict %+v", x.State, v)
 		}
 	})
-	t.Run("a child that ignores SIGINT is killed", func(t *testing.T) {
-		i := newInteg(t, "ignoreint", "-", func(c *Config) { c.RunMax = 300 * time.Millisecond; c.ReapAfter = 300 * time.Millisecond })
+	t.Run("a child that ignores SIGINT is not killed", func(t *testing.T) {
+		i := newInteg(t, "ignoreint", "-", func(c *Config) { c.RunMax = 300 * time.Millisecond })
 		id := i.run("key-realreap-001")
+		i.waitState(id, "unknown") // the cap latched row 9 and sent SIGINT, which the child ignores
+		time.Sleep(600 * time.Millisecond)
+		rec := i.record()
+		pid := atoi(rec["pid"])
+		// The test, not the runner, removes the stuck process (an operator action, ADR-021 §4).
+		t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Fatalf("the runner killed (or lost) a child that ignores SIGINT: %v", err)
+		}
+		if held, _ := i.ex.SessionGuard("claudecode:" + uuidN(1)); !held {
+			t.Fatal("the guard stays held while the child lives")
+		}
+		if v := i.verdict(id); v.Row != "9" || v.GuardReleased {
+			t.Fatalf("verdict %+v", v)
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		x, err := i.ex.Wait(ctx, id)
-		if err != nil {
-			t.Fatalf("the child was never reaped: %v", err)
-		}
-		if v := i.verdict(id); x.State != "unknown" || v.Row != "9" {
-			t.Fatalf("state %s verdict %+v", x.State, v)
-		}
-		// Nothing is left running.
-		rec := i.record()
-		if err := syscall.Kill(atoi(rec["pid"]), 0); err == nil {
-			t.Fatalf("pid %s is still alive", rec["pid"])
+		if _, err := i.ex.Wait(ctx, id); err != nil {
+			t.Fatalf("the run did not end after the operator removed the child: %v", err)
 		}
 	})
 }

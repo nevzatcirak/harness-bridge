@@ -248,8 +248,7 @@ func TestStdoutCutMidStreamIsUnknown(t *testing.T) {
 
 // With no result and an exit status that cannot be obtained the verdict is row 10, guard kept.
 func TestExitStatusUnavailableWithoutAResult(t *testing.T) {
-	// The run holds its child slot for ReapAfter after an unconfirmed wait (#233 P2-1).
-	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.ReapAfter = 100 * time.Millisecond })
+	h := newHarness(t, nil)
 	x := h.mustSend(1, "p", "key-wait-000001")
 	c := h.next(1)
 	c.emit(h.initLine(1))
@@ -318,24 +317,29 @@ func TestExitGraceAfterAResult(t *testing.T) {
 	}
 }
 
-// A child that ignores SIGINT is reaped with SIGKILL after ReapAfter; the verdict
+// A child that ignores SIGINT is NOT killed (ADR-021 §4): the run stays alive with the
+// verdict already latched (row 9) and its guard held, until the child exits by itself.
 // is the one already latched.
-func TestReapsAChildThatIgnoresTheInterrupt(t *testing.T) {
-	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) {
-		c.RunMax = 40 * time.Millisecond
-		c.ReapAfter = 80 * time.Millisecond
-	})
+func TestAChildThatIgnoresTheInterruptIsNeverKilled(t *testing.T) {
+	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.RunMax = 40 * time.Millisecond })
 	h.sp.tweak = func(c *fakeChild) { c.ignoreIn = true }
 	x := h.mustSend(1, "p", "key-reap-000001")
 	c := h.next(1)
 	c.emit(h.initLine(1))
-	if !c.gotSignal(SigKill) {
-		t.Fatal("a child that ignores SIGINT was never reaped")
+	h.waitState(x.ID, "unknown")
+	if !c.gotSignal(SigInt) {
+		t.Fatal("the cap interrupts the child")
 	}
-	x = h.wait(x.ID)
-	if v := h.verdict(x.ID); v.Row != "9" || x.State != "unknown" {
-		t.Fatalf("state %s verdict %+v", x.State, v)
+	time.Sleep(300 * time.Millisecond)
+	onlySIGINT(t, c)
+	if v := h.verdict(x.ID); v.Row != "9" || v.GuardReleased {
+		t.Fatalf("verdict %+v", v)
 	}
+	if held, _ := h.ex.SessionGuard("claudecode:" + uuidN(1)); !held {
+		t.Fatal("the guard stays held while the child lives")
+	}
+	c.finish(Exit{Code: 130})
+	h.wait(x.ID)
 }
 
 // Bridge shutdown interrupts live children (row 9s) and keeps the guard.

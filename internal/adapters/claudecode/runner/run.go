@@ -23,7 +23,7 @@ type run struct {
 	child                Child
 	verdict              claudecode.Verdict
 	decided, shut        bool
-	pendingInt, reaping  bool
+	pendingInt           bool
 	pendingRelease       bool // a decided verdict frees the guard, but a child still runs
 	graceStarted, exited bool
 	timers               []*time.Timer
@@ -63,19 +63,16 @@ func (r *run) after(a claudecode.Action) {
 	r.sync()
 }
 
-// interrupt sends SIGINT to the child's group and arms the reaper once. Without
-// a child yet, the interrupt is remembered and sent as soon as it exists.
+// interrupt sends SIGINT to the child's group. Without a child yet, the interrupt is
+// remembered and sent as soon as it exists. Nothing stronger is ever sent: a child that
+// ignores SIGINT keeps its run, its guard and its slot until it exits (an operator
+// action removes it, ADR-021 §4).
 func (r *run) interrupt() {
 	if r.child == nil {
 		r.pendingInt = true
 		return
 	}
 	_ = r.child.Signal(SigInt)
-	if !r.reaping {
-		r.reaping = true
-		child := r.child
-		r.timers = append(r.timers, time.AfterFunc(r.e.cfg.ReapAfter, func() { _ = child.Signal(SigKill) }))
-	}
 }
 
 // sync applies the first decided verdict: the execution view, the history
@@ -181,8 +178,8 @@ func (r *run) stopTimers() {
 // markExited records the result of Wait. Only a Wait that returned a known status
 // counts as a reap: it sets exited and frees a guard whose release was deferred. A Wait
 // that returned Exit{Unknown:true} confirms nothing, so the child may still be alive:
-// exited stays false, the guard stays held (its release is then operator-only) and the
-// caller keeps the reaper (see reapUnconfirmed).
+// exited stays false and the guard stays held (the only recovery is a Bridge restart,
+// the guard being memory-only).
 func (r *run) markExited(x Exit) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -262,19 +259,4 @@ func (e *Executor) work(r *run, prompt string) {
 	x := child.Wait()
 	r.markExited(x)
 	r.feed(claudecode.Step{Kind: claudecode.StepExit, ExitCode: x.Code, ExitSignal: x.Signal, ExitUnknown: x.Unknown})
-	if x.Unknown {
-		r.reapUnconfirmed(child)
-	}
-}
-
-// reapUnconfirmed is the path of a Wait that did not confirm a reap. The child is
-// interrupted, given ReapAfter, and its group is then SIGKILLed; the run keeps its child
-// slot until then, so Close is bounded by ReapAfter. The verdict is the machine's (row 6a
-// or 10) and the guard is not freed.
-func (r *run) reapUnconfirmed(child Child) {
-	r.mu.Lock()
-	r.interrupt()
-	r.mu.Unlock()
-	time.Sleep(r.e.cfg.ReapAfter)
-	_ = child.Signal(SigKill)
 }

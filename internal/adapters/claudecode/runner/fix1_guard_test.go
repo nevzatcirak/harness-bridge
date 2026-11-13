@@ -26,7 +26,7 @@ func (h *harness) waitState(id, want string) {
 // #229 P2-1: a row 1 failed verdict decided after a child was spawned must not free
 // the session guard while that child is alive (one child per session, ADR-021 §2).
 func TestRowOneFailureHoldsTheGuardUntilTheChildIsReaped(t *testing.T) {
-	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.ReapAfter = 3 * time.Second })
+	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.CloseWait = 3 * time.Second })
 	h.sp.tweak = func(c *fakeChild) { c.writeN, c.writeErr, c.ignoreIn = 0, io.ErrClosedPipe, true }
 	x := h.mustSend(1, "p", "key-r1-0000001")
 	c := h.next(1)
@@ -68,7 +68,7 @@ func TestRowOneFailureHoldsTheGuardUntilTheChildIsReaped(t *testing.T) {
 
 // The partial-write variant: unknown, guard held before and after the reap.
 func TestPartialStdinWriteKeepsTheGuardAfterTheReap(t *testing.T) {
-	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.ReapAfter = 3 * time.Second })
+	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.CloseWait = 3 * time.Second })
 	h.sp.tweak = func(c *fakeChild) { c.writeN, c.writeErr, c.ignoreIn = 5, io.ErrClosedPipe, true }
 	x := h.mustSend(1, "a longer prompt", "key-r1-0000004")
 	c := h.next(1)

@@ -89,8 +89,6 @@ func (c *fakeChild) Signal(s Signal) error {
 	switch {
 	case c.onSignal != nil:
 		c.onSignal(c, s)
-	case s == SigKill:
-		c.finish(Exit{Code: 137, Signal: "killed"})
 	case s == SigInt && !c.ignoreIn:
 		c.finish(Exit{Code: 130, Signal: "interrupt"})
 	}
@@ -214,7 +212,7 @@ func newHarness(t *testing.T, mod func(*Config, *claudecode.StoreConfig)) *harne
 	sc := claudecode.DefaultStoreConfig()
 	h.cfg = Config{Wrapper: wrapperPath, FS: h.fsys, Env: claudecode.EnvConfig{Home: "/home/claude", Lang: "C.UTF-8"}, Model: "claude-sonnet-5-5", MaxTurns: 20,
 		AllowedVersions: []string{"2.1.322"}, Tools: []string{"Read", "Glob", "Grep"}, Sessions: h.sessions, AllowedSessions: sessionIDs(h.sessions), Spawner: h.sp,
-		RunMax: 10 * time.Second, Grace: 10 * time.Second, ReapAfter: 10 * time.Second, MaxChildren: 4}
+		RunMax: 10 * time.Second, Grace: 10 * time.Second, CloseWait: 10 * time.Second, MaxChildren: 4}
 	if mod != nil {
 		mod(&h.cfg, &sc)
 	}
