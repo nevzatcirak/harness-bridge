@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -142,6 +143,8 @@ type page struct {
 	Detail     *sessionRow
 	Executions []execRow
 	Pending    bool // Claude Code: history and diffs pending ADR-021
+	Diff       *diffSection
+	BackHref   string
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -191,10 +194,28 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 {{range $.Executions}}<tr><td>{{.ID}}{{if .Current}} (current){{end}}</td><td>{{.State}}</td><td>{{.Started}}</td><td>{{.Updated}}</td><td>{{.Ended}}</td></tr>
 {{end}}</tbody></table>{{else}}<p>No executions recorded by this Bridge process.</p>{{end}}
 </section>{{end}}
+{{with .Diff}}<section class="changes">
+<h3>Changes</h3>
+{{if .Pending}}<p class="note">diff unavailable (ADR-021 pending)</p>{{end}}
+{{with .Working}}{{template "diffview" .}}{{end}}
+{{with .Single}}{{template "diffview" .}}{{end}}
+{{if .TurnsNote}}<p class="note">{{.TurnsNote}}</p>{{end}}
+{{if .Turns}}<h4>Turns</h4><table class="turns">
+<thead><tr><th>Turn</th><th>Time</th><th>Diff</th></tr></thead>
+<tbody>
+{{range .Turns}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}{{.ID}}{{end}}</td><td>{{.Time}}</td><td>{{.Label}}</td></tr>
+{{end}}</tbody></table>{{end}}
+</section>{{end}}
+{{if .BackHref}}<p><a href="{{.BackHref}}">back to the session</a></p>{{end}}
 </main>
 <script src="/dashboard.js"></script>
 </body>
 </html>
+{{define "diffview"}}<div class="diff"><p><span class="badge label-{{.LabelClass}}">{{.Label}}</span> {{.Scope}}{{if .Reason}} ({{.Reason}}){{end}}</p>
+{{if .Redaction}}<p class="note">{{.Redaction}}</p>{{end}}
+{{range .Files}}<section class="file"><h5>{{.Path}} <span class="status">{{.Status}}</span> +{{.Additions}} -{{.Deletions}}</h5>
+{{if .Note}}<p class="note">{{.Note}}</p>{{end}}{{if .ShowPatch}}<pre>{{.Patch}}</pre>{{end}}</section>
+{{end}}{{if .More}}<p class="note">{{.More}}</p>{{end}}</div>{{end}}
 `))
 
 // renderPage executes the template into a buffer and refuses a body over the
@@ -210,20 +231,44 @@ func renderPage(w http.ResponseWriter, status int, p page) {
 	_, _ = w.Write(buf.Bytes())
 }
 
-func indexHandler(src Source) http.Handler {
+// dash carries what the handlers share: the read-only Source, the redactor and
+// the diff cache. It holds no state of a session and writes nothing.
+type dash struct {
+	src   Source
+	red   *Redactor
+	cache *diffCache
+}
+
+func newDash(src Source, opts Options) *dash {
+	red := opts.Redactor
+	if red == nil {
+		red = DefaultRedactor()
+	}
+	return &dash{src: src, red: red, cache: newDiffCache(opts.Now)}
+}
+
+// unavailablePage answers a data source that failed: HTTP 503 with Retry-After,
+// for the list and the detail alike (review #223 P3-1: one semantics). The page
+// states it; the error text is never shown.
+func unavailablePage(w http.ResponseWriter, p page) {
+	w.Header().Set("Retry-After", "5")
+	renderPage(w, http.StatusServiceUnavailable, p)
+}
+
+func (d *dash) indexHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
 		p := page{Title: "Harness Bridge dashboard"}
-		if _, none := src.(NullSource); none {
+		if _, none := d.src.(NullSource); none {
 			p.Message = "No data source is connected."
 			renderPage(w, http.StatusOK, p)
 			return
 		}
-		rows, err := src.Sessions(ctx)
+		rows, err := d.src.Sessions(ctx)
 		if err != nil {
 			p.Message = "Data source unavailable."
-			renderPage(w, http.StatusOK, p)
+			unavailablePage(w, p)
 			return
 		}
 		p.Message = fmt.Sprintf("%d sessions.", len(rows))
@@ -238,20 +283,101 @@ func indexHandler(src Source) http.Handler {
 	})
 }
 
-// detailHandler serves GET /session/<harness>/<id>. The identifier is validated
-// before the Source is asked; an invalid or unknown session is 404 with a fixed
-// text that never echoes the request.
-func detailHandler(src Source) http.Handler {
+// diffSection is the "Changes" part of a detail or turn page.
+type diffSection struct {
+	Pending   bool
+	Working   *diffView
+	Single    *diffView
+	Turns     []turnRow
+	TurnsNote string
+}
+
+type turnRow struct {
+	ID, Time, Label, Href string
+}
+
+var labelClass = map[string]string{LabelChanges: "changes", LabelComputedEmpty: "computed-empty", LabelNotComputed: "not-computed", LabelUnavailable: "unavailable"}
+
+func finishView(v diffView) *diffView {
+	v.LabelClass = labelClass[v.Label]
+	return &v
+}
+
+const workingScope = "working tree (not per turn)"
+
+// workingView reads the default diff (native /vcs/diff, D17 Q2 and Q9) through the
+// cache. An empty answer is NOT "no changes": OpenCode returns [] for a non-git
+// project and for the default branch too (ADR-023 section 1.2).
+func (d *dash) workingView(ctx context.Context, harness, id string) *diffView {
+	res, err := d.cache.get(ctx, "wt\x00"+harness+"\x00"+id, func(c context.Context) (DiffResult, error) {
+		return d.src.WorkingTreeDiff(c, harness, id)
+	})
+	switch {
+	case err != nil:
+		return finishView(unavailableView(workingScope, err))
+	case len(res.Files) == 0:
+		return finishView(diffView{Label: LabelComputedEmpty, Scope: workingScope,
+			Reason: "an empty answer is also what OpenCode returns for a non-git project or the default branch"})
+	}
+	return finishView(buildDiffView(LabelChanges, workingScope, res, d.red))
+}
+
+func turnLabel(s TurnState) string {
+	switch s {
+	case TurnComputedEmpty:
+		return LabelComputedEmpty
+	case TurnChanges:
+		return LabelChanges
+	}
+	return LabelNotComputed // an unknown state is never "no changes"
+}
+
+func (d *dash) detailSection(ctx context.Context, harness, id string) *diffSection {
+	if harness == harnessClaudeCode {
+		return &diffSection{Pending: true}
+	}
+	sec := &diffSection{}
+	var wg sync.WaitGroup
+	var turns []Turn
+	var terr error
+	wg.Add(2)
+	go func() { defer wg.Done(); sec.Working = d.workingView(ctx, harness, id) }()
+	go func() { defer wg.Done(); turns, terr = d.src.SessionTurns(ctx, harness, id) }()
+	wg.Wait()
+	if terr != nil {
+		sec.TurnsNote = "turn list unavailable (" + unavailableReason(terr) + ")"
+		return sec
+	}
+	if len(turns) > maxTurnsShown {
+		sec.TurnsNote = fmt.Sprintf("Showing the last %d of %d turns.", maxTurnsShown, len(turns))
+		turns = turns[len(turns)-maxTurnsShown:]
+	}
+	for _, t := range turns {
+		row := turnRow{ID: truncRunes(t.MessageID, 128), Time: fmtTime(t.Created), Label: turnLabel(t.State)}
+		if t.State == TurnChanges && idPattern.MatchString(t.MessageID) {
+			row.Href = sessionHref(harness, id) + "/turn/" + url.PathEscape(t.MessageID)
+		}
+		sec.Turns = append(sec.Turns, row)
+	}
+	return sec
+}
+
+// detailHandler serves GET /session/<harness>/<id> and the per-turn diff
+// GET /session/<harness>/<id>/turn/<messageID>. Every identifier is validated
+// before the Source is asked; an invalid or unknown one is 404 with a fixed text
+// that never echoes the request.
+func (d *dash) detailHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, sessionPrefix), "/")
-		if len(parts) != 2 || !knownHarness[parts[0]] || !idPattern.MatchString(parts[1]) {
+		turn := len(parts) == 4 && parts[2] == "turn"
+		if (len(parts) != 2 && !turn) || !knownHarness[parts[0]] || !idPattern.MatchString(parts[1]) || (turn && !idPattern.MatchString(parts[3])) {
 			http.Error(w, notFoundText, http.StatusNotFound)
 			return
 		}
 		harness, id := parts[0], parts[1]
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
-		d, err := src.SessionDetail(ctx, harness, id)
+		det, err := d.src.SessionDetail(ctx, harness, id)
 		switch {
 		case errors.Is(err, ErrNotFound):
 			http.Error(w, notFoundText, http.StatusNotFound)
@@ -259,14 +385,18 @@ func detailHandler(src Source) http.Handler {
 		case err != nil:
 			http.Error(w, unavailableText, http.StatusServiceUnavailable)
 			return
-		case d.Harness != harness || d.ID != id:
+		case det.Harness != harness || det.ID != id:
 			// Never render a session other than the one requested.
 			http.Error(w, notFoundText, http.StatusNotFound)
 			return
 		}
-		row := toRow(d.Session)
-		p := page{Title: "Harness Bridge dashboard · session " + truncRunes(d.ID, 128), Detail: &row, Pending: harness == harnessClaudeCode}
-		execs := d.Executions
+		row := toRow(det.Session)
+		p := page{Title: "Harness Bridge dashboard · session " + truncRunes(det.ID, 128), Detail: &row, Pending: harness == harnessClaudeCode}
+		if turn {
+			d.turnPage(ctx, w, p, harness, id, parts[3])
+			return
+		}
+		execs := det.Executions
 		if len(execs) > maxDetailRows {
 			p.Truncate = fmt.Sprintf("Showing the first %d of %d executions.", maxDetailRows, len(execs))
 			execs = execs[:maxDetailRows]
@@ -277,6 +407,67 @@ func detailHandler(src Source) http.Handler {
 				Started: fmtTime(e.Started), Updated: fmtTime(e.Updated), Ended: fmtTimePtr(e.Ended),
 			})
 		}
+		p.Diff = d.detailSection(ctx, harness, id)
 		renderPage(w, http.StatusOK, p)
 	})
+}
+
+// turnPage renders the diff of one user turn, on demand. The presence state of
+// info.summary.diffs decides first: "not computed" and "computed, no changes" make
+// no native diff call, and "not computed" is never shown as "no changes".
+func (d *dash) turnPage(ctx context.Context, w http.ResponseWriter, p page, harness, id, messageID string) {
+	p.BackHref = sessionHref(harness, id)
+	if harness == harnessClaudeCode {
+		p.Diff = &diffSection{Pending: true}
+		renderPage(w, http.StatusOK, p)
+		return
+	}
+	scope := "turn " + truncRunes(messageID, 128)
+	turns, err := d.src.SessionTurns(ctx, harness, id)
+	if errors.Is(err, ErrNotFound) {
+		http.Error(w, notFoundText, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		p.Diff = &diffSection{Single: finishView(unavailableView(scope, err))}
+		renderPage(w, http.StatusOK, p)
+		return
+	}
+	var found *Turn
+	for i := range turns {
+		if turns[i].MessageID == messageID {
+			found = &turns[i]
+		}
+	}
+	if found == nil {
+		http.Error(w, notFoundText, http.StatusNotFound)
+		return
+	}
+	var v *diffView
+	switch found.State {
+	case TurnNotComputed:
+		v = finishView(diffView{Label: LabelNotComputed, Scope: scope, Reason: "OpenCode has not computed a diff for this turn"})
+	case TurnComputedEmpty:
+		v = finishView(diffView{Label: LabelComputedEmpty, Scope: scope})
+	case TurnChanges:
+		res, derr := d.cache.get(ctx, "turn\x00"+harness+"\x00"+id+"\x00"+messageID, func(c context.Context) (DiffResult, error) {
+			return d.src.TurnDiff(c, harness, id, messageID)
+		})
+		switch {
+		case errors.Is(derr, ErrNotFound):
+			http.Error(w, notFoundText, http.StatusNotFound)
+			return
+		case derr != nil:
+			v = finishView(unavailableView(scope, derr))
+		case len(res.Files) == 0:
+			v = finishView(unavailableView(scope, errors.New("empty answer for a computed diff")))
+			v.Reason = "empty answer for a diff OpenCode reported as computed"
+		default:
+			v = finishView(buildDiffView(LabelChanges, scope, res, d.red))
+		}
+	default:
+		v = finishView(diffView{Label: LabelNotComputed, Scope: scope, Reason: "unknown state"})
+	}
+	p.Diff = &diffSection{Single: v}
+	renderPage(w, http.StatusOK, p)
 }

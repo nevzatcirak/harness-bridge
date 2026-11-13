@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -273,5 +274,49 @@ func TestDashboardSnapshotConcurrentWithSendAndFinalize(t *testing.T) {
 	readers.Wait()
 	if n := len(m.DashboardSnapshot().Executions); n != 3 {
 		t.Fatalf("executions: %d", n)
+	}
+}
+
+// Review #223 P3-2, decided: DashboardSnapshot takes no context and applies no cap.
+// It does no I/O, and the manager's own memory-only maps are not capped either, so a
+// cap would hide executions instead of bounding anything. The cost is O(runs) under
+// m.mu for the pointer copy only; this test pins that a large process stays far inside
+// the 5 s request bound and that a send is not stalled while it enumerates.
+func TestDashboardSnapshotWithManyRunsStaysBounded(t *testing.T) {
+	m := setup(t, &fake{status: "idle"})
+	const n = 20000
+	m.mu.Lock()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("exec_%06d", i)
+		m.runs[id] = &run{view: Execution{ID: id, SessionID: "opencode:ses_" + id, State: "completed", Started: time.Unix(int64(i), 0), Updated: time.Unix(int64(i), 0)}, native: "ses_" + id, op: make(chan struct{}, 1)}
+	}
+	m.mu.Unlock()
+	start := time.Now()
+	v := m.DashboardSnapshot()
+	if len(v.Executions) != n || time.Since(start) > 5*time.Second {
+		t.Fatalf("%d executions in %v", len(v.Executions), time.Since(start))
+	}
+	// A send is admitted while another goroutine enumerates in a loop.
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				m.DashboardSnapshot()
+			}
+		}
+	}()
+	defer close(stop)
+	sent := make(chan error, 1)
+	go func() { _, err := m.Send(context.Background(), "ses_test", "prompt", "key-bound-0001"); sent <- err }()
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a send stalled while 20000 executions were enumerated")
 	}
 }

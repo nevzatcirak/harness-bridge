@@ -30,6 +30,11 @@ type DashboardView struct {
 //     read, and it makes no native call;
 //   - every returned value is a copy (snapshot deep-copies the pointer fields).
 //
+// DashboardSnapshot takes no context and applies no cap, on purpose (review #223 P3-2):
+// it does no I/O, the manager's own memory-only maps are not capped either, and a cap
+// would hide executions instead of bounding anything. The pointer copy under m.mu is
+// O(runs); TestDashboardSnapshotWithManyRunsStaysBounded pins 20,000 runs.
+//
 // A guard whose holder is observed already terminal reports state "unknown"
 // (held), like SessionGuard: the guard moved between the two reads and the
 // conservative answer is never "free".

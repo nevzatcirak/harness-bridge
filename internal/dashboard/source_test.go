@@ -9,7 +9,7 @@ import (
 // read-only: every method is a reader, and none can mutate (ADR-023 T11).
 func TestSourceInterfaceIsReadOnly(t *testing.T) {
 	typ := reflect.TypeOf((*Source)(nil)).Elem()
-	allowed := map[string]bool{"Sessions": true, "SessionDetail": true}
+	allowed := map[string]bool{"Sessions": true, "SessionDetail": true, "SessionTurns": true, "TurnDiff": true, "WorkingTreeDiff": true}
 	if typ.NumMethod() == 0 {
 		t.Fatal("Source has no methods")
 	}

@@ -68,3 +68,12 @@ Open items recorded here, not fixed:
 - D17 Q7: no archive overlay exists yet (ADR-022 S8, S6), so there is no archived row and no archive filter.
 - `DashboardSnapshot` reports a guard whose holder is observed already terminal as held with state `unknown` (same conservative rule as `SessionGuard`), so a poll can show one stale "held (unknown)" row right after a release.
 - Diffs (slice 3), the audit ring and polling (slice 4), and the live acceptance R-DASH (slice 5) are unchanged.
+
+### ADR-023 slice 3 (diffs): deferred items (2026-11-13, appended)
+
+- Still no production `Source`: the Bridge wires `NullSource`, so the diff views are exercised only with a fake `Source` over the fixtures. The adapter (ACL sessions, `Client.History` + `MessageInfo.DiffState` for the turns, `Client.SessionDiff`, `Client.VCSDiff` through a client bound to the session root, with its own deadline and no `Manager` slot) and its wiring in `cmd/bridge` are the next dashboard task. The slice 2 acceptance "the list matches MCP `list_sessions`" and the slice 3 acceptance "the diff matches `GET /session/:id/diff`" are **not exercised**.
+- The native diff shapes are recorded from the upstream source at `148842e` and fixtured from it; **none is verified against a live OpenCode** (UNVERIFIED). The first live run must compare `/vcs/diff`, `/session/:id/diff` and `info.summary.diffs` with `testdata/*_148842e.*`.
+- Operator redaction patterns exist as `Options.Redactor` only; reading them from configuration (variable or file) is not done.
+- `GET /vcs/diff/raw` and `mode=branch` are recorded in ADR-023 section 1.2 but not offered by the views.
+- The OpenCode client keeps its 8 MiB response bound; a `/vcs/diff` answer between 8 MiB and OpenCode's own 10 MB patch cap is shown as `unavailable`.
+- `DashboardSnapshot` has no context and no cap by decision (review #223 P3-2; see ADR-023 "As built (slice 3)").

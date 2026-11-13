@@ -441,6 +441,53 @@ mutation check and an acceptance step. No slice changes the MCP tool contract.
 | 4 | Audit ring (tee handler with `event`/key allowlist), polling JSON + `ETag`/`If-None-Match`, single-flight, 503 | mutation: add a mutating method to the interface → compile/test RED; journal test | audit feed shows AUDIT-01 lines; no mutation lines from dashboard traffic |
 | 5 | Hardening sweep (Host/Origin, timeouts, race), docs, live acceptance | full route sweep; race detector | live acceptance below |
 
+**As built (slice 3, dated 2026-11-13, task #240).** Facts about the code, no new decision;
+every D17 answer, the threat model and the other sections are unchanged.
+
+- **Labels.** `changes`, `computed, no changes`, `not computed`, `unavailable`. A turn's
+  label comes from the presence of `info.summary.diffs` in the message list before any diff
+  read: `not computed` (summary absent, or present without `diffs`) and `computed, no
+  changes` (`diffs: []`) make **no** native diff read and `not computed` is never rendered
+  as "no changes"; only a turn with changes is read (`GET /session/:id/diff`, on demand,
+  from `/session/<harness>/<id>/turn/<messageID>`). A read that times out or fails is
+  `unavailable` with the closed reason `timeout` or `error` (the error text is never shown);
+  an empty answer for a turn reported as having changes is `unavailable` too. The default
+  source of the detail page is the native working-tree `/vcs/diff?mode=git` (D17 Q2, Q9),
+  labelled "working tree (not per turn)"; its empty answer is labelled `computed, no changes`
+  **with the caveat** that OpenCode returns `[]` for a non-git project and the default branch
+  as well. `/vcs/diff/raw` and `mode=branch` are not used. Claude Code sessions show "diff
+  unavailable (ADR-021 pending)" and make no native diff read (D17 Q3).
+- **Caps.** At most 200 files per diff, 256 KiB of patch per file, 1 MiB of patch in total,
+  512 runes of file path, 100 turns listed; the existing 5 s request bound and 2 MiB page
+  bound apply. Every omission is written on the page ("truncated (per-file cap ... total
+  cap ...)", "N more files not shown", "not shown: total cap ... reached"). Binary: a NUL
+  byte in the first 8 KiB, git's own `Binary files` notice, or invalid UTF-8 above 10 % of
+  the first 8 KiB renders "binary file, not displayed (N bytes)" with no content. A patch
+  with no hunk but non-zero counts is shown as "patch not provided" (it is what OpenCode
+  substitutes when its own 10,000,000-byte cap applies). The Bridge's OpenCode client keeps
+  its 8 MiB response bound, so a `/vcs/diff` answer above it is `unavailable`.
+- **Cache.** A diff read is cached for 2 s (the detail poll interval), at most 64 entries,
+  one in-flight read per key (single-flight, T7); memory only, never written to disk.
+- **Redaction** is **on by default** with no configuration (D17 Q5): `sk-ant-`, `ghp_`,
+  `github_pat_`, `AKIA[0-9A-Z]{16}`, private-key blocks (an unterminated block is redacted
+  to the end), `Authorization: Bearer` and `Bearer <token>`. It runs on file names and on
+  patch text **before** the per-file cut (with a 4 KiB overlap, so a token that straddles
+  the cut is replaced whole) and before rendering; the count is shown ("redaction on: N
+  values redacted"), never logged. The operator hook is `Options.Redactor` (up to 16 extra
+  RE2 patterns of at most 256 bytes); it is **not** read from an environment variable or a
+  file yet.
+- **No git.** No file of `internal/dashboard` imports `os/exec`; a test sweeps the imports
+  and the call names, and a session root with `core.fsmonitor` and `filter.*.clean` hooks
+  stays unwritten across every route.
+- **Semantics (review #223).** P3-1: a data source that fails is HTTP 503 with
+  `Retry-After: 5` for the list and the detail alike; a source that is configured absent
+  (`NullSource`) is a 200 page. P3-2: `execution.Manager.DashboardSnapshot` deliberately
+  takes no context and no cap: it does no I/O, and the manager's own memory-only maps are
+  not capped, so a cap would hide executions instead of bounding anything; the pointer copy
+  under `m.mu` is O(runs) and a test pins 20,000 runs well inside the 5 s bound.
+- **Not in slice 3:** a production `Source` (the Bridge still wires `NullSource`), reading
+  the operator redaction patterns from configuration, the audit ring and polling (slice 4).
+
 ### Live acceptance outline (R-DASH)
 
 1. Start the Bridge with the dashboard **disabled**; confirm no socket/port.

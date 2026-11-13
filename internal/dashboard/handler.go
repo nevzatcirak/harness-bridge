@@ -41,10 +41,23 @@ var getHead = []string{http.MethodGet, http.MethodHead}
 // Routes returns the route table. Slice 2 has the session list, the session
 // detail and the two embedded assets; there is no other route and no method but
 // GET and HEAD.
-func Routes(src Source) []Route {
+func Routes(src Source) []Route { return routes(src, Options{}) }
+
+// Options are the optional parts of the handler. The zero value is the shipped
+// behavior: the default redaction list is ON (D17 Q5) and the clock is time.Now.
+type Options struct {
+	// Redactor replaces the default redactor (the default list plus operator
+	// patterns). Nil means the default list.
+	Redactor *Redactor
+	// Now is the cache clock; tests replace it.
+	Now func() time.Time
+}
+
+func routes(src Source, opts Options) []Route {
+	d := newDash(src, opts)
 	return []Route{
-		{Path: "/", Methods: getHead, Handler: indexHandler(src)},
-		{Path: sessionPrefix, Methods: getHead, Handler: detailHandler(src), Prefix: true},
+		{Path: "/", Methods: getHead, Handler: d.indexHandler()},
+		{Path: sessionPrefix, Methods: getHead, Handler: d.detailHandler(), Prefix: true},
 		{Path: "/dashboard.css", Methods: getHead, Handler: assetHandler("assets/dashboard.css", "text/css; charset=utf-8")},
 		{Path: "/dashboard.js", Methods: getHead, Handler: assetHandler("assets/dashboard.js", "text/javascript; charset=utf-8")},
 	}
@@ -66,12 +79,17 @@ func assetHandler(name, contentType string) http.Handler {
 // directory mode is the fence). Every response, including errors, carries the
 // security headers; there are no CORS headers.
 func NewHandler(src Source, allowedHosts []string) http.Handler {
+	return NewHandlerOptions(src, allowedHosts, Options{})
+}
+
+// NewHandlerOptions is NewHandler with Options.
+func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Handler {
 	if src == nil {
 		src = NullSource{}
 	}
 	table := map[string]Route{}
 	var prefixes []Route
-	for _, r := range Routes(src) {
+	for _, r := range routes(src, opts) {
 		if r.Prefix {
 			prefixes = append(prefixes, r)
 			continue
