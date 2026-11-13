@@ -178,11 +178,17 @@ func (r *run) stopTimers() {
 	}
 }
 
-// markExited records that the child was reaped and frees a guard whose release
-// was deferred until now.
-func (r *run) markExited() {
+// markExited records the result of Wait. Only a Wait that returned a known status
+// counts as a reap: it sets exited and frees a guard whose release was deferred. A Wait
+// that returned Exit{Unknown:true} confirms nothing, so the child may still be alive:
+// exited stays false, the guard stays held (its release is then operator-only) and the
+// caller keeps the reaper (see reapUnconfirmed).
+func (r *run) markExited(x Exit) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if x.Unknown {
+		return
+	}
 	r.exited = true
 	if r.pendingRelease {
 		r.pendingRelease = false
@@ -254,6 +260,21 @@ func (e *Executor) work(r *run, prompt string) {
 	}
 	r.feed(claudecode.Step{Kind: claudecode.StepEOF})
 	x := child.Wait()
-	r.markExited()
+	r.markExited(x)
 	r.feed(claudecode.Step{Kind: claudecode.StepExit, ExitCode: x.Code, ExitSignal: x.Signal, ExitUnknown: x.Unknown})
+	if x.Unknown {
+		r.reapUnconfirmed(child)
+	}
+}
+
+// reapUnconfirmed is the path of a Wait that did not confirm a reap. The child is
+// interrupted, given ReapAfter, and its group is then SIGKILLed; the run keeps its child
+// slot until then, so Close is bounded by ReapAfter. The verdict is the machine's (row 6a
+// or 10) and the guard is not freed.
+func (r *run) reapUnconfirmed(child Child) {
+	r.mu.Lock()
+	r.interrupt()
+	r.mu.Unlock()
+	time.Sleep(r.e.cfg.ReapAfter)
+	_ = child.Signal(SigKill)
 }

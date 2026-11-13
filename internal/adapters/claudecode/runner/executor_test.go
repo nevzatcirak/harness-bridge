@@ -248,7 +248,8 @@ func TestStdoutCutMidStreamIsUnknown(t *testing.T) {
 
 // With no result and an exit status that cannot be obtained the verdict is row 10, guard kept.
 func TestExitStatusUnavailableWithoutAResult(t *testing.T) {
-	h := newHarness(t, nil)
+	// The run holds its child slot for ReapAfter after an unconfirmed wait (#233 P2-1).
+	h := newHarness(t, func(c *Config, _ *claudecode.StoreConfig) { c.ReapAfter = 100 * time.Millisecond })
 	x := h.mustSend(1, "p", "key-wait-000001")
 	c := h.next(1)
 	c.emit(h.initLine(1))

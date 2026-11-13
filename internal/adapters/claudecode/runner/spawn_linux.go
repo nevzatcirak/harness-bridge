@@ -72,21 +72,30 @@ func (c *execChild) Signal(sig Signal) error {
 	return syscall.Kill(-c.cmd.Process.Pid, s)
 }
 
-func (c *execChild) Wait() Exit {
-	err := c.cmd.Wait()
+// markReaped records a confirmed reap: only then is a signal to the group refused. An
+// unknown Wait result leaves the child signalable, so the runner's SIGKILL can still
+// reach it.
+func (c *execChild) markReaped() {
 	c.mu.Lock()
 	c.done = true
 	c.mu.Unlock()
+}
+
+func (c *execChild) Wait() Exit {
+	err := c.cmd.Wait()
 	if err == nil {
+		c.markReaped()
 		return Exit{Code: 0}
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
 			if ws.Signaled() {
+				c.markReaped()
 				return Exit{Code: 128 + int(ws.Signal()), Signal: ws.Signal().String()}
 			}
 			if ws.Exited() {
+				c.markReaped()
 				return Exit{Code: ws.ExitStatus()}
 			}
 		}
