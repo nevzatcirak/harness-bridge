@@ -144,7 +144,7 @@ func TestStoreBounds(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			mustAppend(t, s, "e", Record{Kind: KindToolResult, ToolUseID: "t", Content: strings.Repeat("y", 1000)})
 		}
-		if err := s.EndTurn(testUUID, "e", TurnEnd{State: "completed"}); err != nil {
+		if err := s.EndTurn(testUUID, "e", TurnEnd{State: "completed", Row: "3"}); err != nil {
 			t.Fatal(err)
 		}
 		res, _ := s.Read(testUUID)
@@ -192,7 +192,7 @@ func TestStoreBounds(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			mustAppend(t, s, "e1", Record{Kind: KindToolResult, ToolUseID: "t", Content: strings.Repeat("q", 400)})
 		}
-		s.EndTurn(testUUID, "e1", TurnEnd{State: "completed"})
+		s.EndTurn(testUUID, "e1", TurnEnd{State: "completed", Row: "3"})
 		before, _ := s.Read(testUUID)
 		if err := s.BeginTurn(testUUID, "e2", TurnStart{Prompt: "again"}); !errors.Is(err, ErrSessionHistoryFull) {
 			t.Fatalf("err = %v", err)
@@ -243,7 +243,7 @@ func TestStoreRestartGap(t *testing.T) {
 	s.BeginTurn(testUUID, "exec-open", TurnStart{Prompt: "p"})
 	mustAppend(t, s, "exec-open", Record{Kind: KindAssistantBlock, Block: &Block{Type: "text", Text: "partial"}})
 	s.BeginTurn(testUUID, "exec-done", TurnStart{Prompt: "q"})
-	s.EndTurn(testUUID, "exec-done", TurnEnd{State: "completed"})
+	s.EndTurn(testUUID, "exec-done", TurnEnd{State: "completed", Row: "3"})
 	// Restart: a new Store on the same dir.
 	cfg := DefaultStoreConfig()
 	s2, err := OpenStore(dir, cfg)
@@ -269,7 +269,7 @@ func TestStoreRestartGap(t *testing.T) {
 			t.Fatalf("seq %d at %d after restart", r.Seq, i)
 		}
 	}
-	if err := s2.EndTurn(testUUID, "exec-new", TurnEnd{State: "completed"}); err != nil {
+	if err := s2.EndTurn(testUUID, "exec-new", TurnEnd{State: "completed", Row: "3"}); err != nil {
 		t.Fatal(err)
 	}
 	if gaps, _ := s2.RecoverOpenTurns(testUUID); len(gaps) != 0 {

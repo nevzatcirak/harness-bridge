@@ -85,7 +85,10 @@ from Go structs in `internal/mcp/tools.go` and existing execution/native DTOs.
 | interrupt_execution | execution_id | `Execution` |
 
 All inputs reject additional fields and require strings for declared fields.
-Session IDs match `^opencode:ses[A-Za-z0-9_-]+$`, max 265 characters, with native
+Session IDs match `^opencode:ses[A-Za-z0-9_-]+$` or the Claude Code form
+`^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` (ADR-021
+§9; an `anyOf`, schema only: a `claudecode:` ID is refused with `INVALID_INPUT` until
+the adapter is enabled, which it is not by default), max 265 characters, with native
 ID validation and authorization enforced again at execution. Execution IDs must
 be nonempty. Prompt schema length is 1–32768 characters; H1 additionally rejects
 blank prompts and enforces its stricter 32768-byte bound. Keys have schema length

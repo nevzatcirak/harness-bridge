@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -37,6 +38,10 @@ var (
 	ErrSessionHistoryFull = errors.New("claudecode: session history is at its size bound; archive segments before a new execution")
 	ErrHistoryCorrupt     = errors.New("claudecode: history_corrupt")
 	ErrNoTurn             = errors.New("claudecode: no open turn for this execution")
+	// ErrInvalidTurnEnd: a turn_end field was outside its closed set. The turn_end
+	// is still written, with the offending field replaced by a safe value, so a
+	// finished turn never reads as open.
+	ErrInvalidTurnEnd = errors.New("claudecode: turn_end field outside its closed set")
 )
 
 const maxPromptBytes = 32768
@@ -47,12 +52,13 @@ type StoreConfig struct {
 	MaxTurnBytes    int64 // 2 MiB
 	MaxSegmentBytes int64 // 8 MiB
 	MaxSessionBytes int64 // 64 MiB
+	MaxReadBytes    int64 // 16 MiB: the most Read loads, newest segments first
 	Now             func() time.Time
 }
 
 // DefaultStoreConfig returns the ADR defaults.
 func DefaultStoreConfig() StoreConfig {
-	return StoreConfig{MaxRecordBytes: 64 << 10, MaxTurnBytes: 2 << 20, MaxSegmentBytes: 8 << 20, MaxSessionBytes: 64 << 20, Now: time.Now}
+	return StoreConfig{MaxRecordBytes: 64 << 10, MaxTurnBytes: 2 << 20, MaxSegmentBytes: 8 << 20, MaxSessionBytes: 64 << 20, MaxReadBytes: 16 << 20, Now: time.Now}
 }
 
 func (c StoreConfig) withDefaults() StoreConfig {
@@ -68,6 +74,9 @@ func (c StoreConfig) withDefaults() StoreConfig {
 	}
 	if c.MaxSessionBytes <= 0 {
 		c.MaxSessionBytes = d.MaxSessionBytes
+	}
+	if c.MaxReadBytes <= 0 {
+		c.MaxReadBytes = d.MaxReadBytes
 	}
 	if c.Now == nil {
 		c.Now = d.Now
@@ -134,6 +143,9 @@ type TurnEnd struct {
 type ReadResult struct {
 	Records []Record
 	Corrupt bool
+	// Partial is set when Read stopped at its byte bound and older segments were
+	// not loaded: Records is the newest complete suffix of the history.
+	Partial bool
 }
 
 type turnState struct {
@@ -152,7 +164,7 @@ type sessionState struct {
 
 // Store is the history record store of one directory.
 type Store struct {
-	dir      string
+	dirf     *os.File // the history directory, opened once and checked on the descriptor
 	cfg      StoreConfig
 	mu       sync.Mutex
 	sessions map[string]*sessionState
@@ -164,11 +176,31 @@ var (
 )
 
 // OpenStore validates dir (ADR-021 §5) and returns a Store.
+//
+// The path is validated once for its ancestors (ValidateHistoryDir), then the
+// directory is opened without following a final symlink and checked on the
+// descriptor; every later operation is relative to that descriptor.
 func OpenStore(dir string, cfg StoreConfig) (*Store, error) {
 	if err := ValidateHistoryDir(OSFS{}, dir, uint32(os.Geteuid())); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir, cfg: cfg.withDefaults(), sessions: map[string]*sessionState{}}, nil
+	f, err := openDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{dirf: f, cfg: cfg.withDefaults(), sessions: map[string]*sessionState{}}, nil
+}
+
+// Close releases the directory descriptor. The Store is unusable afterwards.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dirf == nil {
+		return nil
+	}
+	err := s.dirf.Close()
+	s.dirf = nil
+	return err
 }
 
 func sessionHash(uuid string) string {
@@ -249,10 +281,14 @@ func (s *Store) EndTurn(uuid, exec string, e TurnEnd) error {
 	if ts == nil {
 		return ErrNoTurn
 	}
-	rec := Record{Kind: KindTurnEnd, ExecutionID: exec, State: e.State, Row: e.Row, Reason: e.Reason, Subtype: boundedASCII(e.Subtype, 64),
-		TerminalReason: boundedASCII(e.TerminalReason, 64), Denials: e.Denials, NumTurns: e.NumTurns, ExitClass: e.ExitClass, CostUSD: e.CostUSD}
+	e, invalid := e.closed()
+	rec := Record{Kind: KindTurnEnd, ExecutionID: exec, State: e.State, Row: e.Row, Reason: e.Reason, Subtype: e.Subtype,
+		TerminalReason: e.TerminalReason, Denials: e.Denials, NumTurns: e.NumTurns, ExitClass: e.ExitClass, CostUSD: e.CostUSD}
 	err = s.write(uuid, st, rec, nil)
 	delete(st.turns, exec)
+	if err == nil && invalid {
+		err = ErrInvalidTurnEnd
+	}
 	return err
 }
 
@@ -293,7 +329,7 @@ func (s *Store) write(uuid string, st *sessionState, r Record, ts *turnState) er
 	if st.seg == 0 {
 		st.seg = 1
 	}
-	if err := appendLine(s.dir+"/"+segmentName(uuid, st.seg), line); err != nil {
+	if err := appendLine(s.dirf, segmentName(uuid, st.seg), line); err != nil {
 		return err
 	}
 	st.nextSeq++
@@ -346,7 +382,13 @@ func (s *Store) session(uuid string) (*sessionState, error) {
 }
 
 func (s *Store) segments(uuid string) ([]int, error) {
-	ents, err := os.ReadDir(s.dir)
+	if s.dirf == nil {
+		return nil, errors.New("claudecode: history store is closed")
+	}
+	if _, err := s.dirf.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	ents, err := s.dirf.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +411,7 @@ func (s *Store) segments(uuid string) ([]int, error) {
 
 func (s *Store) readSegment(uuid string, n int) ([]byte, error) {
 	limit := s.cfg.MaxSegmentBytes + s.cfg.MaxRecordBytes + 4096
-	return readFile(s.dir+"/"+segmentName(uuid, n), limit)
+	return readFile(s.dirf, segmentName(uuid, n), limit)
 }
 
 // parseSegment returns the valid records of one segment. An unparsable final
@@ -410,17 +452,34 @@ func (s *Store) Read(uuid string) (ReadResult, error) {
 	return s.read(uuid)
 }
 
-func (s *Store) read(uuid string) (ReadResult, error) {
+func (s *Store) read(uuid string) (ReadResult, error) { return s.readBounded(uuid, s.cfg.MaxReadBytes) }
+
+// readBounded loads segments newest first until adding the next one would pass
+// limit (limit <= 0: no bound, used only by the startup recovery, which is itself
+// bounded by MaxSessionBytes). The newest segment is always loaded. Older
+// segments left out set Partial.
+func (s *Store) readBounded(uuid string, limit int64) (ReadResult, error) {
 	segs, err := s.segments(uuid)
 	if err != nil {
 		return ReadResult{}, err
 	}
 	var res ReadResult
-	for _, n := range segs {
-		data, err := s.readSegment(uuid, n)
+	datas := make([][]byte, 0, len(segs))
+	var acc int64
+	for i := len(segs) - 1; i >= 0; i-- {
+		data, err := s.readSegment(uuid, segs[i])
 		if err != nil {
 			return res, err
 		}
+		if limit > 0 && len(datas) > 0 && acc+int64(len(data)) > limit {
+			res.Partial = true
+			break
+		}
+		acc += int64(len(data))
+		datas = append(datas, data)
+	}
+	for i := len(datas) - 1; i >= 0; i-- {
+		data := datas[i]
 		recs, bad := parseSegment(data)
 		for _, r := range recs {
 			if len(res.Records) > 0 && r.Seq != res.Records[len(res.Records)-1].Seq+1 {
@@ -446,7 +505,7 @@ func (s *Store) RecoverOpenTurns(uuid string) ([]string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, err := s.read(uuid)
+	res, err := s.readBounded(uuid, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -479,4 +538,106 @@ func (s *Store) RecoverOpenTurns(uuid string) ([]string, error) {
 		marked = append(marked, id)
 	}
 	return marked, nil
+}
+
+// The closed sets of the turn_end strings (ADR-021 §3, §9). Nothing outside them
+// is stored: the values come from the state machine, never from the child.
+var (
+	turnEndStates  = map[string]bool{"completed": true, "failed": true, "interrupted": true, "unknown": true}
+	turnEndRows    = map[string]bool{"0": true, "9": true, "6a": true, "9s": true, "6b": true, "1": true, "1s": true, "2": true, "8": true, "3": true, "4": true, "5": true, "6": true, "7": true, "10": true}
+	turnEndReasons = map[string]bool{"": true, "EXIT_UNCONFIRMED": true, "MONITOR_EXPIRED": true, "MANAGER_CLOSED": true, "ABORT_UNCONFIRMED": true,
+		"SUBMISSION_UNCONFIRMED": true, "IDENTITY_MISMATCH": true, "PROCESS_ENDED_WITHOUT_RESULT": true}
+	turnEndExits = map[string]bool{"": true, "zero": true, "nonzero": true, "signal": true, "unknown": true, "none": true}
+	enumString   = regexp.MustCompile(`^[A-Za-z0-9_.-]{0,64}$`)
+)
+
+// closed returns e with every out-of-set field replaced by a safe value and
+// whether any was replaced. Subtype and TerminalReason are child-reported and
+// cannot be a closed set (an unlisted terminal_reason is a verdict input), so
+// they must be a short identifier; anything else becomes "other".
+func (e TurnEnd) closed() (TurnEnd, bool) {
+	invalid := false
+	if !turnEndStates[e.State] {
+		e.State, invalid = "unknown", true
+	}
+	if !turnEndRows[e.Row] {
+		e.Row, invalid = "10", true
+	}
+	if !turnEndReasons[e.Reason] {
+		e.Reason, invalid = "", true
+	}
+	if !turnEndExits[e.ExitClass] {
+		e.ExitClass, invalid = "unknown", true
+	}
+	if !enumString.MatchString(e.Subtype) {
+		e.Subtype = "other"
+	}
+	if !enumString.MatchString(e.TerminalReason) {
+		e.TerminalReason = "other"
+	}
+	return e, invalid
+}
+
+// APIRecord is the only shape of a history record that leaves the process
+// (read_session_history). Each kind exposes a fixed set of fields: the principal,
+// the idempotency-key hash prefix, the state-machine row and the format version
+// are internal and never serialised here.
+type APIRecord struct {
+	Seq         int64     `json:"seq"`
+	At          time.Time `json:"at"`
+	ExecutionID string    `json:"execution_id"`
+	Kind        string    `json:"kind"`
+
+	Prompt    string `json:"prompt,omitempty"`
+	Block     *Block `json:"block,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Content   string `json:"content,omitempty"`
+
+	State          string  `json:"state,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	Subtype        string  `json:"subtype,omitempty"`
+	TerminalReason string  `json:"terminal_reason,omitempty"`
+	Denials        int     `json:"permission_denials,omitempty"`
+	NumTurns       int     `json:"num_turns,omitempty"`
+	ExitClass      string  `json:"exit_class,omitempty"`
+	CostUSD        float64 `json:"cost_usd_reported,omitempty"`
+
+	OriginalKind string `json:"original_kind,omitempty"`
+	OriginalSize int64  `json:"original_size,omitempty"`
+}
+
+// API projects a record onto its per-kind whitelist.
+func (r Record) API() APIRecord {
+	a := APIRecord{Seq: r.Seq, At: r.At, ExecutionID: r.ExecutionID, Kind: r.Kind}
+	switch r.Kind {
+	case KindTurnStart:
+		a.Prompt = r.Prompt
+	case KindAssistantBlock:
+		a.Block = r.Block
+	case KindToolResult:
+		a.ToolUseID, a.Content = r.ToolUseID, r.Content
+	case KindTurnEnd:
+		a.State, a.Reason, a.Subtype, a.TerminalReason = r.State, r.Reason, r.Subtype, r.TerminalReason
+		a.Denials, a.NumTurns, a.ExitClass, a.CostUSD = r.Denials, r.NumTurns, r.ExitClass, r.CostUSD
+	case KindTruncated:
+		a.OriginalKind, a.OriginalSize = r.OriginalKind, r.OriginalSize
+	}
+	return a
+}
+
+// APIResult is what read_session_history serialises.
+type APIResult struct {
+	Records []APIRecord `json:"records"`
+	Corrupt bool        `json:"history_corrupt,omitempty"`
+	Partial bool        `json:"history_truncated,omitempty"`
+}
+
+// ReadAPI reads the bounded history and projects every record onto the whitelist.
+func (s *Store) ReadAPI(uuid string) (APIResult, error) {
+	res, err := s.Read(uuid)
+	out := APIResult{Records: make([]APIRecord, 0, len(res.Records)), Corrupt: res.Corrupt, Partial: res.Partial}
+	for _, r := range res.Records {
+		out.Records = append(out.Records, r.API())
+	}
+	return out, err
 }

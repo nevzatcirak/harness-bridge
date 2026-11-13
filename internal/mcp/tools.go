@@ -91,7 +91,10 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 	for key, p := range input.Properties {
 		switch key {
 		case "session_id":
-			p.Pattern = `^opencode:ses[A-Za-z0-9_-]+$`
+			// ADR-021 §9: an anyOf of the two harness patterns. The Claude pattern is the
+			// lowercase 8-4-4-4-12 UUID. Accepting the shape is not serving it: a
+			// claudecode: ID is refused at execution until the adapter is wired.
+			p.AnyOf = []*jsonschema.Schema{{Pattern: `^opencode:ses[A-Za-z0-9_-]+$`}, {Pattern: claudeSessionPattern}}
 			p.MaxLength = intp(265)
 		case "execution_id":
 			p.MinLength = intp(1)
@@ -122,6 +125,8 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 	})
 }
 func intp(n int) *int { return &n }
+
+const claudeSessionPattern = `^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 
 // Keep the H1 success shape while declaring and validating structured failures.
 type toolOutput[T any] struct {
