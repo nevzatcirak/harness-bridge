@@ -34,7 +34,10 @@ const (
 	StepStdinFailed                             // the stdin write failed; Accepted bytes were taken
 )
 
-// Step is one input. Only the fields of its Kind are read.
+// Step is one input. Only the fields of its Kind are read. The runner (slice 2)
+// must feed StepStreamBroken, if the decoder stopped on a bound, BEFORE StepEOF
+// and StepExit: a broken stream after a result is row 8, and the machine decides
+// when both EOF and the exit were fed.
 type Step struct {
 	Kind        StepKind
 	Event       Event  // StepLine
@@ -110,6 +113,7 @@ type Machine struct {
 	last             *ResultInfo
 	after            int
 	abortedSeen      bool
+	resultBeforeInit bool // a correlated result preceded the valid init (§3 row 3: init, THEN one result)
 	userInterrupt    bool
 	broken           bool
 	eof, exited      bool
@@ -231,6 +235,11 @@ func (m *Machine) line(e Event) Action {
 			return Action{Interrupt: "latch"}
 		}
 		m.initOK = true
+		if m.results > 0 {
+			// ADR-021 §3 row 3: "init correlated, then exactly one result". A result
+			// that came first is never terminal proof (rows 3, 4, 5, 7): row 10.
+			m.resultBeforeInit = true
+		}
 		return Action{}
 	}
 	if e.Type == "result" {
@@ -241,7 +250,7 @@ func (m *Machine) line(e Event) Action {
 		}
 		m.results++
 		m.last = e.Result
-		if r := e.Result; r.IsError != nil && *r.IsError && strings.HasPrefix(r.TerminalReason, "aborted_") {
+		if r := e.Result; r.IsError != nil && *r.IsError && abortedReason(r.TerminalReason) {
 			m.abortedSeen = true
 		}
 		return Action{}
@@ -395,7 +404,7 @@ func (m *Machine) settle() {
 	}
 	r := m.last
 	isErr := r != nil && r.IsError != nil && *r.IsError
-	aborted := isErr && strings.HasPrefix(r.TerminalReason, "aborted_")
+	aborted := isErr && abortedReason(r.TerminalReason)
 	switch {
 	case m.exit.ExitUnknown:
 		m.decide("10", "unknown", "", "", "exit_status_unavailable", false)
@@ -411,6 +420,8 @@ func (m *Machine) settle() {
 		m.decide("8", "unknown", "", "", "multiple_results", false)
 	case m.results >= 1 && m.after > 0:
 		m.decide("8", "unknown", "", "", "event_after_final_result", false)
+	case m.resultBeforeInit:
+		m.decide("10", "unknown", "", "", "result_before_init", false)
 	case m.results == 1 && m.initOK && r.Subtype == "success" && r.IsError != nil && !*r.IsError && m.exitZero():
 		if r.TerminalReason == "completed" {
 			m.decide("3", "completed", "", "", "", true)
@@ -452,6 +463,11 @@ func (m *Machine) row2() bool {
 	}
 	return false
 }
+
+// abortedReason is the closed set ADR-021 §3 row 5 accepts: the CLI's own
+// terminal_reason for an interrupted turn. Any other aborted_* value is not an
+// acknowledgement.
+func abortedReason(r string) bool { return r == "aborted_tools" || r == "aborted_streaming" }
 
 func failureCode(subtype string) string {
 	if subtype == "" || len(subtype) > 64 {

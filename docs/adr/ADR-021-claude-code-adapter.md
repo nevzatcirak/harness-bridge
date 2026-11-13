@@ -289,7 +289,7 @@ rows first, by time of the latch, then the first match in printed order):
 |---|---|---|---|
 | 0 | The init-verification latch fired (see above), whatever happened afterwards: success-shaped `result`, `aborted_*` result after the Bridge's interrupt, no `result`, any exit status | `unknown`, `IDENTITY_MISMATCH`, **guard kept**, child interrupted | something other than the pinned configuration ran and the Bridge cannot prove what a hook or tool did. Never `completed`, never `interrupted`, never guard-released automatically; the reason is not replaced by `PROCESS_ENDED_WITHOUT_RESULT` |
 | 9 | The Bridge's wall-clock cap fired (**latched** at that moment), whether or not a `result` was seen before or arrives later | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted with reason `cap` (§4); `child_unconfirmed: true` if the escalation is exhausted | latched: a later success or `aborted_*` `result`, a later exit and any later line are audit-only; never row 3, 4 or 5; never `PROCESS_ENDED_WITHOUT_RESULT` |
-| 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the ADR-020 extension, D14 Q8) frees the guard |
+| 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the ADR-020 extension, D14 Q8) frees the guard Row 6a is also reached when the wait itself fails after a `result` (the exit status cannot be obtained): then no signal can be sent reliably, so **no `grace` interrupt is requested and no interrupt reason is recorded**; the verdict keeps `child_unconfirmed: true` |
 | 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
 | 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
@@ -301,14 +301,16 @@ rows first, by time of the latch, then the first match in printed order):
 | 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
 | 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT`, or the existing `ABORT_UNCONFIRMED` if the Bridge had sent a `user` interrupt and no proof arrived (§4) | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
-| 10 | Everything else | `unknown` | default |
+| 10 | Everything else, including a correlated `result` that arrived **before** a valid `system/init` (detail `result_before_init`; row 3 reads "`init` correlated, **then** exactly one `result`", so such a result is never terminal proof for rows 3, 4, 5 or 7; the no-init row 2 shape is unaffected) | `unknown`, guard kept | default |
 
 - **Broken stream (review #216 P2-1).** If stdout ends on a bound (a line over
   1 MiB or the 64 MiB total) after at least one correlated `result`, the run is
   row 8 (`unknown`, guard kept): the line that broke the stream was never decoded,
   and any non-empty line after the final `result` counts. Without a `result` it is
   row 6. Whitespace-only lines are padding, not events: the decoder skips them and
-  they are not counted for row 8.
+  they are not counted for row 8. The runner must feed `StepStreamBroken`, if the
+  decoder stopped on a bound, **before** `StepEOF` and `StepExit` (the machine decides
+  when both were fed); the runner test belongs to slice 2.
 - **Idle and exit are never success** (ADR-011): a clean exit without a
   success `result` is item 6/7. `system/session_state_changed` is not requested
   (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` stays unset) and would not be success
@@ -744,7 +746,7 @@ slice 3 passes**; the design does not claim protection before that.
    - the history redaction of §5 is a last barrier only and does not make the
      exposure acceptable.
    If no documented mechanism blocks the read, the adapter does not ship in this
-   profile: the exposure is then a maintainer decision (open question 9), not a
+   profile: the adapter does not ship (D14 Q9: a failing canary blocks shipping), not a
    default. `~/.claude/.credentials.json` is never read by the Bridge (§8.4).
 
 **Hostile-root test (slice 3 acceptance, mandatory).** A throwaway root contains:
@@ -859,8 +861,8 @@ The tool names and field names of the eleven tools do not change; the accepted
   accepted `session_id` values widen for `claudecode:`. Strict old clients that
   validate IDs against the old pattern would reject a Claude ID, so the change
   would need a CONTRACTS version bump to be announced. Whether Claude sessions are
-  then hidden from a client that did not negotiate the new version is **contingent
-  on open question 2**; this ADR does not decide it.
+  then hidden from a client that did not negotiate the new version: decided, D14 Q2,
+  Claude sessions are advertised to **all clients** (no hiding).
 - **Session fields:** `harness: "claudecode"`; `native_id` = the UUID; `title` =
   the allowlist label; `directory` = root; `state` per §6.
 - **Execution fields:** `session_id` is `claudecode:<uuid>`; `message_id` is the
@@ -948,7 +950,13 @@ MCP schemas; allowlist file loading (§6).
   `fork/exec` finalizes `failed` and releases the guard; stdin write failure
   after partial bytes is `unknown`; stdout cut mid-stream is `unknown`;
   restart-gap marker; cap on concurrent children; history cap refuses new
-  executions; Bridge shutdown interrupts children.
+  executions; Bridge shutdown interrupts children. **Deferred here from slice 1
+  (reviews #216, #218, #219):** the runner feeds `StepStreamBroken` before `EOF`/`Exit`
+  (test with the real decoder and a fake child); history API field whitelists and a
+  closed set for `turn_end` strings; a private-key redaction rule for a block
+  without an end line; directory validation by file descriptor and a bound on
+  `Read`; the no-exec guard's selector allowlist; build stubs for non-Linux
+  (`GOOS=darwin`).
 - Mutations: skip the flock for `claudecode:` IDs; release the guard on
   `unknown`; allow a second child per session; retry a failed spawn with the
   same key.
