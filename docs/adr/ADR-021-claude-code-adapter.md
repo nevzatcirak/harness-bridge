@@ -274,6 +274,13 @@ Claude (documented in §9).
   frees a held guard). In particular an `aborted_*` `result` that answers a `cap`,
   `grace`, `shutdown` or `latch` interrupt is **not** row 5: row 5 is restricted to
   a `user` interrupt.
+- **Aborted reasons (one definition).** Wherever this ADR says `aborted_*`, it means
+  exactly the closed set `{aborted_tools, aborted_streaming}` (the two documented
+  values the spike observed or the SDK page lists). Any other `terminal_reason` that
+  merely begins with `aborted_` (for example `aborted_other`) is an unlisted
+  terminal reason: it is not an acknowledgement for row 4, row 5 or the row 6b
+  exemption, and falls through to row 10 (`unknown`, guard kept). The code has one
+  predicate for this (`abortedReason`).
 - **Evaluation order.** The latched rows are evaluated first (the earliest latch
   wins; the printed order below is only a tie-break), then the table in printed
   order: `0, 9, 6a, 9s, 6b`, then `1, 2, 8, 3, 4, 5, 6, 7, 10`. The numbers are
@@ -291,13 +298,13 @@ rows first, by time of the latch, then the first match in printed order):
 | 9 | The Bridge's wall-clock cap fired (**latched** at that moment), whether or not a `result` was seen before or arrives later | `unknown`, `MONITOR_EXPIRED`, guard kept; the child is interrupted with reason `cap` (§4); `child_unconfirmed: true` if the escalation is exhausted | latched: a later success or `aborted_*` `result`, a later exit and any later line are audit-only; never row 3, 4 or 5; never `PROCESS_ENDED_WITHOUT_RESULT` |
 | 6a | The exit grace ended (**latched** at that moment): at least one correlated `result` was seen and the child had not exited, or its exit status could not be obtained. Row 6a is a latch: a second `result` or counting event seen before the grace ended does not turn it into row 8 (row 8 needs no latch, and both are `unknown` with the guard kept; "exactly one" is a condition of row 3 only) | `unknown`, new additive reason `EXIT_UNCONFIRMED`, `child_unconfirmed: true`, **guard kept**; the child is interrupted with reason `grace` (§4) | the `result` is recorded but is **not** terminal proof, because the process that wrote it may still be running (§2). Never `completed`, never `PROCESS_ENDED_WITHOUT_RESULT`. Latched: a late `aborted_*` result, a late success with exit 0 and any late line are audit-only; no promotion; only an operator guard release (the ADR-020 extension, D14 Q8) frees the guard Row 6a is also reached when the wait itself fails after a `result` (the exit status cannot be obtained): then no signal can be sent reliably, so **no `grace` interrupt is requested and no interrupt reason is recorded**; the verdict keeps `child_unconfirmed: true` |
 | 9s | Bridge shutdown (`Close`) while the run is live (**latched**); the child is interrupted with reason `shutdown` | `unknown`, existing reason `MANAGER_CLOSED`, as today | the guard is memory-only and ends with the process; the open turn gets a `restart_gap` marker on the next start (§4, §5). A later `aborted_*` result is audit-only and is not row 5 |
-| 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no `aborted_*` result (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
+| 6b | The escalation of a `user` interrupt (SIGINT, bounded wait, SIGTERM, bounded wait; §4) was exhausted with the child still alive and no result whose `terminal_reason` is in the closed aborted set (see "Aborted reasons") (**latched** at that moment) | `unknown`, existing reason `ABORT_UNCONFIRMED`, `child_unconfirmed: true`, guard kept | no SIGKILL of the `sudo` parent; removal of the process is an operator action. A later result or exit is audit-only |
 | 1 | The child could not be started, or no prompt byte was accepted by stdin | `failed`, `PRE_SUBMISSION_UNAVAILABLE`, guard released | provably not delivered |
 | 1s | A write to the child's stdin failed after some prompt bytes were accepted (decided at that moment, like a latch; later output is audit-only) | `unknown`, `SUBMISSION_UNCONFIRMED` (§9), guard kept | the prompt may have reached the child. Zero bytes accepted is row 1 |
 | 2 | No `system/init`, a single `result` with `subtype: error_during_execution`, `num_turns: 0`, `errors[]` containing `No conversation found with session ID`, exit 1, **and no counting event after that `result`** (a trailing line makes it row 8, review #204 P3-1) | `failed`, `NOT_FOUND`, guard released | spike step 4 (OBSERVED); nothing ran. Matching is on `num_turns == 0` plus the message class, not on exact text alone |
 | 8 | No latch fired, and two or more `result` lines, or a **counting event** after the final `result`, were seen up to EOF (counting events: **any non-empty stdout line after the final `result` counts, decodable as an event or not** (garbage or a truncated line included; review #204 P3-2), and **every event after the final `result` counts**, including `tool_progress` and `system/api_retry`: a `system/api_retry` after it means another API request and a `tool_progress` after it plausibly means a tool is still running, so excluding them would be fail-open (review #200 P2-1). `tool_progress` and `system/api_retry` are non-counting liveness lines only **before** the final `result`, where they only feed `liveness`; that `tool_progress` is a heartbeat is **UNVERIFIED** on 2.1.322. The ignorable list of trailer types that do not count after the final `result` starts **empty** and is extended only from a live multi-run capture of the post-`result` stream, a slice-1 acceptance item) | `unknown`, guard kept | background work can add turns (DOCUMENTED in the research note; the last-result rule there is UNVERIFIED), so the adapter does not guess. Because decisions wait for EOF and exit (rule above), this row is decidable; a second `result` can no longer arrive after rows 3 to 5 released the guard |
 | 3 | After stdout EOF **and** `wait`, no latch fired: `init` correlated, then exactly one `result` with `subtype: success`, `is_error: false`, `session_id` equal, **and** exit code 0 | `completed` | success needs all four. `terminal_reason` is recorded; a value other than `completed` on a success `result` downgrades to `unknown` (never seen; unlisted values are not success) |
-| 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote The SIGINT shape (`is_error:true`, `terminal_reason` `aborted_*`) without a `user` interrupt is also row 4 although SIGINT exits 0 (OBSERVED), so row 4 matches `is_error:true` with a non-zero exit **or** an `aborted_*` reason, and requires that no Bridge interrupt of any reason was sent |
+| 4 | After stdout EOF **and** `wait`, no latch fired: `result` with `is_error: true` and exit non-zero, no Bridge-sent interrupt of any reason, subtype `error_max_turns`, `error_max_budget_usd`, `error_during_execution` (not item 2) or other | `failed`, code from subtype, `retryable: false` | step 3 (OBSERVED: `error_max_turns` exit 1). Guard released: the turn ended with a result the CLI itself wrote The SIGINT shape (`is_error:true`, `terminal_reason` `aborted_*`) without a `user` interrupt is also row 4 although SIGINT exits 0 (OBSERVED), so row 4 matches `is_error:true` with a non-zero exit **or** a `terminal_reason` in the closed aborted set (see "Aborted reasons"), and requires that no Bridge interrupt of any reason was sent |
 | 5 | After stdout EOF **and** `wait`, no latch fired: an interrupt with reason **`user`** (requested through `interrupt_execution`, §4) was sent, then `result` with `is_error: true` and `terminal_reason` in `aborted_tools` or `aborted_streaming` | `interrupted` | step 6 (OBSERVED for `aborted_tools` with exit 0). Exit code is **not** used here: SIGINT exited 0 although `is_error` was true. Without a `user` interrupt this shape is item 4, and an `aborted_*` result that answers a `cap`, `grace`, `shutdown` or `latch` interrupt never reaches this row (those are latched rows 9, 6a, 9s, 0). **Guard released**, on the same basis as row 4: the CLI itself wrote a `result` for the aborted turn, which is the terminal proof (a SIGINT without a `result` is row 6 and keeps the guard) |
 | 6 | Process ended and **no `result`** at all (SIGTERM and exit 143, crash, broken or oversized stream, `init` seen but stdout closed; a run killed by the Bridge's own cap is row 9) | `unknown`, new additive reason `PROCESS_ENDED_WITHOUT_RESULT`, or the existing `ABORT_UNCONFIRMED` if the Bridge had sent a `user` interrupt and no proof arrived (§4) | step 6 (OBSERVED: 143 and no `result`). Guard **kept** |
 | 7 | `result` correlated and success-shaped (latch did not fire), but exit code non-zero | `unknown`, guard kept | contradictory evidence is never success. (`permissionMode`, `apiKeySource` and `cwd` violations are row 0, not here) |
@@ -963,6 +970,38 @@ MCP schemas; allowlist file loading (§6).
 - Acceptance: fake-CLI integration (a test binary that emits recorded NDJSON and
   exits with chosen codes/signals), unit/race, `-count=20` on the concurrency
   tests. **Not live.**
+- **As built (slice 2).** The process side lives in the subpackage
+  `internal/adapters/claudecode/runner`; the pure core imports nothing from the module
+  and starts nothing. `os/exec` is imported by exactly one file,
+  `runner/spawn_linux.go`, and only that file may use `syscall.Kill`, `SysProcAttr`
+  and `WaitStatus`; both facts are tests (`TestExecIsConfinedToTheSpawnFile`, the
+  selector allowlist). `runner.Executor` carries the ADR-010 admission semantics for
+  `claudecode:` sessions (guard, same-key replay, `IDEMPOTENCY_CONFLICT`, preflight, child
+  cap) with the §3 machine deciding every outcome; it is a separate type, not an
+  extension of `execution.Manager` (whose `Runner` interface is OpenCode-shaped), and
+  nothing in `cmd/bridge` or the MCP dispatch calls it: the adapter is unwired and
+  `claudecode:` IDs are refused at execution with `INVALID_INPUT` ("not enabled"). Choices
+  made inside the existing code set: a child-cap refusal is `SESSION_BUSY` with
+  `retryable: true`; a history size refusal is `INTERNAL`; an `unknown` verdict without
+  a named reason (rows 7, 8, 10) is reported with the existing reason `UNKNOWN_OUTCOME`.
+  Child cleanup after an interrupt is a single `SIGINT` to the process group and, if the
+  child is still alive `ReapAfter` later (default 15 s), a `SIGKILL` of the group. That
+  reaping changes no verdict (the latched row was decided at the interrupt) and is NOT
+  the §4 escalation (`SIGINT`, bounded wait, `SIGTERM`, `StepEscalationExhausted`),
+  which, with `interrupt_execution` and init-verification wiring, is slice 3. After a
+  broken stream the runner drains and discards the rest of stdout so the child can
+  finish; the wall-clock cap still bounds it. `Read` loads at most 16 MiB of history,
+  newest segments first, and says so (`history_truncated`); startup recovery is not
+  bounded by it.
+
+**Consequence of D14 Q10, recorded here and NOT decided (reviews #219 P3-4, #224 P3-2).**
+D14 Q10 settled that there is no test account and that the real-login probe is
+omitted. The slice 3 decoy canary (below) still needs one authenticated CLI run, with no
+named allowed authentication path for it. Until the maintainer provisions such a run,
+the canary cannot execute; per D14 Q9 a failing canary blocks shipping, and a canary
+that cannot run is not a pass, so **slice 3 cannot ship until then**. This paragraph
+records the consequence only. It neither answers nor reopens Q10, and it grants no
+authentication path.
 
 **Slice 3: hardening and interrupt, live-gated.** `init` verification (§8.3 item
 4), interrupt escalation (§4), `--setting-sources`/`--strict-mcp-config`/
