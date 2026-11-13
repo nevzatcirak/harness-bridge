@@ -12,12 +12,14 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // fakeSource is an in-memory read-only Source that records how it was asked.
 type fakeSource struct {
+	mu           sync.Mutex // guards the counters: requests run concurrently in some tests
 	rows         []Session
 	rowsErr      error
 	details      map[string]SessionDetail // key harness/id
@@ -26,17 +28,83 @@ type fakeSource struct {
 	listCalls    int
 	lastDeadline bool
 	override     *SessionDetail // returned whatever was asked (a misbehaving source)
+
+	// Diff reads (slice 3).
+	turns         []Turn
+	turnsErr      error
+	turnDiffs     map[string]DiffResult
+	turnDiffErr   error
+	workDiff      DiffResult
+	workErr       error
+	turnsCalls    int
+	turnDiffCall  int
+	workCalls     int
+	block         func(ctx context.Context) // a slow native read: runs first in every diff read
+	blockTurnDiff func(ctx context.Context) // a slow per-turn read only
+}
+
+func (f *fakeSource) SessionTurns(ctx context.Context, harness, id string) ([]Turn, error) {
+	f.mu.Lock()
+	f.turnsCalls++
+	f.mu.Unlock()
+	if f.block != nil {
+		f.block(ctx)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return f.turns, f.turnsErr
+}
+
+func (f *fakeSource) TurnDiff(ctx context.Context, harness, id, messageID string) (DiffResult, error) {
+	f.mu.Lock()
+	f.turnDiffCall++
+	f.mu.Unlock()
+	if f.blockTurnDiff != nil {
+		f.blockTurnDiff(ctx)
+	}
+	if f.block != nil {
+		f.block(ctx)
+		if err := ctx.Err(); err != nil {
+			return DiffResult{}, err
+		}
+	}
+	if f.turnDiffErr != nil {
+		return DiffResult{}, f.turnDiffErr
+	}
+	r, ok := f.turnDiffs[messageID]
+	if !ok {
+		return DiffResult{}, ErrNotFound
+	}
+	return r, nil
+}
+
+func (f *fakeSource) WorkingTreeDiff(ctx context.Context, harness, id string) (DiffResult, error) {
+	f.mu.Lock()
+	f.workCalls++
+	f.mu.Unlock()
+	if f.block != nil {
+		f.block(ctx)
+		if err := ctx.Err(); err != nil {
+			return DiffResult{}, err
+		}
+	}
+	return f.workDiff, f.workErr
 }
 
 func (f *fakeSource) Sessions(ctx context.Context) ([]Session, error) {
+	f.mu.Lock()
 	f.listCalls++
 	_, f.lastDeadline = ctx.Deadline()
+	f.mu.Unlock()
 	return f.rows, f.rowsErr
 }
 
 func (f *fakeSource) SessionDetail(ctx context.Context, harness, id string) (SessionDetail, error) {
+	f.mu.Lock()
 	f.detailCalls++
 	_, f.lastDeadline = ctx.Deadline()
+	f.mu.Unlock()
 	if f.detailErr != nil {
 		return SessionDetail{}, f.detailErr
 	}
@@ -105,10 +173,13 @@ func TestEmptyAndFailingSources(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "0 sessions.") || strings.Contains(body, "<table") {
 		t.Errorf("empty list = %d %s", code, body)
 	}
-	code, body, _ = fetch(NewHandler(&fakeSource{rowsErr: errors.New("boom <b>")}, nil), "/")
-	if code != http.StatusOK || !strings.Contains(body, "Data source unavailable.") || strings.Contains(body, "boom") {
+	// Review #223 P3-1: a failing data source is 503 with Retry-After for the list as
+	// for the detail (one semantics); a configured-absent source is a 200 page.
+	code, body, hdr0 := fetch(NewHandler(&fakeSource{rowsErr: errors.New("boom <b>")}, nil), "/")
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "Data source unavailable.") || strings.Contains(body, "boom") || hdr0.Get("Retry-After") == "" {
 		t.Errorf("failing list = %d %s", code, body)
 	}
+	checkSecurityHeaders(t, "503 list", hdr0)
 	code, body, hdr := fetch(NewHandler(&fakeSource{detailErr: errors.New("boom <b>")}, nil), "/session/opencode/ses_aaa")
 	if code != http.StatusServiceUnavailable || strings.Contains(body, "boom") {
 		t.Errorf("failing detail = %d %s", code, body)
@@ -325,7 +396,7 @@ func TestSessionPrefixRouteIsGetOnlyAndExactRoutesWin(t *testing.T) {
 // ADR-023 section 3: no template.HTML, template.JS, template.URL, template.CSS
 // or template.HTMLAttr on data, and html/template (not text/template).
 func TestTemplatesAreHTMLTemplateWithoutTrustedTypes(t *testing.T) {
-	for _, file := range []string{"views.go", "handler.go"} {
+	for _, file := range []string{"views.go", "handler.go", "diffs.go", "redact.go", "source.go"} {
 		af, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 		if err != nil {
 			t.Fatal(err)

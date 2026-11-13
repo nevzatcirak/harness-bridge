@@ -95,6 +95,58 @@ source reading only (OpenCode was not run).
 | **Session diff** | `GET /session/:sessionID/diff?messageID=<id>` | `.../groups/session.ts:84` (path) and `:168-178` (endpoint); handler `.../handlers/session.ts:99-104`; query `DiffQuery` `:39-42` | **Per user message, not session-wide.** `SessionSummary.diff` returns `[]` when `messageID` is omitted (`packages/opencode/src/session/summary.ts:129-131`) and otherwise returns the diffs stored on that user message (`:135-141`). The diffs are computed at summarize time from `step-start`/`step-finish` snapshot hashes (`:82-100`) and stored on the user message (`:102-127`); if the snapshot feature is disabled (`config.snapshot === false`, `:115`) the result is always empty. Response items are `Snapshot.FileDiff`: optional `file`, optional `patch`, `additions`, `deletions`, optional `status` added/deleted/modified (`packages/schema/src/file-diff.ts:6-12`). The route's `[]` is ambiguous: it is the same for "no changes", snapshot disabled, an absent/wrong `messageID` and a message whose diffs were never computed (review #161 F2). The dashboard must therefore first read each user message's native `info.summary.diffs` from the message list: `summary`/`diffs` absent → *not computed / unavailable*; `diffs: []` → *computed, no changes*; non-empty → call the diff route with that `messageID`. Three fixtures must render three distinct labels (*computed, no changes*; *not computed*; *changes*), and **"unavailable" (timeout, error, snapshot disabled) is a fourth, separate label** (review #169 R3). |
 | Working-tree diff | `GET /vcs/diff?mode=git\|branch&context=N` and `GET /vcs/diff/raw` | `.../groups/instance.ts:48-49` (paths), `:104-121` (endpoints); handler `.../handlers/instance.ts:51-59`; implementation `packages/opencode/src/project/vcs.ts:235,373-390` | Repo-level VCS diff (`mode=git` or `branch`), not attributable to a turn; 10 MB patch caps (`vcs.ts:12-13`). `GET /vcs/status` and `/vcs` help label it. |
 
+**Recorded response shapes (dated sub-note, 2026-11-13, slice 3 step 0, task #240).**
+Factual only; it changes no D17 answer and no other section. Source: a static
+reading of the public upstream source at the same pin, `148842ef…` (paths under
+`packages/opencode/src/` unless prefixed `schema/` = `packages/schema/src/`).
+**Nothing below was captured from a live server: every shape is UNVERIFIED
+against a running OpenCode** (the fixtures say so too).
+
+- `GET /session/:sessionID/diff?messageID=<id>`: a JSON **array** of
+  `Snapshot.FileDiff` (`schema/file-diff.ts:6-12`; endpoint
+  `server/routes/instance/httpapi/groups/session.ts:168-172`): `file?` string,
+  `patch?` string, `additions` and `deletions` finite numbers, `status?` one of
+  `added`, `deleted`, `modified`. The query is `directory?`, `workspace?`
+  (`middleware/workspace-routing.ts:22-25`) and `messageID?` (`DiffQuery`,
+  `groups/session.ts:39-42`; `DiffInput`, `session/summary.ts:148-151`). The
+  handler does not look the session up (`handlers/session.ts:99-104`); the service
+  returns `[]` when `messageID` is absent or names no user message
+  (`summary.ts:130-134`), else `message.info.summary?.diffs ?? []` with each
+  `file` path-unquoted (`summary.ts:135-141`).
+- `GET /session/:sessionID/message` returns an array of `{info, parts}`
+  (`SessionV1.WithParts`, `schema/v1/session.ts:493-496`; endpoint
+  `groups/session.ts:179-182`). **Only a user message** can carry
+  `info.summary`: `{title?: string, body?: string, diffs: FileDiff[]}`, the whole
+  `summary` optional (`schema/v1/session.ts:332-345`). `summarize` stores
+  `summary.diffs` (`summary.ts:125`) except when `config.snapshot === false`
+  (`summary.ts:115`). So `info.summary` absent, or present without `diffs`, means
+  **not computed**; `diffs: []` means **computed, no changes**.
+- `GET /vcs/diff`: query `mode` **required**, `git` or `branch` (`project/vcs.ts:235`;
+  `VcsDiffQuery`, `groups/instance.ts:26-30`), `context?` a non-negative integer
+  (a decimal string in the URL), and `directory?`, `workspace?`. Success: a JSON
+  **array** of `Vcs.FileDiff`: `file` string (required), `patch?`, `additions`,
+  `deletions`, `status?` as above (`vcs.ts:246-255`; endpoint
+  `groups/instance.ts:104-106`). With no `context` the patch uses
+  2147483647 context lines (`vcs.ts:11,107`). The array is `[]` when the project is
+  not a git project (`vcs.ts:376`), and for `mode=branch` when there is no root
+  branch, on the default branch, or no merge base (`vcs.ts:381-384`): **"no
+  changes", "not git" and "default branch" are the same `[]`.**
+- Caps inside OpenCode: 10,000,000 bytes per patch and 10,000,000 bytes in total
+  (`vcs.ts:12-13`). A patch over its cap, and every file after the total is
+  reached, stays in the array with its `additions`/`deletions` and its `patch`
+  replaced by the header-only `emptyPatch(file)` (`vcs.ts:18,139-147,158-164,
+  182-189`). There is no truncation flag: a capped file reads as an empty patch
+  with non-zero counts.
+- `GET /vcs/diff/raw`: query `directory?`, `workspace?` only (no `mode`, no
+  `context`); success is **plain text**, `text/x-diff; charset=utf-8`
+  (`groups/instance.ts:114-117`): the tracked `HEAD` patch followed by the
+  patches of untracked files, joined by `\n`; `""` for a non-git project
+  (`vcs.ts:387-399`).
+- The three routes run git inside OpenCode (the deployment assumption above is
+  unchanged). A client that keeps the Bridge's 8 MiB response bound
+  (`internal/adapters/opencode`) will fail a `/vcs/diff` answer that the
+  10 MB native cap allows; the dashboard shows that as "unavailable".
+
 **Directory query binding (review #161 F8).** Every native call that accepts a
 `directory`/`workspace` query field (`/session`, `/session/:id/message`,
 `/session/:id/diff`, `/vcs/*`) sends only the **ACL-validated root of the
@@ -388,6 +440,53 @@ mutation check and an acceptance step. No slice changes the MCP tool contract.
 | 3 | Diffs: OpenCode per-turn session diff (enumerate user messages, read `info.summary.diffs` presence), `/vcs/diff`, caps, binary, redaction; **no Bridge-side git subprocess**; Claude Code is an open ADR-021 requirement | `summary.diffs` fixtures (undefined / `[]` / non-empty) RED; mutation: treat undefined as empty, or add a `git` shell-out → test RED; a session root with `core.fsmonitor` and `filter.*.clean` canaries must stay unwritten because nothing runs git | diff matches `GET /session/:id/diff` for a known turn; the four labels (computed-empty, not-computed, changes, and unavailable for timeout/error); no subprocess is spawned |
 | 4 | Audit ring (tee handler with `event`/key allowlist), polling JSON + `ETag`/`If-None-Match`, single-flight, 503 | mutation: add a mutating method to the interface → compile/test RED; journal test | audit feed shows AUDIT-01 lines; no mutation lines from dashboard traffic |
 | 5 | Hardening sweep (Host/Origin, timeouts, race), docs, live acceptance | full route sweep; race detector | live acceptance below |
+
+**As built (slice 3, dated 2026-11-13, task #240).** Facts about the code, no new decision;
+every D17 answer, the threat model and the other sections are unchanged.
+
+- **Labels.** `changes`, `computed, no changes`, `not computed`, `unavailable`. A turn's
+  label comes from the presence of `info.summary.diffs` in the message list before any diff
+  read: `not computed` (summary absent, or present without `diffs`) and `computed, no
+  changes` (`diffs: []`) make **no** native diff read and `not computed` is never rendered
+  as "no changes"; only a turn with changes is read (`GET /session/:id/diff`, on demand,
+  from `/session/<harness>/<id>/turn/<messageID>`). A read that times out or fails is
+  `unavailable` with the closed reason `timeout` or `error` (the error text is never shown);
+  an empty answer for a turn reported as having changes is `unavailable` too. The default
+  source of the detail page is the native working-tree `/vcs/diff?mode=git` (D17 Q2, Q9),
+  labelled "working tree (not per turn)"; its empty answer is labelled `computed, no changes`
+  **with the caveat** that OpenCode returns `[]` for a non-git project and the default branch
+  as well. `/vcs/diff/raw` and `mode=branch` are not used. Claude Code sessions show "diff
+  unavailable (ADR-021 pending)" and make no native diff read (D17 Q3).
+- **Caps.** At most 200 files per diff, 256 KiB of patch per file, 1 MiB of patch in total,
+  512 runes of file path, 100 turns listed; the existing 5 s request bound and 2 MiB page
+  bound apply. Every omission is written on the page ("truncated (per-file cap ... total
+  cap ...)", "N more files not shown", "not shown: total cap ... reached"). Binary: a NUL
+  byte in the first 8 KiB, git's own `Binary files` notice, or invalid UTF-8 above 10 % of
+  the first 8 KiB renders "binary file, not displayed (N bytes)" with no content. A patch
+  with no hunk but non-zero counts is shown as "patch not provided" (it is what OpenCode
+  substitutes when its own 10,000,000-byte cap applies). The Bridge's OpenCode client keeps
+  its 8 MiB response bound, so a `/vcs/diff` answer above it is `unavailable`.
+- **Cache.** A diff read is cached for 2 s (the detail poll interval), at most 64 entries,
+  one in-flight read per key (single-flight, T7); memory only, never written to disk.
+- **Redaction** is **on by default** with no configuration (D17 Q5): `sk-ant-`, `ghp_`,
+  `github_pat_`, `AKIA[0-9A-Z]{16}`, private-key blocks (an unterminated block is redacted
+  to the end), `Authorization: Bearer` and `Bearer <token>`. It runs on file names and on
+  patch text **before** the per-file cut (with a 4 KiB overlap, so a token that straddles
+  the cut is replaced whole) and before rendering; the count is shown ("redaction on: N
+  values redacted"), never logged. The operator hook is `Options.Redactor` (up to 16 extra
+  RE2 patterns of at most 256 bytes); it is **not** read from an environment variable or a
+  file yet.
+- **No git.** No file of `internal/dashboard` imports `os/exec`; a test sweeps the imports
+  and the call names, and a session root with `core.fsmonitor` and `filter.*.clean` hooks
+  stays unwritten across every route.
+- **Semantics (review #223).** P3-1: a data source that fails is HTTP 503 with
+  `Retry-After: 5` for the list and the detail alike; a source that is configured absent
+  (`NullSource`) is a 200 page. P3-2: `execution.Manager.DashboardSnapshot` deliberately
+  takes no context and no cap: it does no I/O, and the manager's own memory-only maps are
+  not capped, so a cap would hide executions instead of bounding anything; the pointer copy
+  under `m.mu` is O(runs) and a test pins 20,000 runs well inside the 5 s bound.
+- **Not in slice 3:** a production `Source` (the Bridge still wires `NullSource`), reading
+  the operator redaction patterns from configuration, the audit ring and polling (slice 4).
 
 ### Live acceptance outline (R-DASH)
 

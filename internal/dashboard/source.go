@@ -63,6 +63,15 @@ type Source interface {
 	Sessions(ctx context.Context) ([]Session, error)
 	// SessionDetail returns ErrNotFound for a session that is not listed.
 	SessionDetail(ctx context.Context, harness, id string) (SessionDetail, error)
+	// SessionTurns lists the user turns of a session, newest last, with the presence
+	// state of each native info.summary.diffs. ErrNotFound for an unlisted session.
+	SessionTurns(ctx context.Context, harness, id string) ([]Turn, error)
+	// TurnDiff reads the per-turn diff of one user message, on demand. It is called
+	// only for a turn whose state is TurnChanges. ErrNotFound for an unlisted session.
+	TurnDiff(ctx context.Context, harness, id, messageID string) (DiffResult, error)
+	// WorkingTreeDiff reads the native working-tree diff (/vcs/diff) of the session's
+	// approved root: the default source (D17 Q2, Q9). The Bridge runs no git for it.
+	WorkingTreeDiff(ctx context.Context, harness, id string) (DiffResult, error)
 }
 
 // NullSource is the source used when no data source is connected.
@@ -74,4 +83,19 @@ func (NullSource) Sessions(context.Context) ([]Session, error) { return nil, nil
 // SessionDetail finds nothing.
 func (NullSource) SessionDetail(context.Context, string, string) (SessionDetail, error) {
 	return SessionDetail{}, ErrNotFound
+}
+
+// SessionTurns finds nothing.
+func (NullSource) SessionTurns(context.Context, string, string) ([]Turn, error) {
+	return nil, ErrNotFound
+}
+
+// TurnDiff finds nothing.
+func (NullSource) TurnDiff(context.Context, string, string, string) (DiffResult, error) {
+	return DiffResult{}, ErrNotFound
+}
+
+// WorkingTreeDiff finds nothing.
+func (NullSource) WorkingTreeDiff(context.Context, string, string) (DiffResult, error) {
+	return DiffResult{}, ErrNotFound
 }

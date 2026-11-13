@@ -1,0 +1,24 @@
+[
+  {
+    "info": {"id": "msg_user_notcomputed", "sessionID": "ses_diffs1", "role": "user", "time": {"created": 1700000000000}, "agent": "build", "model": {"providerID": "anthropic", "modelID": "claude-sonnet-5-5"}},
+    "parts": [{"type": "text", "text": "turn without a summary"}]
+  },
+  {
+    "info": {"id": "msg_user_nodiffskey", "sessionID": "ses_diffs1", "role": "user", "time": {"created": 1700000001000}, "agent": "build", "model": {"providerID": "anthropic", "modelID": "claude-sonnet-5-5"}, "summary": {"title": "a title only"}},
+    "parts": [{"type": "text", "text": "summary present, diffs absent"}]
+  },
+  {
+    "info": {"id": "msg_user_empty", "sessionID": "ses_diffs1", "role": "user", "time": {"created": 1700000002000}, "agent": "build", "model": {"providerID": "anthropic", "modelID": "claude-sonnet-5-5"}, "summary": {"title": "no changes", "diffs": []}},
+    "parts": [{"type": "text", "text": "computed, nothing changed"}]
+  },
+  {
+    "info": {"id": "msg_user_changes", "sessionID": "ses_diffs1", "role": "user", "time": {"created": 1700000003000}, "agent": "build", "model": {"providerID": "anthropic", "modelID": "claude-sonnet-5-5"}, "summary": {"diffs": [
+      {"file": "h4/NOTE.md", "patch": "Index: h4/NOTE.md\n===================================================================\n--- h4/NOTE.md\n+++ h4/NOTE.md\n@@ -1,1 +1,2 @@\n existing\n+MARK-ee3f40\n", "additions": 1, "deletions": 0, "status": "modified"}
+    ]}},
+    "parts": [{"type": "text", "text": "computed, one file changed"}]
+  },
+  {
+    "info": {"id": "msg_assistant_1", "sessionID": "ses_diffs1", "role": "assistant", "parentID": "msg_user_changes", "time": {"created": 1700000003500, "completed": 1700000004000}, "finish": "stop"},
+    "parts": [{"type": "text", "text": "done"}]
+  }
+]

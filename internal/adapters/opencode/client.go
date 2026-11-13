@@ -41,6 +41,10 @@ type MessageInfo struct {
 		Cwd  string `json:"cwd"`
 		Root string `json:"root"`
 	} `json:"path,omitempty"`
+	// Summary is the raw info.summary of a user message (title, body, diffs). It is
+	// kept raw so that an unexpected shape can never fail a history read; DiffState
+	// reads the presence rule from it.
+	Summary json.RawMessage `json:"summary,omitempty"`
 }
 type Message struct {
 	Info  MessageInfo       `json:"info"`
