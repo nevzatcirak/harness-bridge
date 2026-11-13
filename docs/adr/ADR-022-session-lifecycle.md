@@ -106,9 +106,17 @@ Configuration (proposed; names are not final):
   `0600`, read once at startup. The Bridge never rewrites it.
 - Per root: `path` (absolute), `modes` (subset of `create`, `archive`),
   `max_sessions` (cap on non-archived sessions under the root), optional
-  `max_depth` for the directory below the root where creation is allowed.
+  `max_depth` for the directory below the root where creation is allowed
+  (**absent = 0: only the root directory itself**; D16 slice S2 review #215 P3-5).
 - Global: `create_per_hour`, `archive_per_hour`, `max_total_sessions`
   (section 7).
+- The config file is read strictly (review #215 P3-2, P3-3): its path must be
+  **canonical, with no symlink in any component, an ancestor directory included**
+  (not only the final component); the JSON keys must be **exact and unique**: a
+  duplicate key, and a key that differs from its lower-case name only by case, are
+  refused (Go's decoder would otherwise match case-insensitively and keep the
+  last duplicate); a file swapped between inspection and open is refused
+  (`config_changed`).
 - Absent or empty: lifecycle tools are not registered (default off, no change
   for existing deployments). With `BRIDGE_READ_ONLY=1` the lifecycle tools stay
   registered and return `FORBIDDEN` for `create_session` and `archive_session`
@@ -348,7 +356,7 @@ Input (all strings; unknown fields rejected, like the other tools):
 | Field | Rule |
 |---|---|
 | `root` | must equal one configured root path (or the root's `id`) |
-| `subdirectory` (optional) | relative, clean, no `..`, no symlink components, must already exist, at most `max_depth` below the root |
+| `subdirectory` (optional) | relative, clean, no `..`, no symlink components, must already exist, at most `max_depth` below the root (absent `max_depth` = 0: the root itself only) |
 | `title` | optional, 1–200 characters, no control characters |
 | `prompt` (optional first prompt) | same bounds as `send_prompt` (1–32768 bytes) |
 | `idempotency_key` | 8–128 bytes, as in `send_prompt` |
@@ -607,6 +615,12 @@ persistence. **The maintainer decides.**
 
 ### 7.3 Preconditions (both options), fail-closed
 
+**Under D16 (Q1, option B) the archive write is an overlay write, not a native
+`PATCH`** (see slices S8 and S6 for the overlay's persistence, its preconditions
+and its error mapping); the native `PATCH` text of 7.2 and of this subsection is
+read as the record of the options considered, not as the implemented write
+(review #215 P3-1).
+
 `archive_session` refuses, with no native write, unless all of these hold at
 call time and again immediately before the `PATCH` (re-check while holding the
 `busy[session]` reservation of section 5.1, then write; there is no run token
@@ -692,10 +706,10 @@ practical. Mutations are the ones a reviewer should re-run.
 
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
-| S1 | Lifecycle config parser and root validation (no tools, not yet wired into startup). Config keys as implemented: per root `path`, `modes`, `max_sessions`, `max_depth`, and the per-root operator flag `existing_tools` (D16 Q7, O2; default false; parsed only, it grants nothing until slice S9); global `create_per_hour`, `archive_per_hour`, `max_total_sessions` | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode of the config file), config file ownership and size, strict JSON, and `existing_tools` parsing | accept an overlapping root; skip the canonical check; skip the owner check |
+| S1 | Lifecycle config parser and root validation (no tools, not yet wired into startup). Config keys as implemented: per root `path`, `modes`, `max_sessions`, `max_depth` (absent = 0), and the per-root operator flag `existing_tools` (D16 Q7, O2; default false; parsed only, it grants nothing until slice S9); global `create_per_hour`, `archive_per_hour`, `max_total_sessions` | table tests for every startup refusal in 3.1 (non-canonical, overlap, `/`, missing, wrong owner, mode of the config file), config file ownership and size, strict JSON, and `existing_tools` parsing | accept an overlapping root; skip the canonical check; skip the owner check |
 | S2 | Lifecycle authorization (3.2 rules 1-3), including the Git top level procedure (no subprocess, confined reads) and the non-git exclusion. The existing-tool part (O2, D16 Q7) is **not** in S2: it waits for the ADR-012 amendment (slice S9). S2 does include the Q9 option (i) scan: a bounded, include-free read of the git `config` that refuses repositories using `core.worktree` or `include` (fail closed) | RED test for each of: **the new lifecycle-root session-less opener and the `inspect` variant: a path outside the lifecycle root (refused even if it lies under `BRIDGE_ALLOWED_ROOTS`), a lifecycle root replaced after startup (refused), a symlink component (refused), a session-less call (works, unlike `OpenStorage`), and the existing session-bound `OpenStorage` behavior unchanged**; plain `.git` directory; `.git` file (linked worktree) inside the root; `.git` file whose `gitdir:` leaves the root (refused `not_in_root`); `commondir` leaving the root; `.git` symlink (refused); malformed or multi-line `gitdir:`; unsupported layout (reftable/bare); nested repository (inner wins); ascent reaching the root with no `.git` (`non_git`); depth limit; `core.worktree` and `include` present (refused, D16 Q9 option (i)); the config scan stays bounded (size and line limits), follows no `include`, and runs no subprocess. Also symlink, replaced-directory, worktree-above-root, root with `create` only, static session outside roots; the existing-tool check shown unchanged (`policy.go` conjunction) | drop rule 3; compare paths without resolving symlinks; let a non-git directory pass; follow a `gitdir:` pointer outside the root; ascend past a symlinked `.git`; run a `git` subprocess; **make the new opener fall back to `BRIDGE_ALLOWED_ROOTS`; skip the root-identity check; skip the symlink-component check** |
 | S3 | `list_catalog` read-only, instance-qualified `session_ref`, bounds | limit/offset/deadline, filters, no silent partial result, overlay-archived sessions hidden by default and listed only with `include_archived` (D16 Q5) | remove the deadline; drop a filter |
-| S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is accepted only for a root whose operator flag `existing_tools` is set (O2, D16 Q7) and only after slice S9; otherwise it is absent | every row in 4.2, idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY`; a 128-byte create key still yields a valid first-prompt key (hash-derived, 32 bytes); an incomplete or timed-out native count refuses the create with no native write; a returned directory that differs from the request is `UNKNOWN_OUTCOME` with `bootstrap_may_be_outside_root`; the fully resolved path is what is sent | retry on timeout; accept a caller `permission`; cap disabled; derive the first-prompt key by concatenation; treat an incomplete count as zero; ignore the directory mismatch |
+| S4 | `create_session` against a fake native with `POST /session?directory=`. The optional first prompt is accepted only for a root whose operator flag `existing_tools` is set (O2, D16 Q7) and only after slice S9; otherwise it is absent | every row in 4.2, `max_depth` absent = 0 (only the root itself), idempotent replay, conflict, caps, `UNKNOWN_OUTCOME` never retried, no `permission`/`agent` accepted, `FORBIDDEN` under `BRIDGE_READ_ONLY`; a 128-byte create key still yields a valid first-prompt key (hash-derived, 32 bytes); an incomplete or timed-out native count refuses the create with no native write; a returned directory that differs from the request is `UNKNOWN_OUTCOME` with `bootstrap_may_be_outside_root`; the fully resolved path is what is sent | retry on timeout; accept a caller `permission`; cap disabled; derive the first-prompt key by concatenation; treat an incomplete count as zero; ignore the directory mismatch |
 | S5 | Audit lines for create, archive and close | one line per call on every return path, no free text | skip an audit on a refusal path |
 | S6 (after S8) | The **reversible Bridge archive overlay** (D16 Q1 option B) for Chat: `archive_session` and `close_session` (interrupt a running execution, then overlay archive), under a lifecycle reservation kind in the manager (never `x.op`, never an execution ID). **No native write**: native archive (`PATCH time.archived`) is operator-only and is not an MCP tool | preconditions 7.3 each refuse with no overlay change; **a spy native records no write of any kind (no `PATCH`, no `DELETE`, no `POST`) for `archive_session` and for the archive step of `close_session`**; `close_session` calls the existing interrupt path first and archives only after it is settled, and a failed or uncertain interrupt leaves the session un-archived; a concurrent `send_prompt` gets `SESSION_BUSY` while the overlay change is in flight; re-check before the overlay write; rate cap; `FORBIDDEN` under `BRIDGE_READ_ONLY`; while the reservation is held `get_session` shows `submitting` with `guard_reason: archive`, `releaseHolder`/the admin release/reconcile never act on it, and it is released on every exit path including panic; any session under a lifecycle root with the `archive` mode may be overlay-archived (D16 Q6) | drop the pre-write re-check; archive while a guard is held; skip the reservation; **issue a native `PATCH` from either tool**; **archive after a failed interrupt in `close_session`**; store the reservation as a fake execution ID that ADR-020 release could match |
 | S7 | CONTRACTS and runbook | doc review | n/a |
