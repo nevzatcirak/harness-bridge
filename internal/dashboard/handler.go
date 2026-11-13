@@ -1,10 +1,8 @@
 package dashboard
 
 import (
-	"context"
 	"embed"
 	"fmt"
-	"html/template"
 	"net"
 	"net/http"
 	"strings"
@@ -30,30 +28,23 @@ type Route struct {
 	Path    string
 	Methods []string
 	Handler http.Handler
+	// Prefix routes every path under Path (which ends in "/") to Handler. The
+	// handler validates the remainder itself. An exact route always wins.
+	Prefix bool
 }
+
+// sessionPrefix is the detail route: GET /session/<harness>/<id>.
+const sessionPrefix = "/session/"
 
 var getHead = []string{http.MethodGet, http.MethodHead}
 
-var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Harness Bridge dashboard</title>
-<link rel="stylesheet" href="/dashboard.css">
-</head>
-<body>
-<header><h1>Harness Bridge dashboard</h1><span class="badge">read-only</span></header>
-<main id="app" data-slice="1"><p>{{.Summary}}</p></main>
-<script src="/dashboard.js"></script>
-</body>
-</html>
-`))
-
-// Routes returns the route table. Slice 1 has the index page and its two
-// embedded assets; there is no other route and no method but GET and HEAD.
+// Routes returns the route table. Slice 2 has the session list, the session
+// detail and the two embedded assets; there is no other route and no method but
+// GET and HEAD.
 func Routes(src Source) []Route {
 	return []Route{
 		{Path: "/", Methods: getHead, Handler: indexHandler(src)},
+		{Path: sessionPrefix, Methods: getHead, Handler: detailHandler(src), Prefix: true},
 		{Path: "/dashboard.css", Methods: getHead, Handler: assetHandler("assets/dashboard.css", "text/css; charset=utf-8")},
 		{Path: "/dashboard.js", Methods: getHead, Handler: assetHandler("assets/dashboard.js", "text/javascript; charset=utf-8")},
 	}
@@ -70,23 +61,6 @@ func assetHandler(name, contentType string) http.Handler {
 	})
 }
 
-func indexHandler(src Source) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
-		defer cancel()
-		summary := "No data source is connected (slice 1 skeleton)."
-		if _, none := src.(NullSource); !none {
-			if rows, err := src.Sessions(ctx); err != nil {
-				summary = "Data source unavailable."
-			} else {
-				summary = fmt.Sprintf("%d sessions.", len(rows))
-			}
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = indexTemplate.Execute(w, struct{ Summary string }{summary})
-	})
-}
-
 // NewHandler returns the dashboard handler. allowedHosts is the Host header
 // allowlist for the TCP transport; nil or empty applies none (unix socket: the
 // directory mode is the fence). Every response, including errors, carries the
@@ -96,7 +70,12 @@ func NewHandler(src Source, allowedHosts []string) http.Handler {
 		src = NullSource{}
 	}
 	table := map[string]Route{}
+	var prefixes []Route
 	for _, r := range Routes(src) {
+		if r.Prefix {
+			prefixes = append(prefixes, r)
+			continue
+		}
 		table[r.Path] = r
 	}
 	hosts := map[string]bool{}
@@ -122,6 +101,14 @@ func NewHandler(src Source, allowedHosts []string) http.Handler {
 			return
 		}
 		route, ok := table[r.URL.Path]
+		if !ok {
+			for _, p := range prefixes {
+				if strings.HasPrefix(r.URL.Path, p.Path) {
+					route, ok = p, true
+					break
+				}
+			}
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return

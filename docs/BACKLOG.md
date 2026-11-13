@@ -60,3 +60,11 @@ Open items recorded here, not fixed:
 - The dashboard has no data source yet: `Source` has one reader (`Sessions`) and the Bridge wires `NullSource`; the session views, diffs, audit ring and polling are slices 2 to 5.
 - The unix-socket transport is Linux-only (like the admin socket); other platforms get a startup error that points at the loopback TCP address.
 - The Host allowlist applies to the TCP transport only (ADR-023 T3, T9); on the unix socket the 0700 directory is the fence.
+
+### ADR-023 slice 2 (sessions list/detail): deferred items (2026-11-13, appended)
+
+- No production `Source` yet: the Bridge still wires `NullSource` in `cmd/bridge/dashboard.go`. The slice adds the read-only `Source` readers (`Sessions`, `SessionDetail`), the views, and `execution.Manager.DashboardSnapshot` (the T10 enumeration). The adapter that implements `Source` from the ACL sessions (the MCP discovery path, bounded) plus `DashboardSnapshot`, and wires it in `cmd/bridge`, is the next dashboard task; until then the dashboard shows "No data source is connected." and the ADR-023 slice 2 acceptance "the list matches MCP `list_sessions` for the ACL" is **not exercised**.
+- D17 Q6: the ADR-022 lifecycle roots are not wired as a session source (ADR-022 S1 only parses the config; its tools do not exist yet). The code names the TODO and invents no source.
+- D17 Q7: no archive overlay exists yet (ADR-022 S8, S6), so there is no archived row and no archive filter.
+- `DashboardSnapshot` reports a guard whose holder is observed already terminal as held with state `unknown` (same conservative rule as `SessionGuard`), so a poll can show one stale "held (unknown)" row right after a release.
+- Diffs (slice 3), the audit ring and polling (slice 4), and the live acceptance R-DASH (slice 5) are unchanged.
