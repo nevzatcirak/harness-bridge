@@ -32,9 +32,12 @@ type Config struct {
 	Tools           []string
 
 	Sessions []claudecode.Session
-	Locks    *Locks
-	History  *claudecode.Store
-	Spawner  Spawner
+	// AllowedSessions is BRIDGE_ALLOWED_SESSIONS: every allowlisted session must also
+	// be listed here (§6). New enforces it, so no wiring can skip the check.
+	AllowedSessions []string
+	Locks           *Locks
+	History         *claudecode.Store
+	Spawner         Spawner
 
 	// RootCheck re-validates a session root at admission (default: absolute,
 	// a directory, no symlink in the path).
@@ -100,6 +103,9 @@ func New(cfg Config) (*Executor, error) {
 		cfg.Now = time.Now
 	}
 	if err := claudecode.ValidateWrapper(cfg.FS, cfg.Wrapper); err != nil {
+		return nil, err
+	}
+	if err := claudecode.CheckSessionACL(cfg.Sessions, cfg.AllowedSessions); err != nil {
 		return nil, err
 	}
 	e := &Executor{cfg: cfg, sessions: map[string]claudecode.Session{}, runs: map[string]*run{}, busy: map[string]string{},
@@ -204,20 +210,18 @@ retry:
 		e.mu.Unlock()
 		return execution.Execution{}, false, execution.Fail("SESSION_BUSY", "session has an active or uncertain execution")
 	}
-	if e.children >= e.cfg.MaxChildren {
-		e.mu.Unlock()
-		return execution.Execution{}, false, busyErr("child capacity reached", true)
-	}
-	// Reserve the guard and a child slot before any IO, so unrelated sessions are not blocked.
+	// Reserve the guard before any IO, so unrelated sessions are not blocked. The child
+	// slot is taken only after the preflight: a session that is refused is told so
+	// (NOT_FOUND, FORBIDDEN) even at capacity.
 	r := e.newRun(uuid, req)
 	e.busy[req.Session] = r.id
 	e.runs[r.id] = r
 	e.pending[k] = make(chan struct{})
 	e.fps[k] = fp
-	e.children++
 	e.wg.Add(1)
 	e.mu.Unlock()
 
+	slot := false
 	reject := func(err error) (execution.Execution, bool, error) {
 		e.mu.Lock()
 		if e.busy[req.Session] == r.id {
@@ -227,7 +231,9 @@ retry:
 		delete(e.fps, k)
 		close(e.pending[k])
 		delete(e.pending, k)
-		e.children--
+		if slot {
+			e.children--
+		}
 		e.mu.Unlock()
 		e.wg.Done()
 		return execution.Execution{}, false, err
@@ -235,6 +241,14 @@ retry:
 	if err := e.preflight(r); err != nil {
 		return reject(err)
 	}
+	e.mu.Lock()
+	if e.children >= e.cfg.MaxChildren {
+		e.mu.Unlock()
+		return reject(busyErr("child capacity reached", true))
+	}
+	e.children++
+	slot = true
+	e.mu.Unlock()
 	err := e.cfg.History.BeginTurn(uuid, r.id, claudecode.TurnStart{Prompt: req.Prompt, Principal: req.Principal, KeyHashPrefix: keyPrefix(req.Key)})
 	switch {
 	case errors.Is(err, claudecode.ErrSessionHistoryFull):

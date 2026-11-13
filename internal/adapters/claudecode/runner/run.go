@@ -24,6 +24,7 @@ type run struct {
 	verdict              claudecode.Verdict
 	decided, shut        bool
 	pendingInt, reaping  bool
+	pendingRelease       bool // a decided verdict frees the guard, but a child still runs
 	graceStarted, exited bool
 	timers               []*time.Timer
 }
@@ -108,7 +109,14 @@ func (r *run) sync() {
 	_ = r.e.cfg.History.EndTurn(r.uuid, r.id, claudecode.TurnEnd{State: v.State, Row: v.Row, Reason: v.Reason, Subtype: v.Subtype,
 		TerminalReason: v.TerminalReason, ExitClass: v.ExitClass, NumTurns: v.NumTurns, Denials: len(v.PermissionDenials), CostUSD: v.CostUSD})
 	if v.GuardReleased {
-		r.e.release(r.session, r.id)
+		if r.child != nil && !r.exited {
+			// One child per session (§2): the verdict may be decided early, but the
+			// guard is freed only after the child was reaped (markExited). A child
+			// that cannot be confirmed reaped keeps the guard held.
+			r.pendingRelease = true
+		} else {
+			r.e.release(r.session, r.id)
+		}
 	}
 }
 
@@ -170,10 +178,16 @@ func (r *run) stopTimers() {
 	}
 }
 
+// markExited records that the child was reaped and frees a guard whose release
+// was deferred until now.
 func (r *run) markExited() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.exited = true
-	r.mu.Unlock()
+	if r.pendingRelease {
+		r.pendingRelease = false
+		r.e.release(r.session, r.id)
+	}
 }
 
 func (r *run) isShut() bool {
@@ -214,6 +228,10 @@ func (e *Executor) work(r *run, prompt string) {
 	_ = child.CloseStdin()
 	if werr != nil || n < len(prompt) {
 		r.feed(claudecode.Step{Kind: claudecode.StepStdinFailed, Accepted: n})
+		// Whatever the verdict, a child that did not get its prompt is not left running.
+		r.mu.Lock()
+		r.interrupt()
+		r.mu.Unlock()
 	}
 
 	dec := claudecode.NewDecoder(child.Stdout(), claudecode.Limits{})

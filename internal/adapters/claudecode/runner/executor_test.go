@@ -19,7 +19,9 @@ func TestHappyPathCompletes(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-poison-0123456789")
 	h := newHarness(t, nil)
 	x := h.mustSend(1, "do the thing", "key-0001-aaaa")
-	if x.State != "submitting" || x.SessionID != "claudecode:"+uuidN(1) {
+	// The admission view is "submitting", or "running" if the child already started: both
+	// are correct and the race between them is not part of the contract (#229 P3-5).
+	if (x.State != "submitting" && x.State != "running") || x.SessionID != "claudecode:"+uuidN(1) {
 		t.Fatalf("admission view = %+v", x)
 	}
 	c := h.next(1)
@@ -521,5 +523,17 @@ func TestNewRefuses(t *testing.T) {
 	cfg.Spawner = nil
 	if _, err := New(cfg); err == nil {
 		t.Error("a missing spawner must be refused")
+	}
+	// BRIDGE_ALLOWED_SESSIONS is enforced by the constructor (#229 P3-4): a listed
+	// session missing from it, or no ACL at all, is refused.
+	cfg = h.cfg
+	cfg.AllowedSessions = cfg.AllowedSessions[:2]
+	if _, err := New(cfg); err == nil {
+		t.Error("an allowlisted session missing from the allowed sessions must be refused")
+	}
+	cfg = h.cfg
+	cfg.AllowedSessions = nil
+	if _, err := New(cfg); err == nil {
+		t.Error("no allowed sessions at all must be refused")
 	}
 }

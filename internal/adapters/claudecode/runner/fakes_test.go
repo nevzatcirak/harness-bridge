@@ -213,7 +213,7 @@ func newHarness(t *testing.T, mod func(*Config, *claudecode.StoreConfig)) *harne
 	}
 	sc := claudecode.DefaultStoreConfig()
 	h.cfg = Config{Wrapper: wrapperPath, FS: h.fsys, Env: claudecode.EnvConfig{Home: "/home/claude", Lang: "C.UTF-8"}, Model: "claude-sonnet-5-5", MaxTurns: 20,
-		AllowedVersions: []string{"2.1.322"}, Tools: []string{"Read", "Glob", "Grep"}, Sessions: h.sessions, Spawner: h.sp,
+		AllowedVersions: []string{"2.1.322"}, Tools: []string{"Read", "Glob", "Grep"}, Sessions: h.sessions, AllowedSessions: sessionIDs(h.sessions), Spawner: h.sp,
 		RunMax: 10 * time.Second, Grace: 10 * time.Second, ReapAfter: 10 * time.Second, MaxChildren: 4}
 	if mod != nil {
 		mod(&h.cfg, &sc)
@@ -229,7 +229,18 @@ func newHarness(t *testing.T, mod func(*Config, *claudecode.StoreConfig)) *harne
 	if h.ex, err = New(h.cfg); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { h.ex.Close(); h.locks.Close(); h.hist.Close() })
+	t.Cleanup(func() {
+		// Whatever a failing test left running is ended first, so a failure reads as a
+		// failure and not as a hung Close.
+		h.sp.mu.Lock()
+		for _, c := range h.sp.byDir {
+			c.finish(Exit{Code: 1})
+		}
+		h.sp.mu.Unlock()
+		h.ex.Close()
+		h.locks.Close()
+		h.hist.Close()
+	})
 	return h
 }
 
@@ -318,3 +329,13 @@ func (h *harness) historyKinds(n int) []string {
 }
 
 var _ = path.Join
+
+func ctxBG() context.Context { return context.Background() }
+
+func sessionIDs(list []claudecode.Session) []string {
+	var out []string
+	for _, s := range list {
+		out = append(out, s.ID)
+	}
+	return out
+}
