@@ -426,3 +426,97 @@ func TestErrorTextNamesTheReason(t *testing.T) {
 		t.Fatalf("error text: %v", err)
 	}
 }
+
+// P3-2 (review #215): a symlink in an ANCESTOR of the config path is refused.
+func TestConfigPathAncestorSymlinkIsRefused(t *testing.T) {
+	base := canonicalTemp(t)
+	dir := mkdir(t, base, "real", "sub")
+	dirRoot := mkdir(t, base, "root")
+	good := rootsJSON(t, root(dirRoot, "create"))
+	cfg := filepath.Join(dir, "lifecycle.json")
+	if err := os.WriteFile(cfg, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := realValidator().load(cfg); err != nil {
+		t.Fatalf("premise: the canonical path loads: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(base, "real"), filepath.Join(base, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(base, "alias", "sub", "lifecycle.json"), filepath.Join(base, "alias", "sub", "..", "sub", "lifecycle.json")} {
+		_, err := realValidator().load(p)
+		wantReason(t, err, ReasonConfigPath)
+	}
+}
+
+// P3-3 (review #215): duplicate keys and case-mismatched keys are refused.
+func TestStrictKeysRefuseDuplicatesAndCaseMismatches(t *testing.T) {
+	dir := mkdir(t, canonicalTemp(t), "r")
+	p := `"path":"` + dir + `"`
+	for name, in := range map[string]string{
+		"duplicate top-level":       `{"create_per_hour":3,"create_per_hour":4}`,
+		"duplicate roots":           `{"roots":[],"roots":[]}`,
+		"duplicate in a root":       `{"roots":[{` + p + `,"modes":["create"],"modes":["archive"]}]}`,
+		"duplicate path":            `{"roots":[{` + p + `,` + p + `,"modes":["create"]}]}`,
+		"duplicate existing_tools":  `{"roots":[{` + p + `,"modes":["create"],"existing_tools":false,"existing_tools":true}]}`,
+		"upper-case top-level":      `{"Roots":[]}`,
+		"mixed-case limit":          `{"Create_Per_Hour":3}`,
+		"upper-case path":           `{"roots":[{"Path":"` + dir + `","modes":["create"]}]}`,
+		"upper-case modes":          `{"roots":[{` + p + `,"MODES":["create"]}]}`,
+		"upper-case flag":           `{"roots":[{` + p + `,"modes":["create"],"Existing_Tools":true}]}`,
+		"case twin of a valid key":  `{"roots":[{` + p + `,"modes":["create"],"Max_Sessions":1}]}`,
+		"duplicate in the 2nd root": `{"roots":[{` + p + `,"modes":["create"]},{` + p + `,"modes":["create"],"max_depth":1,"max_depth":2}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := realValidator().parse([]byte(in))
+			wantReason(t, err, ReasonSyntax)
+		})
+	}
+	// Exact, unique keys still load (the earlier strict-JSON tests cover the rest).
+	if _, err := realValidator().parse([]byte(`{"roots":[{` + p + `,"modes":["create"],"existing_tools":true,"max_depth":1,"max_sessions":2}],"create_per_hour":3}`)); err != nil {
+		t.Fatalf("exact keys refused: %v", err)
+	}
+	// Roots that are objects of the wrong type or nested arrays must not hide a key.
+	for _, in := range []string{`{"roots":[[{"a":1}]]}`, `{"roots":{"path":1}}`, `{"roots":[{"modes":[{"x":1,"x":2}]}]}`} {
+		if _, err := realValidator().parse([]byte(in)); err == nil {
+			t.Errorf("accepted %s", in)
+		}
+	}
+}
+
+// P3-4 (review #215): the check-then-open control. A file swapped between the
+// inspection and the open is refused, deterministically, through the seam.
+func TestConfigFileSwappedBetweenInspectionAndOpenIsRefused(t *testing.T) {
+	base := canonicalTemp(t)
+	dir := mkdir(t, base, "r")
+	good := rootsJSON(t, root(dir, "create"))
+	cfg := filepath.Join(base, "lifecycle.json")
+	if err := os.WriteFile(cfg, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	v := realValidator()
+	v.afterLstat = func(path string) {
+		if path != cfg {
+			t.Errorf("hook for %q", path)
+		}
+		other := filepath.Join(base, "other.json")
+		if err := os.WriteFile(other, good, 0o600); err != nil { // same content, same mode, same owner
+			t.Fatal(err)
+		}
+		if err := os.Rename(other, cfg); err != nil {
+			t.Fatal(err)
+		}
+		swapped = true
+	}
+	_, err := v.load(cfg)
+	if !swapped {
+		t.Fatal("the seam did not run")
+	}
+	wantReason(t, err, ReasonConfigChanged)
+	// Without a swap the same file loads: the refusal is the identity check.
+	v.afterLstat = nil
+	if _, err := v.load(cfg); err != nil {
+		t.Fatalf("unswapped: %v", err)
+	}
+}

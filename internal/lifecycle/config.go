@@ -129,6 +129,10 @@ func (c *Config) Enabled() bool { return c != nil && len(c.Roots) > 0 }
 type validator struct {
 	uid   uint32
 	owner func(fs.FileInfo) (uint32, bool)
+	// afterLstat is a test seam: it runs between the inspection of the config
+	// file and the opening of it, so a test can swap the file there. Nil in
+	// production.
+	afterLstat func(path string)
 }
 
 // FromEnv loads the configuration named by BRIDGE_LIFECYCLE_CONFIG. An unset or
@@ -163,8 +167,21 @@ func (v validator) load(path string) (*Config, error) {
 	if !before.Mode().IsRegular() {
 		return nil, refuse(ReasonConfigType, path, "must be a regular file, not a symlink or directory")
 	}
+	// P3-2 (review #215): the path itself must be canonical, so a symlink in
+	// ANY component, an ancestor directory included, is refused, not only a
+	// final-component symlink (that one is the config_type refusal above).
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, refuse(ReasonConfigMissing, path, "cannot resolve the file")
+	}
+	if resolved != path {
+		return nil, refuse(ReasonConfigPath, path, "the path must be canonical: no symlink in any component")
+	}
 	if err := v.checkFile(path, before); err != nil {
 		return nil, err
+	}
+	if v.afterLstat != nil {
+		v.afterLstat(path)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -216,6 +233,12 @@ type rawRoot struct {
 }
 
 func (v validator) parse(data []byte) (*Config, error) {
+	// P3-3 (review #215): exact, unique keys. Go's decoder matches field names
+	// case-insensitively and keeps the last of a duplicate key; both would let two
+	// readers of the same file disagree, so both are refused.
+	if err := checkStrictKeys(data); err != nil {
+		return nil, refuse(ReasonSyntax, "", err.Error())
+	}
 	var raw rawConfig
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -361,4 +384,131 @@ func contains(parent, child string) bool {
 		return true
 	}
 	return strings.HasPrefix(child, strings.TrimSuffix(parent, string(filepath.Separator))+string(filepath.Separator))
+}
+
+var (
+	topKeys  = map[string]string{"roots": "roots", "create_per_hour": "scalar", "archive_per_hour": "scalar", "max_total_sessions": "scalar"}
+	rootKeys = map[string]string{"path": "scalar", "modes": "scalar", "max_sessions": "scalar", "max_depth": "scalar", "existing_tools": "scalar"}
+)
+
+// checkStrictKeys walks the JSON tokens and refuses a duplicate key (exact), a
+// key whose case differs from the canonical lower-case name, and a key that is
+// not known. It does not validate values: the decode that follows does.
+func checkStrictKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return errors.New("not a JSON object of the expected shape")
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil // the decode reports the wrong top-level shape
+	}
+	return scanObject(dec, topKeys)
+}
+
+func scanObject(dec *json.Decoder, allowed map[string]string) error {
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return errors.New("malformed JSON")
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return errors.New("malformed JSON")
+		}
+		kind, known := allowed[key]
+		if !known {
+			if _, folded := allowed[strings.ToLower(key)]; folded {
+				return errors.New("key differs from its canonical lower-case name only by case")
+			}
+			return errors.New("unknown key")
+		}
+		if seen[key] {
+			return errors.New("duplicate key")
+		}
+		seen[key] = true
+		if kind == "roots" {
+			if err := scanRoots(dec); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := skipValue(dec); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing brace
+		return errors.New("malformed JSON")
+	}
+	return nil
+}
+
+func scanRoots(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return errors.New("malformed JSON")
+	}
+	d, isDelim := tok.(json.Delim)
+	if !isDelim || d != '[' {
+		if isDelim { // an object or other container where an array belongs: skip it, the decode refuses it
+			return skipOpen(dec, d)
+		}
+		return nil
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return errors.New("malformed JSON")
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' {
+				if err := scanObject(dec, rootKeys); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := skipOpen(dec, d); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return errors.New("malformed JSON")
+	}
+	return nil
+}
+
+// skipValue consumes one JSON value.
+func skipValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return errors.New("malformed JSON")
+	}
+	if d, ok := tok.(json.Delim); ok {
+		return skipOpen(dec, d)
+	}
+	return nil
+}
+
+// skipOpen consumes the rest of a container whose opening delimiter was read.
+func skipOpen(dec *json.Decoder, open json.Delim) error {
+	if open != '{' && open != '[' {
+		return nil
+	}
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return errors.New("malformed JSON")
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		}
+	}
+	return nil
 }
