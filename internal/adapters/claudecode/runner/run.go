@@ -98,7 +98,9 @@ func (r *run) interrupt() {
 func (r *run) escalateTerm() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.exited || r.esc != escInt {
+	// markExited sets esc to escDone under this same lock when the child is confirmed reaped,
+	// so the step check below is the whole guard (a separate exited check was dead code).
+	if r.esc != escInt {
 		return
 	}
 	r.esc = escTerm
@@ -111,7 +113,7 @@ func (r *run) escalateTerm() {
 func (r *run) escalationExhausted() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.exited || r.esc != escTerm {
+	if r.esc != escTerm {
 		return
 	}
 	r.esc = escDone
@@ -321,4 +323,18 @@ func (e *Executor) work(r *run, prompt string) {
 	x := child.Wait()
 	r.markExited(x)
 	r.feed(claudecode.Step{Kind: claudecode.StepExit, ExitCode: x.Code, ExitSignal: x.Signal, ExitUnknown: x.Unknown})
+}
+
+// unreaped reports whether the run's child was started and is not confirmed reaped: either
+// the run is still working, or its Wait returned an unknown status (#253 P3-3: the pipeline
+// ended, but the child, or a member of its group, may still be alive and the guard stays held).
+func (r *run) unreaped() bool {
+	select {
+	case <-r.done:
+	default:
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.child != nil && !r.exited
 }

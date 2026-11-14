@@ -784,3 +784,60 @@ func TestNewRefusesAnEmptyOrWildcardVersionListAndABadToolProfile(t *testing.T) 
 		}
 	}
 }
+
+// #253 P3-3: a run whose Wait was unknown ended its pipeline, but its child (or a group
+// member) may be alive and its guard stays held: Close reports it as abandoned.
+func TestCloseReportsARunWithAnUnknownWait(t *testing.T) {
+	h := newHarness(t, func(c *Config, sc *claudecode.StoreConfig) { s3(c, sc); c.CloseWait = 300 * time.Millisecond })
+	x := h.mustSend(1, "p", "key-uclose-00001")
+	c := h.next(1)
+	c.emit(h.initLine(1))
+	c.finish(Exit{Unknown: true})
+	h.wait(x.ID)
+	got := h.ex.Close()
+	if len(got) != 1 || got[0] != x.ID {
+		t.Fatalf("Close abandoned %v, want the unknown-Wait run %s", got, x.ID)
+	}
+	if again := h.ex.Close(); len(again) != 1 || again[0] != x.ID {
+		t.Fatalf("a repeated Close reported %v", again)
+	}
+	// a cleanly reaped run is not reported
+	h2 := newHarness(t, s3)
+	y := h2.mustSend(1, "p", "key-uclose-00002")
+	c2 := h2.next(1)
+	c2.emit(h2.initLine(1))
+	c2.emit(h2.resultLine(1, nil))
+	c2.finish(Exit{Code: 0})
+	h2.wait(y.ID)
+	if got := h2.ex.Close(); len(got) != 0 {
+		t.Fatalf("a reaped run was reported: %v", got)
+	}
+}
+
+// #253 P3-5 (X7/X7b): the escalation timers are stopped when the run's pipeline ends, but a timer
+// that already fired can still be waiting for the run's lock when the child is reaped. A step that
+// runs after the confirmed reap must be a no-op: no SIGTERM to a reaped child, no late
+// StepEscalationExhausted. The steps are called directly to pin exactly that window.
+func TestAnEscalationStepAfterTheReapIsANoOp(t *testing.T) {
+	h := newHarness(t, func(c *Config, sc *claudecode.StoreConfig) { s3(c, sc); c.IntWait, c.TermWait = time.Hour, time.Hour })
+	x := h.mustSend(1, "p", "key-noop-0000001")
+	c := h.next(1)
+	c.emit(h.initLine(1))
+	if _, err := h.ex.Interrupt(x.ID); err != nil { // SIGINT ends the fake child with a known exit
+		t.Fatal(err)
+	}
+	h.wait(x.ID)
+	h.ex.mu.Lock()
+	r := h.ex.runs[x.ID]
+	h.ex.mu.Unlock()
+	before := len(c.received())
+	v := h.verdict(x.ID)
+	r.escalateTerm()
+	r.escalationExhausted()
+	if n := len(c.received()); n != before {
+		t.Fatalf("%d signals sent by an escalation step after the confirmed reap", n-before)
+	}
+	if got := h.verdict(x.ID); got.Row != v.Row || got.ChildUnconfirmed != v.ChildUnconfirmed || got.Reason != v.Reason {
+		t.Fatalf("a late escalation step changed the verdict: %+v -> %+v", v, got)
+	}
+}

@@ -39,10 +39,12 @@ func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser) (*ad
 	return srv, nil
 }
 
-const adminUsage = `usage: bridge admin release-guard --session opencode:ses_<id> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message] [--socket <path>]
+const adminUsage = `usage: bridge admin release-guard --session opencode:ses_<id>|claudecode:<uuid> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message] [--socket <path>]
 
 Releases the busy guard of one session through the writer's private admin
-socket (ADR-020 b). The socket defaults to $BRIDGE_ADMIN_SOCKET. Run as the
+socket (ADR-020 b; for claudecode: sessions the Claude extension of ADR-021
+slice 4, which has no native read and is refused while no Claude Code adapter is
+running; --allow-missing-user-message does not apply to it). The socket defaults to $BRIDGE_ADMIN_SOCKET. Run as the
 service user (sudo -u <service user>). --ticket must match [A-Za-z0-9._-]{1,64}.
 Exit status: 0 released, 1 refused or unreachable, 2 usage error.
 `
@@ -56,7 +58,7 @@ func runAdmin(args []string, env func(string) string, stdout, stderr io.Writer) 
 	fs := flag.NewFlagSet("release-guard", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, adminUsage) }
-	session := fs.String("session", "", "global session ID (opencode:ses_…)")
+	session := fs.String("session", "", "global session ID (opencode:ses_… or claudecode:<uuid>)")
 	executionID := fs.String("execution", "", "execution ID holding the guard")
 	ticket := fs.String("ticket", "", "ticket ID, [A-Za-z0-9._-]{1,64}")
 	allowMissing := fs.Bool("allow-missing-user-message", false, "release although the correlated user message is absent (audited)")

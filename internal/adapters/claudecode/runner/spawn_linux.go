@@ -90,6 +90,26 @@ func (c *execChild) Signal(sig Signal) error {
 	return errors.New("runner: only SIGINT and SIGTERM are ever sent (ADR-021 §4 forbids killing the wrapper)")
 }
 
+// GroupEmpty reports whether the child's process group is empty: kill(-pgid, 0) sends no
+// signal and answers ESRCH only when no process of the group exists. EPERM means members
+// exist that this user cannot signal (for example behind sudo): not empty. A recycled group
+// id can only make the answer "not empty", never "empty".
+func (c *execChild) GroupEmpty() (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cmd.Process == nil {
+		return false, errors.New("runner: no process")
+	}
+	err := syscall.Kill(-c.cmd.Process.Pid, 0)
+	switch err {
+	case nil:
+		return false, nil
+	case syscall.ESRCH:
+		return true, nil
+	}
+	return false, nil
+}
+
 // markReaped records a confirmed reap: only then is a signal to the group refused. An
 // unknown Wait result leaves the child signalable, so a later escalation step can still
 // reach it (the runner never sends anything stronger than SIGTERM).

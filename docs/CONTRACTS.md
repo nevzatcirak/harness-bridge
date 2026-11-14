@@ -258,7 +258,7 @@ Optional additive `Execution` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `unresolved.reason` | `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`, `OBSERVATION_UNAVAILABLE`, `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH` or `MANAGER_CLOSED`. For a `claudecode:` execution (ADR-021 §3, unwired) three more additive values: `EXIT_UNCONFIRMED` (a result was seen but the child did not exit or its exit could not be confirmed), `PROCESS_ENDED_WITHOUT_RESULT` and `UNKNOWN_OUTCOME` (no named reason: rows 7, 8, 10). A `child_unconfirmed` flag accompanies an `unknown` verdict whose child could not be confirmed gone. |
+| `unresolved.reason` | `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`, `OBSERVATION_UNAVAILABLE`, `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH` or `MANAGER_CLOSED`. For a `claudecode:` execution (ADR-021 §3, unwired) three more additive values: `EXIT_UNCONFIRMED` (a result was seen but the child did not exit or its exit could not be confirmed), `PROCESS_ENDED_WITHOUT_RESULT` and `UNKNOWN_OUTCOME` (no named reason: rows 7, 8, 10). The `child_unconfirmed` flag (additive, `claudecode:` only) accompanies the `unknown` verdicts of ADR-021 §3 rows 0, 9, 6a and 6b, the rows whose child may still be alive when the verdict is decided; rows 1s and 9s do not set it (a stdin failure and a Bridge shutdown carry their own reasons, and the guard stays held). It is audit information: the guard release below tests the child's present state, not the flag. |
 | `unresolved.since` | UTC time the currently retained uncertainty cause began |
 | `unresolved.last_checked_at` | Most recent on-demand evidence attempt, including inconclusive/unavailable reads |
 | `monitor_ended_at` | UTC time the bounded background worker exited; never native completion proof |
@@ -441,13 +441,34 @@ it can already read the service's secrets and drive the Bridge directly.
 
 ```
 sudo -u <service user> env BRIDGE_ADMIN_SOCKET=<path> \
-  bridge admin release-guard --session opencode:ses_<id> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message]
+  bridge admin release-guard --session opencode:ses_<id>|claudecode:<uuid> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message]
 ```
 
 `--socket <path>` overrides `BRIDGE_ADMIN_SOCKET`. `--ticket` is required and
 must match `[A-Za-z0-9._-]{1,64}`. The command prints the JSON response and
 exits `0` when released, `1` when refused or the socket is unreachable, `2` on
 a usage error (also for a bad ticket, checked before connecting).
+
+**Claude Code sessions (ADR-021 slice 4, D14 Q8; defined, not served).** The same operation
+accepts `--session claudecode:<uuid>` (canonical lowercase UUID). Its preconditions replace the
+native reads, which do not exist for this harness, and all are checked by the Bridge: (1) the
+guard of the session is held by exactly this execution; (2) the execution is `unknown` with a
+decided verdict; (3) its child is **confirmed exited**: the run's `Wait` returned a known
+status (an unknown `Wait` confirms nothing), the run's pipeline has ended and the child's
+process group has no member left; (4) after the settle interval (default 5 s) the same facts
+hold again, one re-check in place of the two reads. Any unknown fails closed with a typed
+error: `INVALID_INPUT` (not the holder, not `unknown`), `SESSION_BUSY` (child not confirmed
+exited, group not empty), `UPSTREAM_FAILURE` (group check failed), `UPSTREAM_TIMEOUT`
+(cancelled during the settle) or `UNKNOWN_OUTCOME` (manager closed). The release never changes
+the execution's state, reason, verdict or history and sends no signal (no SIGKILL exists
+anywhere). `--allow-missing-user-message` does not apply and is refused. While no Claude Code
+Executor is constructed in production (it is not), every `claudecode:` request is refused with
+`INVALID_INPUT` "claudecode sessions are not enabled" and one audit line. Response: `outcome`,
+`session_id`, `execution_id`, `claude_evidence` (`harness`, `native_read: false`, `row`,
+`exit_class`, `child_exited`, `group_empty`, `rechecked`, `settle_ms`, `guard_released_at`) and
+`error`. The one audit line carries `harness=claudecode`, `child_exited`, `group_empty`,
+`rechecked`, `row`, `exit_class`, `settle_ms`, `ticket`, `principal`, and none of the
+native-read keys.
 
 Response:
 
@@ -534,6 +555,49 @@ override leaves a residual double-submission risk if a lost Prompt arrives late.
 The settle interval is a heuristic, not a native lease. Like all execution
 records, `guard_released_at` is process-local. Token rotation (ADR-019) still
 needs a restart. Live acceptance (ADR-020 §4) is not yet recorded.
+
+## ADR-021 Claude Code harness contract (defined, NOT served)
+
+Accepted ADR-021 (D12/D14). Nothing here is reachable: the adapter is unwired, a `claudecode:`
+session ID is refused with `INVALID_INPUT` "not enabled" for every tool, and no Claude
+capabilities block is returned. This section is the contract the wiring slice must serve.
+Tool names, input fields and output fields of the eleven tools do not change.
+
+- **Session ID.** `claudecode:<lowercase 8-4-4-4-12 hex UUID>` in the same `session_id` field
+  (an `anyOf` of the two patterns, see "Input JSON Schema"). Claude sessions are advertised to
+  all clients (D14 Q2). A strict old client that validates against the OpenCode pattern only
+  would reject the new form; the contract version is bumped when it is served.
+- **Session fields.** `harness: "claudecode"`, `native_id` = the UUID, `title` = the allowlist
+  label, `directory` = the root, `state` per ADR-021 §6.
+- **Execution fields.** `session_id` is `claudecode:<uuid>`; `message_id` is the Bridge's own
+  opaque execution-scoped ID (the CLI exposes no user message ID); additive optional
+  `permission_denials`, `liveness`, `child_unconfirmed` (rows 0, 9, 6a, 6b only, see
+  `unresolved.reason` above), `cost_usd_reported` (informational, never used for correctness)
+  and `exit` (`class` only: `zero`, `nonzero`, `signal`, `unknown`, `none`).
+- **Unresolved reasons.** Existing: `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`,
+  `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH`, `MANAGER_CLOSED`. Additive for this harness:
+  `EXIT_UNCONFIRMED`, `PROCESS_ENDED_WITHOUT_RESULT`, `UNKNOWN_OUTCOME` (no named reason).
+- **Errors.** Unchanged enum. A history store or size refusal is `UPSTREAM_FAILURE`
+  (`retryable: false`); there is no `INTERNAL`. A child-capacity refusal is `SESSION_BUSY` with
+  `retryable: true` (its code stays a planner decision at wiring).
+- **`read_session_history`.** Bridge-normalized messages with `source: "bridge_record"`,
+  `history_complete`, `first_recorded_at`, `history_truncated`; the 8 MiB response bound is
+  unchanged. History exists only for turns the Bridge ran (ADR-021 §5).
+- **`get_harness_capabilities` (ADR-012) block for Claude.** `harness: "claudecode"`,
+  `version` (the version last seen in `init`), `capabilities` (the init tool list, verbatim,
+  informational) and Bridge facts, each "declared by the Bridge", not probed from the CLI:
+  `resume_exact_id: true`, `native_lock: false`, `history_source: "bridge_record"`,
+  `permission_relay: false`, `interrupt: "sigint_then_sigterm"`, `active_terminal_control: false`,
+  `session_creation: false`, `read_only_tools: true`.
+- **Interrupt.** `interrupt_execution` keeps its contract. For Claude it is SIGINT, a bounded wait
+  (default 10 s), SIGTERM, a bounded wait (default 5 s), then the Bridge stops signalling and the
+  execution is `unknown` with `child_unconfirmed`; there is no SIGKILL, ever (removing a stuck
+  process is an operator action).
+- **Guard release.** Operator-only, through the admin channel (ADR-020 extension above). There is
+  no automatic release for an `unknown` Claude execution.
+- **Audit.** AUDIT-01 gains optional keys only (`harness`, `interrupt_reasons`,
+  `late_lines_after_verdict`, `late_result_seen`, and the Claude release keys above); never
+  prompt text, keys, tool input or line content.
 
 ## H4-A additive discovery contracts (not deployed)
 

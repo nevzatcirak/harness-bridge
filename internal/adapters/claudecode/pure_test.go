@@ -31,7 +31,7 @@ var (
 	syscallAllowed = map[string]bool{"Open": true, "Openat": true, "Close": true, "Fstat": true, "Lstat": true, "Stat_t": true}
 	osAllowed      = map[string]bool{"File": true, "Geteuid": true, "NewFile": true}
 	// Only the spawn file may also signal and group the child.
-	spawnSyscallExtra = map[string]bool{"Kill": true, "SysProcAttr": true, "SIGINT": true, "SIGTERM": true, "WaitStatus": true}
+	spawnSyscallExtra = map[string]bool{"Kill": true, "SysProcAttr": true, "SIGINT": true, "SIGTERM": true, "ESRCH": true, "WaitStatus": true}
 )
 
 // The one file that may import os/exec and call its entry points, and the one

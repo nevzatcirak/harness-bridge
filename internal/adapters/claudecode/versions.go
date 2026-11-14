@@ -55,6 +55,20 @@ func CheckVersions(list []string) error {
 	if len(list) == 0 {
 		return ErrNoVersions
 	}
-	_, err := ParseVersions(strings.Join(list, ","))
-	return err
+	if len(list) > MaxVersions {
+		return fmt.Errorf("claudecode: more than %d versions", MaxVersions)
+	}
+	// Each element on its own (#249 P3-2): joining first would let one element "a,b" pass as
+	// two versions.
+	seen := map[string]bool{}
+	for i, v := range list {
+		if !versionPattern.MatchString(v) {
+			return fmt.Errorf("claudecode: version %d is not an exact MAJOR.MINOR.PATCH string", i)
+		}
+		if seen[v] {
+			return fmt.Errorf("claudecode: version %d is a duplicate", i)
+		}
+		seen[v] = true
+	}
+	return nil
 }
