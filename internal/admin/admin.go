@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
@@ -63,8 +62,8 @@ type Response struct {
 	Evidence    *execution.ReleaseEvidence `json:"evidence,omitempty"`
 	// ClaudeEvidence is the Claude harness release evidence (ADR-021 slice 4): there is no
 	// native read in it.
-	ClaudeEvidence *runner.ReleaseEvidence `json:"claude_evidence,omitempty"`
-	Error          *execution.Error        `json:"error,omitempty"`
+	ClaudeEvidence *claudecode.ReleaseEvidence `json:"claude_evidence,omitempty"`
+	Error          *execution.Error            `json:"error,omitempty"`
 }
 
 // Releaser is the execution manager's release operation.
@@ -77,7 +76,7 @@ type Releaser interface {
 // Claude Executor is constructed in production, which it is not: then a claudecode: session is
 // refused with a clear reason (default off).
 type ClaudeReleaser interface {
-	ReleaseGuard(context.Context, string, string, runner.ReleaseOptions) (runner.ReleaseEvidence, error)
+	ReleaseGuard(context.Context, string, string, claudecode.ReleaseOptions) (claudecode.ReleaseEvidence, error)
 }
 
 // Server serves one request per connection.
@@ -311,7 +310,7 @@ func (s *Server) handleClaude(ctx context.Context, req Request, principal string
 	case s.Claude == nil:
 		return s.refuseClaude(principal, req, nil, execution.Fail("INVALID_INPUT", "claudecode sessions are not enabled: no Claude Code adapter is running"))
 	}
-	ev, err := s.Claude.ReleaseGuard(ctx, req.SessionID, req.ExecutionID, runner.ReleaseOptions{Settle: s.Settle})
+	ev, err := s.Claude.ReleaseGuard(ctx, req.SessionID, req.ExecutionID, claudecode.ReleaseOptions{Settle: s.Settle})
 	if err != nil {
 		return s.refuseClaude(principal, req, &ev, err)
 	}
@@ -319,7 +318,7 @@ func (s *Server) handleClaude(ctx context.Context, req Request, principal string
 	return Response{Outcome: "released", SessionID: req.SessionID, ExecutionID: req.ExecutionID, ClaudeEvidence: &ev}
 }
 
-func (s *Server) refuseClaude(principal string, req Request, ev *runner.ReleaseEvidence, err error) Response {
+func (s *Server) refuseClaude(principal string, req Request, ev *claudecode.ReleaseEvidence, err error) Response {
 	e := typed(err)
 	s.auditClaude(principal, req, ev, e)
 	r := Response{Outcome: "refused", Error: e}
@@ -337,7 +336,7 @@ func (s *Server) refuseClaude(principal string, req Request, ev *runner.ReleaseE
 
 // auditClaude writes the one AUDIT-01 guard_release line of a Claude release: validated values
 // only, the harness, the child and group facts, no native-read keys, no free text.
-func (s *Server) auditClaude(principal string, req Request, ev *runner.ReleaseEvidence, e *execution.Error) {
+func (s *Server) auditClaude(principal string, req Request, ev *claudecode.ReleaseEvidence, e *execution.Error) {
 	outcome := "released"
 	if e != nil {
 		outcome = "refused"

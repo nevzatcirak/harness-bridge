@@ -73,6 +73,26 @@ type Execution struct {
 	PendingPermissionCount *int               `json:"pending_permission_count,omitempty"`
 	// GuardReleasedAt is set only by the ADR-020 (b) operator release.
 	GuardReleasedAt *time.Time `json:"guard_released_at,omitempty"`
+	// ADR-021 §9, Claude Code harness only; all omitted for OpenCode, whose responses
+	// stay byte-identical. ChildUnconfirmed is audit information on an unknown verdict
+	// whose child may still be alive (rows 0, 9, 6a, 6b); the guard release tests the
+	// child's present facts, not this flag.
+	ChildUnconfirmed  bool               `json:"child_unconfirmed,omitempty"`
+	PermissionDenials []PermissionDenial `json:"permission_denials,omitempty"`
+	CostUSDReported   float64            `json:"cost_usd_reported,omitempty"`
+	Exit              *ExitInfo          `json:"exit,omitempty"`
+}
+
+// PermissionDenial is one entry of a Claude result's permission_denials, reduced to the
+// tool and a bounded, redacted input summary (ADR-021 §7: report-only, never authority).
+type PermissionDenial struct {
+	ToolName string `json:"tool_name"`
+	Input    string `json:"input,omitempty"`
+}
+
+// ExitInfo is the exit class of a Claude child only: zero, nonzero, signal, unknown or none.
+type ExitInfo struct {
+	Class string `json:"class"`
 }
 type run struct {
 	mu             sync.Mutex

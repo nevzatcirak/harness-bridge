@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -64,6 +65,11 @@ type Sessions struct {
 type History struct {
 	NextCursor string             `json:"next_cursor,omitempty"`
 	Messages   []opencode.Message `json:"messages"`
+	// ADR-021 §5/§9, Claude Code sessions only (omitted for OpenCode).
+	Source           string     `json:"source,omitempty"`
+	HistoryComplete  *bool      `json:"history_complete,omitempty"`
+	FirstRecordedAt  *time.Time `json:"first_recorded_at,omitempty"`
+	HistoryTruncated *bool      `json:"history_truncated,omitempty"`
 }
 type Result struct {
 	Execution execution.Execution `json:"execution"`

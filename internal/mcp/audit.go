@@ -53,6 +53,9 @@ func auditSession(raw string) string {
 	if id, e := native(raw); e == nil {
 		return "opencode:" + id
 	}
+	if id, ok := claudeCanonical(raw); ok {
+		return id
+	}
 	return ""
 }
 
@@ -140,6 +143,9 @@ func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err
 	}
 	if sessionID != "" {
 		attrs = append(attrs, "session_id", sessionID)
+		if _, ok := claudeCanonical(sessionID); ok {
+			attrs = append(attrs, "harness", "claudecode")
+		}
 	}
 	if executionID != "" {
 		attrs = append(attrs, "execution_id", executionID)

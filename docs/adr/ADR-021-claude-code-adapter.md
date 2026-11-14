@@ -1188,6 +1188,49 @@ settings, `cleanupPeriodDays`, version pin).
     with the double writer lock of #236 P3-4 and the wrapper-side descendant check of #242); live
     R6 (slice 5); any change to OpenCode release semantics; D14 Q10.
 
+**Wiring slice (task #263; default off).** The Claude Code adapter is wired into the Bridge behind one
+explicit operator configuration. As built:
+- **Enablement** (`cmd/bridge/claude.go`, `internal/claudewire`): `BRIDGE_CLAUDE_COMMAND` switches it on; then
+  `BRIDGE_CLAUDE_SESSIONS`, `BRIDGE_CLAUDE_VERSIONS`, `BRIDGE_CLAUDE_HISTORY_DIR`, `BRIDGE_CLAUDE_HOME`,
+  `BRIDGE_CLAUDE_MODEL` and `BRIDGE_WRITER_LOCK_DIR` are required (optional: `LANG`, `MAX_TURNS`,
+  `MAX_BUDGET_USD`, `RUN_MAX`). `claudewire.Open` parses the version list, validates the child
+  environment and the argv inputs, loads the allowlist, opens the history store, takes the writer locks and
+  builds the Executor, or returns an error and holds nothing. Absent configuration: no Executor, the
+  "not enabled" refusal, the 11-tool set and every OpenCode response and audit line unchanged (tested). A
+  `BRIDGE_CLAUDE_*` value without the command is a startup error. A read-only ingress never enables it.
+- **Routing** (`internal/mcp/claude.go`): see CONTRACTS "ADR-021 Claude Code harness contract". Exact ID
+  only; unlisted ID `NOT_FOUND` with no spawn; outside the ACL `FORBIDDEN`; the child-cap code stays
+  `SESSION_BUSY` `retryable: true`. `list_catalog` is not changed (ADR-022 files untouched).
+- **One writer lock owner (#236 P3-4).** `cmd/bridge` takes the OpenCode writer ownership of the non-Claude
+  ACL entries only (`claudewire.ClaudeSessionIDs`); the adapter takes the `claudecode:` ones (same
+  directory, same hashed names). Taking both would fail the adapter's flock (tested).
+- **Admin.** `admin.Server.Claude` is set from the same adapter only when it runs (a nil interface otherwise,
+  so `bridge admin release-guard` keeps refusing `claudecode:` IDs). `ReleaseEvidence` and `ReleaseOptions`
+  moved to the pure core (`claudecode`), so `internal/admin` no longer links `runner` or `os/exec` (tested).
+- **Audit.** A mutating call for a `claudecode:` ID writes the same one line as OpenCode plus `harness=claudecode`
+  and the Claude session ID. The dashboard audit ring keeps the Claude keys `harness`, `child_exited`,
+  `group_empty`, `rechecked`, `row`, `exit_class`.
+- **#242 residual (wrapper-side descendant).** After a **known** `Wait` the runner polls the child's process
+  group for up to `GroupWait` (default 1 s). A group that is still populated (or whose check fails) makes the
+  exit unconfirmed: the machine gets an unknown exit (row 6a with a result, row 10 without), the guard stays
+  held, and a deferred guard release is withheld; the operator release then needs an empty group. A row 1
+  `failed` run in that state is not releasable (restart). This is implemented and tested with a fake child and
+  with a real process group (`TestRealGroupEmptyFollowsTheGroupMembers`). **Limits (UNVERIFIED live):** an empty
+  group does not prove that a `setsid` or double-forked descendant is gone, and whether the CLI behind `sudo`
+  stays in the wrapper's group is the live `setsid -w` measurement of ADR slice 3 item 4.
+- **Execution view.** The additive fields `child_unconfirmed`, `permission_denials`, `cost_usd_reported` and
+  `exit.class` are filled from the machine after every step; `Executor.Version` (last init) feeds the
+  capabilities block; `liveness` is still not served.
+- **Carried P3s (#257/#259 on #256).** P3-1: overlapping and repeated release tests (a repeated release of
+  an old execution is refused before the settle wait, which turns the check-phase holder compare RED);
+  P3-2: a real-`ExecSpawner` `GroupEmpty` test and the runbook sentence; P3-3: the `r.done` precondition of
+  the release is kept as **defence in depth** (it can only differ from `exited` during the last step of the
+  run's own pipeline, which cannot be held open without a test hook); P3-4: the canary control tests use literal
+  needles; P3-5: the types moved, see above.
+- **Not here:** live R6 (slice 5, operator-present); the live credential canary (D14 Q10: the adapter cannot ship
+  enabled until the maintainer provisions an authenticated run); any default-on behaviour; the Mutation Gate
+  attempt-writer; ADR-024; OpenCode semantics; the `child_unconfirmed` present-facts interpretation (unchanged).
+
 **Slice 5 (optional, only if slices 1 to 4 are accepted): live acceptance R6.**
 Evidence only. Runbook outline, mirroring R5 for Claude Code:
 1. Preconditions: dedicated `hbclaude` user and wrapper (R6-0), pinned version

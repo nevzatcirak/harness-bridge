@@ -249,3 +249,59 @@ func TestReleaseInputsAndLifecycle(t *testing.T) {
 		t.Fatalf("after Close: %v", err)
 	}
 }
+
+// #257 P3-1 / #259: a release of an old execution whose guard now belongs to another one is
+// refused AT ONCE, before the settle wait (R3a: the check-phase holder compare must matter,
+// not only the commit's compare-and-swap).
+func TestRepeatedReleaseIsRefusedBeforeTheSettleWait(t *testing.T) {
+	h := newHarness(t, s3)
+	id, _ := h.unknownRun(1, "key-rel-0000000c")
+	if _, err := h.release(1, id); err != nil {
+		t.Fatal(err)
+	}
+	h.mustSend(1, "again", "key-rel-0000000d")
+	until(t, "the second child", func() bool { return h.sp.count() == 2 })
+	start := time.Now()
+	ev, err := h.ex.ReleaseGuard(context.Background(), h.sid(1), id, ReleaseOptions{Settle: 3 * time.Second})
+	if errCode(err) != "INVALID_INPUT" || ev.Rechecked || time.Since(start) > time.Second {
+		t.Fatalf("a repeated release: %v after %v, evidence %+v (it must be refused before the settle)", err, time.Since(start), ev)
+	}
+	if !h.guardHeld(1) {
+		t.Fatal("the new execution lost its guard")
+	}
+}
+
+// Overlapping releases of the SAME execution: exactly one frees the guard, the other is
+// refused by the commit's compare-and-swap (the guard is not held any more) and never frees a
+// guard that a new execution took in between.
+func TestOverlappingReleasesFreeTheGuardOnce(t *testing.T) {
+	h := newHarness(t, s3)
+	id, _ := h.unknownRun(1, "key-rel-0000000e")
+	errs := make(chan error, 2)
+	go func() {
+		_, err := h.ex.ReleaseGuard(context.Background(), h.sid(1), id, ReleaseOptions{Settle: 150 * time.Millisecond})
+		errs <- err
+	}()
+	go func() {
+		_, err := h.ex.ReleaseGuard(context.Background(), h.sid(1), id, ReleaseOptions{Settle: 150 * time.Millisecond})
+		errs <- err
+	}()
+	a, b := <-errs, <-errs
+	ok := 0
+	for _, e := range []error{a, b} {
+		if e == nil {
+			ok++
+		} else if errCode(e) != "INVALID_INPUT" {
+			t.Fatalf("the losing release failed with %v", e)
+		}
+	}
+	if ok != 1 || h.guardHeld(1) {
+		t.Fatalf("%d releases succeeded (%v, %v), guard held %v", ok, a, b, h.guardHeld(1))
+	}
+	// A new execution then holds the guard; a late third release must not free it.
+	h.mustSend(1, "again", "key-rel-0000000f")
+	until(t, "the second child", func() bool { return h.sp.count() == 2 })
+	if _, err := h.release(1, id); errCode(err) != "INVALID_INPUT" || !h.guardHeld(1) {
+		t.Fatalf("a late release: %v", err)
+	}
+}
