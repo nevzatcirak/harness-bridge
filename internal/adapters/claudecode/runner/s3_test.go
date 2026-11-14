@@ -784,3 +784,32 @@ func TestNewRefusesAnEmptyOrWildcardVersionListAndABadToolProfile(t *testing.T) 
 		}
 	}
 }
+
+// #253 P3-3: a run whose Wait was unknown ended its pipeline, but its child (or a group
+// member) may be alive and its guard stays held: Close reports it as abandoned.
+func TestCloseReportsARunWithAnUnknownWait(t *testing.T) {
+	h := newHarness(t, func(c *Config, sc *claudecode.StoreConfig) { s3(c, sc); c.CloseWait = 300 * time.Millisecond })
+	x := h.mustSend(1, "p", "key-uclose-00001")
+	c := h.next(1)
+	c.emit(h.initLine(1))
+	c.finish(Exit{Unknown: true})
+	h.wait(x.ID)
+	got := h.ex.Close()
+	if len(got) != 1 || got[0] != x.ID {
+		t.Fatalf("Close abandoned %v, want the unknown-Wait run %s", got, x.ID)
+	}
+	if again := h.ex.Close(); len(again) != 1 || again[0] != x.ID {
+		t.Fatalf("a repeated Close reported %v", again)
+	}
+	// a cleanly reaped run is not reported
+	h2 := newHarness(t, s3)
+	y := h2.mustSend(1, "p", "key-uclose-00002")
+	c2 := h2.next(1)
+	c2.emit(h2.initLine(1))
+	c2.emit(h2.resultLine(1, nil))
+	c2.finish(Exit{Code: 0})
+	h2.wait(y.ID)
+	if got := h2.ex.Close(); len(got) != 0 {
+		t.Fatalf("a reaped run was reported: %v", got)
+	}
+}

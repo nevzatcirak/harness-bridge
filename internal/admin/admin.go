@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
@@ -59,7 +61,10 @@ type Response struct {
 	SessionID   string                     `json:"session_id,omitempty"`
 	ExecutionID string                     `json:"execution_id,omitempty"`
 	Evidence    *execution.ReleaseEvidence `json:"evidence,omitempty"`
-	Error       *execution.Error           `json:"error,omitempty"`
+	// ClaudeEvidence is the Claude harness release evidence (ADR-021 slice 4): there is no
+	// native read in it.
+	ClaudeEvidence *runner.ReleaseEvidence `json:"claude_evidence,omitempty"`
+	Error          *execution.Error        `json:"error,omitempty"`
 }
 
 // Releaser is the execution manager's release operation.
@@ -67,9 +72,19 @@ type Releaser interface {
 	ReleaseGuard(context.Context, string, string, execution.ReleaseOptions) (execution.ReleaseEvidence, error)
 }
 
+// ClaudeReleaser is the Claude Code release (ADR-021 §3 last bullet, D14 Q8): the same admin
+// operation with Claude-specific preconditions in place of native reads. It is nil until the
+// Claude Executor is constructed in production, which it is not: then a claudecode: session is
+// refused with a clear reason (default off).
+type ClaudeReleaser interface {
+	ReleaseGuard(context.Context, string, string, runner.ReleaseOptions) (runner.ReleaseEvidence, error)
+}
+
 // Server serves one request per connection.
 type Server struct {
 	Runs Releaser
+	// Claude releases claudecode: guards; nil refuses them ("not enabled").
+	Claude ClaudeReleaser
 	// UID is the only peer UID accepted (the service user's effective UID).
 	UID int
 	// Settle overrides the release settle interval (0: the manager default).
@@ -264,6 +279,9 @@ func (s *Server) Handle(ctx context.Context, req Request, principal string) Resp
 	if !ValidTicket(req.Ticket) {
 		return s.refuse(principal, req, nil, execution.Fail("INVALID_INPUT", "ticket must match [A-Za-z0-9._-]{1,64}"))
 	}
+	if strings.HasPrefix(req.SessionID, claudecode.SessionPrefix) {
+		return s.handleClaude(ctx, req, principal)
+	}
 	session, ok := nativeSession(req.SessionID)
 	if !ok || !executionPattern.MatchString(req.ExecutionID) {
 		return s.refuse(principal, req, nil, execution.Fail("INVALID_INPUT", "invalid session or execution ID"))
@@ -274,6 +292,83 @@ func (s *Server) Handle(ctx context.Context, req Request, principal string) Resp
 	}
 	s.audit(principal, req, &ev, nil)
 	return Response{Outcome: "released", SessionID: req.SessionID, ExecutionID: req.ExecutionID, Evidence: &ev}
+}
+
+// claudeSession reports whether id is a canonical claudecode:<uuid> session ID.
+func claudeSession(id string) bool {
+	uuid, err := claudecode.ParseSessionID(id)
+	return err == nil && id == claudecode.SessionPrefix+uuid
+}
+
+// handleClaude is the Claude harness release: validation, the nil-releaser refusal, one call,
+// exactly one audit line.
+func (s *Server) handleClaude(ctx context.Context, req Request, principal string) Response {
+	switch {
+	case !claudeSession(req.SessionID) || !executionPattern.MatchString(req.ExecutionID):
+		return s.refuseClaude(principal, req, nil, execution.Fail("INVALID_INPUT", "invalid session or execution ID"))
+	case req.AllowMissingUserMessage:
+		return s.refuseClaude(principal, req, nil, execution.Fail("INVALID_INPUT", "allow_missing_user_message does not apply to a claudecode session"))
+	case s.Claude == nil:
+		return s.refuseClaude(principal, req, nil, execution.Fail("INVALID_INPUT", "claudecode sessions are not enabled: no Claude Code adapter is running"))
+	}
+	ev, err := s.Claude.ReleaseGuard(ctx, req.SessionID, req.ExecutionID, runner.ReleaseOptions{Settle: s.Settle})
+	if err != nil {
+		return s.refuseClaude(principal, req, &ev, err)
+	}
+	s.auditClaude(principal, req, &ev, nil)
+	return Response{Outcome: "released", SessionID: req.SessionID, ExecutionID: req.ExecutionID, ClaudeEvidence: &ev}
+}
+
+func (s *Server) refuseClaude(principal string, req Request, ev *runner.ReleaseEvidence, err error) Response {
+	e := typed(err)
+	s.auditClaude(principal, req, ev, e)
+	r := Response{Outcome: "refused", Error: e}
+	if claudeSession(req.SessionID) {
+		r.SessionID = req.SessionID
+	}
+	if executionPattern.MatchString(req.ExecutionID) {
+		r.ExecutionID = req.ExecutionID
+	}
+	if ev != nil && ev.Harness != "" {
+		r.ClaudeEvidence = ev
+	}
+	return r
+}
+
+// auditClaude writes the one AUDIT-01 guard_release line of a Claude release: validated values
+// only, the harness, the child and group facts, no native-read keys, no free text.
+func (s *Server) auditClaude(principal string, req Request, ev *runner.ReleaseEvidence, e *execution.Error) {
+	outcome := "released"
+	if e != nil {
+		outcome = "refused"
+	}
+	attrs := []any{"event", "guard_release", "tool", "admin", "harness", "claudecode", "outcome", outcome, "accepted", e == nil}
+	if e != nil {
+		attrs = append(attrs, "error_code", e.Code)
+	}
+	if claudeSession(req.SessionID) {
+		attrs = append(attrs, "session_id", req.SessionID)
+	}
+	if executionPattern.MatchString(req.ExecutionID) {
+		attrs = append(attrs, "execution_id", req.ExecutionID)
+	}
+	if ev != nil && ev.Harness != "" {
+		attrs = append(attrs, "child_exited", ev.ChildExited, "group_empty", ev.GroupEmpty, "rechecked", ev.Rechecked)
+		if ev.Row != "" {
+			attrs = append(attrs, "row", ev.Row)
+		}
+		if ev.ExitClass != "" {
+			attrs = append(attrs, "exit_class", ev.ExitClass)
+		}
+		if ev.SettleMS > 0 {
+			attrs = append(attrs, "settle_ms", ev.SettleMS)
+		}
+	}
+	if ValidTicket(req.Ticket) {
+		attrs = append(attrs, "ticket", req.Ticket)
+	}
+	attrs = append(attrs, "principal", principal)
+	s.logger().Info("guard release", attrs...)
 }
 
 func nativeSession(id string) (string, bool) {

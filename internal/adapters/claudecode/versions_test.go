@@ -61,6 +61,24 @@ func TestCheckVersionsAndToolProfile(t *testing.T) {
 	if err := CheckVersions([]string{"2.1.322"}); err != nil {
 		t.Error(err)
 	}
+	for name, l := range map[string][]string{
+		"one element holding two versions": {"2.1.322,2.1.323"},
+		"comma element among others":       {"2.1.322", "2.1.323,2.1.324"},
+		"empty element":                    {"2.1.322", ""},
+		"padded element":                   {" 2.1.322"},
+		"duplicate":                        {"2.1.322", "2.1.322"},
+	} {
+		if err := CheckVersions(l); err == nil {
+			t.Errorf("%s: CheckVersions accepted %q", name, l)
+		}
+	}
+	var tooMany []string
+	for i := 0; i <= MaxVersions; i++ {
+		tooMany = append(tooMany, "2.1."+itoa(i))
+	}
+	if err := CheckVersions(tooMany); err == nil {
+		t.Error("more than MaxVersions elements accepted")
+	}
 	if err := CheckVersions([]string{"2.1.322", "2.1.*"}); err == nil {
 		t.Error("a wildcard in a Config list passes")
 	}

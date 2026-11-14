@@ -221,29 +221,33 @@ func deniedStream(plan CanaryPlan, o streamOpts) []byte {
 	return []byte(strings.Join(out, "\n") + "\n")
 }
 
-// controlStream is a FABRICATED positive control: the same Read, no deny rule, the decoy
-// content comes back in a tool_result.
-func controlStream(plan CanaryPlan, reads bool) []byte {
-	content := "nothing"
-	if reads {
-		content = plan.Marker
-	}
+// controlStream is a FABRICATED positive control: every probe's tool, aimed at the same target
+// with no deny rule, answers with the decoy. drop names probe IDs whose control returns nothing.
+func controlStream(plan CanaryPlan, drop map[string]bool) []byte {
 	lines := []string{
 		cj(map[string]any{"type": "system", "subtype": "init", "session_id": "s", "cwd": cTree, "permissionMode": "default", "apiKeySource": "none",
 			"claude_code_version": "2.1.322", "mcp_servers": []any{}, "plugins": []any{}, "tools": []any{"Read", "Glob", "Grep"}}),
-		cj(map[string]any{"type": "assistant", "session_id": "s", "message": map[string]any{"content": []any{
-			map[string]any{"type": "tool_use", "id": "toolu_c", "name": "Read", "input": map[string]any{"file_path": plan.DecoyFile}}}}}),
-		cj(map[string]any{"type": "user", "session_id": "s", "message": map[string]any{"content": []any{
-			map[string]any{"type": "tool_result", "tool_use_id": "toolu_c", "content": content}}}}),
-		cj(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": "s", "num_turns": 2, "terminal_reason": "completed", "permission_denials": []any{}}),
 	}
+	for _, p := range Probes(plan) {
+		id := "toolu_c_" + p.ID
+		result := controlNeedle(plan, p)
+		if drop[p.ID] {
+			result = "nothing"
+		}
+		lines = append(lines,
+			cj(map[string]any{"type": "assistant", "session_id": "s", "message": map[string]any{"content": []any{
+				map[string]any{"type": "tool_use", "id": id, "name": p.Tool, "input": probeInput(p)}}}}),
+			cj(map[string]any{"type": "user", "session_id": "s", "message": map[string]any{"content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": id, "content": result}}}}))
+	}
+	lines = append(lines, cj(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": "s", "num_turns": 2, "terminal_reason": "completed", "permission_denials": []any{}}))
 	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 func evaluate(form string, o streamOpts, mod func(denied, control *CanaryRun)) CanaryReport {
 	p := planFor(form)
 	d := CanaryRun{NDJSON: deniedStream(p, o), History: []byte(`{"kind":"turn_end"}`)}
-	c := CanaryRun{NDJSON: controlStream(p, true)}
+	c := CanaryRun{NDJSON: controlStream(p, nil)}
 	if mod != nil {
 		mod(&d, &c)
 	}
@@ -298,7 +302,7 @@ func TestADenialMustMatchTheProbeNotJustTheTool(t *testing.T) {
 		},
 	} {
 		stream := tweak(string(deniedStream(p, streamOpts{})))
-		rep := EvaluateCanary(p, CanaryRun{NDJSON: []byte(stream)}, CanaryRun{NDJSON: controlStream(p, true)})
+		rep := EvaluateCanary(p, CanaryRun{NDJSON: []byte(stream)}, CanaryRun{NDJSON: controlStream(p, nil)})
 		if rep.Pass {
 			t.Errorf("%s: passed", name)
 		}
@@ -306,13 +310,84 @@ func TestADenialMustMatchTheProbeNotJustTheTool(t *testing.T) {
 }
 
 func TestPositiveControlIsRequired(t *testing.T) {
-	rep := evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) { c.NDJSON = controlStream(planFor(CanaryFormA), false) })
+	rep := evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) {
+		c.NDJSON = controlStream(planFor(CanaryFormA), map[string]bool{"read-decoy": true, "read-profile": true, "grep-content": true, "grep-files": true, "glob-decoy-dir": true, "glob-profile-dir": true})
+	})
 	if rep.Pass || rep.ControlReads {
-		t.Fatalf("a control that did not read the decoy passed: %+v", rep)
+		t.Fatalf("a control that did not show the decoy passed: %+v", rep)
 	}
 	rep = evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) { c.NDJSON = nil })
 	if rep.Pass {
 		t.Fatal("a missing control passed")
+	}
+}
+
+// #253 P3-4: a Read control proves nothing about Grep or Glob; each probe has its own control,
+// so dropping any ONE of them is inconclusive and fails the slice.
+func TestEveryProbeNeedsItsOwnPositiveControl(t *testing.T) {
+	for _, pr := range Probes(planFor(CanaryFormA)) {
+		rep := evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) {
+			c.NDJSON = controlStream(planFor(CanaryFormA), map[string]bool{pr.ID: true})
+		})
+		if rep.Pass || rep.ControlReads {
+			t.Errorf("without the %s control the verdict passed", pr.ID)
+		}
+		got := 0
+		for _, pc := range rep.Controls {
+			if pc.Result == "inconclusive" {
+				got++
+				if pc.Probe.ID != pr.ID {
+					t.Errorf("%s control is inconclusive for the wrong probe %s", pr.ID, pc.Probe.ID)
+				}
+			}
+		}
+		if got != 1 {
+			t.Errorf("%s: %d inconclusive controls", pr.ID, got)
+		}
+	}
+	// only the Read control present: Grep and Glob are unproven
+	p := planFor(CanaryFormA)
+	var kept []string
+	for _, l := range strings.Split(string(controlStream(p, nil)), "\n") {
+		if strings.Contains(l, `"name":"Grep"`) || strings.Contains(l, `"name":"Glob"`) || strings.Contains(l, "toolu_c_grep") || strings.Contains(l, "toolu_c_glob") {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	rep := evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) { c.NDJSON = []byte(strings.Join(kept, "\n")) })
+	if rep.Pass {
+		t.Fatal("a control with only Read passed")
+	}
+}
+
+// #253 P3-4: Glob matching is exact, not a string prefix: a different pattern in the same
+// directory, or the pattern with a suffix, is not the probe.
+func TestGlobMatchIsExact(t *testing.T) {
+	p := planFor(CanaryFormA)
+	var glob Probe
+	for _, pr := range Probes(p) {
+		if pr.ID == "glob-decoy-dir" {
+			glob = pr
+		}
+	}
+	for name, in := range map[string]string{
+		"suffix":           `{"pattern":"` + glob.Pattern + `x"}`,
+		"deeper":           `{"pattern":"` + glob.Target + `/sub/*"}`,
+		"other dir":        `{"pattern":"/etc/*"}`,
+		"prefix of target": `{"pattern":"` + glob.Target + `-evil/*"}`,
+		"other path":       `{"pattern":"` + glob.Pattern + `","path":"/etc"}`,
+	} {
+		if probeMatches(glob, "Glob", in) {
+			t.Errorf("%s matched the probe", name)
+		}
+	}
+	for name, in := range map[string]string{
+		"exact":     `{"pattern":"` + glob.Pattern + `"}`,
+		"with path": `{"pattern":"` + glob.Pattern + `","path":"` + glob.Target + `"}`,
+	} {
+		if !probeMatches(glob, "Glob", in) {
+			t.Errorf("%s did not match", name)
+		}
 	}
 }
 
