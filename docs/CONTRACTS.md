@@ -556,12 +556,36 @@ The settle interval is a heuristic, not a native lease. Like all execution
 records, `guard_released_at` is process-local. Token rotation (ADR-019) still
 needs a restart. Live acceptance (ADR-020 §4) is not yet recorded.
 
-## ADR-021 Claude Code harness contract (defined, NOT served)
+## ADR-021 Claude Code harness contract (served only when enabled; default off)
 
-Accepted ADR-021 (D12/D14). Nothing here is reachable: the adapter is unwired, a `claudecode:`
-session ID is refused with `INVALID_INPUT` "not enabled" for every tool, and no Claude
-capabilities block is returned. This section is the contract the wiring slice must serve.
-Tool names, input fields and output fields of the eleven tools do not change.
+Accepted ADR-021 (D12/D14), wired by the wiring slice **behind one explicit operator
+configuration**. With no `BRIDGE_CLAUDE_COMMAND` (the default) nothing here is served: a
+`claudecode:` session ID is refused `INVALID_INPUT` "not enabled" for every tool, the 11-tool set,
+every OpenCode response and every OpenCode audit line are byte-identical to a build without the
+adapter, and `bridge admin release-guard` refuses `claudecode:` IDs. With it, the Bridge builds the
+adapter at startup or refuses to start (no partial enablement; see "Enabling" below). A read-only
+ingress never enables it. Tool names, input fields and output fields of the eleven tools do not
+change.
+
+**Enabling.** `BRIDGE_CLAUDE_COMMAND` (absolute path of the root-owned wrapper) turns the adapter on and
+then requires `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600), `BRIDGE_CLAUDE_VERSIONS` (exact
+`claude_code_version` list, no default), `BRIDGE_CLAUDE_HISTORY_DIR`, `BRIDGE_CLAUDE_HOME` (the Claude
+service user's HOME for the child), `BRIDGE_CLAUDE_MODEL` and the existing `BRIDGE_WRITER_LOCK_DIR`;
+optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS` (1..1000, default 20),
+`BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX` (1s..24h, default 15m). Every `claudecode:` session
+must be in the allowlist file **and** in `BRIDGE_ALLOWED_SESSIONS`. Any other `BRIDGE_CLAUDE_*` value without
+the command, or an unusable value with it, stops the start with an error. The writer lock of a
+`claudecode:` session is taken once, by the adapter; the OpenCode writer takes only the other IDs.
+
+**Routing (exact ID only, no discovery beyond the allowlist).** `list_sessions` and `find_sessions` list the
+allowlisted, ACL-authorized Claude sessions with the OpenCode ones (sorted by session ID; a Claude session
+carries no repository, workspace or parent, so those filters never match it); `get_session`,
+`read_session_history`, `send_prompt` and `get_harness_capabilities` take a `claudecode:` ID;
+`get_execution_status`, `get_execution_result` and `interrupt_execution` route by execution ownership. An ID
+outside the allowlist is `NOT_FOUND` (no child is started), outside the ACL `FORBIDDEN`. `list_catalog`
+(ADR-022) still omits Claude sessions. `get_session` state: `running` while a child runs, `unknown` while an
+unknown or unreaped execution holds the guard, otherwise `idle` (only "the Bridge holds no guard and runs
+no child"; weaker than OpenCode's `idle`).
 
 - **Session ID.** `claudecode:<lowercase 8-4-4-4-12 hex UUID>` in the same `session_id` field
   (an `anyOf` of the two patterns, see "Input JSON Schema"). Claude sessions are advertised to
@@ -571,18 +595,22 @@ Tool names, input fields and output fields of the eleven tools do not change.
   label, `directory` = the root, `state` per ADR-021 §6.
 - **Execution fields.** `session_id` is `claudecode:<uuid>`; `message_id` is the Bridge's own
   opaque execution-scoped ID (the CLI exposes no user message ID); additive optional
-  `permission_denials`, `liveness`, `child_unconfirmed` (rows 0, 9, 6a, 6b only, see
+  `permission_denials`, `liveness` (not served yet), `child_unconfirmed` (rows 0, 9, 6a, 6b only, see
   `unresolved.reason` above), `cost_usd_reported` (informational, never used for correctness)
-  and `exit` (`class` only: `zero`, `nonzero`, `signal`, `unknown`, `none`).
+  and `exit` (`class` only: `zero`, `nonzero`, `signal`, `unknown`). `permission_denials` is a list of
+  `{tool_name, input}` (a bounded, redacted summary). **`liveness` is defined but not served yet.**
 - **Unresolved reasons.** Existing: `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`,
   `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH`, `MANAGER_CLOSED`. Additive for this harness:
   `EXIT_UNCONFIRMED`, `PROCESS_ENDED_WITHOUT_RESULT`, `UNKNOWN_OUTCOME` (no named reason).
 - **Errors.** Unchanged enum. A history store or size refusal is `UPSTREAM_FAILURE`
   (`retryable: false`); there is no `INTERNAL`. A child-capacity refusal is `SESSION_BUSY` with
   `retryable: true` (its code stays a planner decision at wiring).
-- **`read_session_history`.** Bridge-normalized messages with `source: "bridge_record"`,
-  `history_complete`, `first_recorded_at`, `history_truncated`; the 8 MiB response bound is
-  unchanged. History exists only for turns the Bridge ran (ADR-021 §5).
+- **`read_session_history`.** Bridge-normalized messages (each record becomes one message whose `role` is
+  `user` for a turn start, `assistant` for an assistant block, `tool` for a tool result and `system` for the
+  rest, with one part: the record's API projection) plus the additive `source: "bridge_record"`,
+  `history_complete`, `first_recorded_at`, `history_truncated`; `limit` returns the newest N, a `before`
+  cursor is refused `INVALID_INPUT`; the 8 MiB response bound is unchanged. History exists only for turns the
+  Bridge ran (ADR-021 §5). `get_execution_result` returns the execution and its own turn's messages.
 - **`get_harness_capabilities` (ADR-012) block for Claude.** `harness: "claudecode"`,
   `version` (the version last seen in `init`), `capabilities` (the init tool list, verbatim,
   informational) and Bridge facts, each "declared by the Bridge", not probed from the CLI:
@@ -594,7 +622,10 @@ Tool names, input fields and output fields of the eleven tools do not change.
   execution is `unknown` with `child_unconfirmed`; there is no SIGKILL, ever (removing a stuck
   process is an operator action).
 - **Guard release.** Operator-only, through the admin channel (ADR-020 extension above). There is
-  no automatic release for an `unknown` Claude execution.
+  no automatic release for an `unknown` Claude execution. A **known wrapper exit does not free the guard
+  while the child's process group still has a member** (the CLI behind `sudo` may still run): the run
+  is `unknown` (row 6a with a result, row 10 without) and the operator release requires an empty group.
+  An empty group does not prove that a `setsid`/detached descendant is gone.
 - **Audit.** AUDIT-01 gains optional keys only (`harness`, `interrupt_reasons`,
   `late_lines_after_verdict`, `late_result_seen`, and the Claude release keys above); never
   prompt text, keys, tool input or line content.

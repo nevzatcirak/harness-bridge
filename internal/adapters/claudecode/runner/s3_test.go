@@ -841,3 +841,38 @@ func TestAnEscalationStepAfterTheReapIsANoOp(t *testing.T) {
 		t.Fatalf("a late escalation step changed the verdict: %+v -> %+v", v, got)
 	}
 }
+
+// ADR-021 §9: the additive Claude fields of the execution view are filled from the machine,
+// after every step (child_unconfirmed can appear after the verdict was decided).
+func TestExecutionViewCarriesTheClaudeFields(t *testing.T) {
+	h := newHarness(t, s3)
+	x := h.mustSend(1, "p", "key-view-0000001")
+	c := h.next(1)
+	c.emit(h.initLine(1))
+	c.emit(h.resultLine(1, map[string]any{"total_cost_usd": 0.25, "permission_denials": []any{map[string]any{"tool_name": "Write", "tool_use_id": "t1", "tool_input": map[string]any{"file_path": "/x"}}}}))
+	c.finish(Exit{Code: 0})
+	x = h.wait(x.ID)
+	if x.State != "completed" || x.ChildUnconfirmed || x.CostUSDReported != 0.25 || x.Exit == nil || x.Exit.Class != "zero" ||
+		len(x.PermissionDenials) != 1 || x.PermissionDenials[0].ToolName != "Write" || !strings.Contains(x.PermissionDenials[0].Input, "/x") {
+		t.Fatalf("completed view %+v", x)
+	}
+	// a latched row whose escalation is exhausted gains child_unconfirmed after the verdict
+	h2 := newHarness(t, s3)
+	h2.sp.tweak = func(c *fakeChild) { c.ignoreIn, c.ignoreTerm = true, true }
+	y := h2.mustSend(1, "p", "key-view-0000002")
+	c2 := h2.next(1)
+	c2.emit(h2.initLine(1))
+	if _, err := h2.ex.Interrupt(y.ID); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "child_unconfirmed in the view", func() bool { v, _ := h2.ex.Get(y.ID); return v.ChildUnconfirmed })
+	v, _ := h2.ex.Get(y.ID)
+	if v.State != "unknown" || v.Unresolved == nil || v.Unresolved.Reason != "ABORT_UNCONFIRMED" {
+		t.Fatalf("unknown view %+v", v)
+	}
+	c2.finish(Exit{Code: 137, Signal: "killed"})
+	h2.wait(y.ID)
+	if v, _ = h2.ex.Get(y.ID); v.Exit == nil || v.Exit.Class != "signal" || !v.ChildUnconfirmed {
+		t.Fatalf("after the operator removed the child: %+v", v)
+	}
+}

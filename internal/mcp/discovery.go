@@ -38,6 +38,8 @@ type Capabilities struct {
 	BridgeSessionCreation  bool     `json:"bridge_session_creation"`
 	Evidence               string   `json:"evidence"`
 	Guidance               string   `json:"guidance"`
+	// ClaudeCode is the ADR-021 §9 block, present only for a claudecode: session.
+	ClaudeCode *ClaudeCapabilities `json:"claudecode,omitempty"`
 }
 
 // directoryEvidence is request-local. Sharing it never claims an atomic native snapshot.
@@ -240,6 +242,9 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	for _, d := range all {
 		out = append(out, d.view)
 	}
+	if s.Claude != nil {
+		out = s.mergeClaude(out)
+	}
 	return out, nil
 }
 
@@ -352,6 +357,9 @@ func (s *Server) discoverNative(ctx context.Context) ([]discovered, error) {
 }
 func (s *Server) discoveryCall(ctx context.Context, name string, a args) (any, error) {
 	if name == "get_harness_capabilities" {
+		if cid, ok := s.claudeID(a.SessionID); ok {
+			return s.claudeCapabilities(cid)
+		}
 		id, e := native(a.SessionID)
 		if e != nil {
 			return nil, e

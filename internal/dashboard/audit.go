@@ -39,6 +39,10 @@ var auditAttrs = map[string]bool{
 	"session_id": true, "execution_id": true, "idem": true, "principal": true,
 	"native_state": true, "unfinished": true, "permission_pending": true, "correlated_user": true,
 	"settle_ms": true, "allow_missing_user_message": true, "ticket": true,
+	// ADR-021 slice 4/wiring: the Claude Code guard_release and mutation keys
+	// (internal/admin/admin.go auditClaude, internal/mcp/audit.go harness). Enum, boolean
+	// and short-token values only; never stream content.
+	"harness": true, "child_exited": true, "group_empty": true, "rechecked": true, "row": true, "exit_class": true,
 }
 
 // AuditAttr is one kept attribute, in the order the writer logged it.

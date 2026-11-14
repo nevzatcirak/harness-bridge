@@ -28,30 +28,17 @@ import (
 // channel, behind its peer-UID check and a ticket, and it is unreachable until the Executor
 // is constructed in production (it is not).
 
-// DefaultReleaseSettle is the interval between the check and the re-check.
-const DefaultReleaseSettle = 5 * time.Second
+// DefaultReleaseSettle, ReleaseOptions and ReleaseEvidence live in the pure core
+// (package claudecode) so the admin channel can use them without linking this package.
+const DefaultReleaseSettle = claudecode.DefaultReleaseSettle
 
 var releaseExecutionPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// ReleaseOptions are the operator's choices for one release.
-type ReleaseOptions struct {
-	// Settle is the interval between the check and the re-check; <= 0 means
-	// DefaultReleaseSettle.
-	Settle time.Duration
-}
-
-// ReleaseEvidence is what the release observed. There is never a native read.
-type ReleaseEvidence struct {
-	Harness         string     `json:"harness"`
-	NativeRead      bool       `json:"native_read"`
-	Row             string     `json:"row,omitempty"`
-	ExitClass       string     `json:"exit_class,omitempty"`
-	ChildExited     bool       `json:"child_exited"`
-	GroupEmpty      bool       `json:"group_empty"`
-	Rechecked       bool       `json:"rechecked"`
-	SettleMS        int64      `json:"settle_ms,omitempty"`
-	GuardReleasedAt *time.Time `json:"guard_released_at,omitempty"`
-}
+// ReleaseOptions and ReleaseEvidence are the claudecode types.
+type (
+	ReleaseOptions  = claudecode.ReleaseOptions
+	ReleaseEvidence = claudecode.ReleaseEvidence
+)
 
 type releaseFacts struct {
 	r      *run
@@ -77,7 +64,7 @@ func (e *Executor) ReleaseGuard(ctx context.Context, session, executionID string
 		return ev, execution.Fail("UNKNOWN_OUTCOME", "manager closed")
 	}
 	f, err := e.releaseCheck(session, executionID)
-	ev.record(f)
+	recordFacts(&ev, f)
 	if err != nil {
 		return ev, err
 	}
@@ -94,11 +81,11 @@ func (e *Executor) ReleaseGuard(ctx context.Context, session, executionID string
 	// The re-check and the commit are one critical section: run.mu, then Executor.mu.
 	f2, err := e.releaseCommit(session, executionID, &ev)
 	ev.Rechecked = true
-	ev.record(f2)
+	recordFacts(&ev, f2)
 	return ev, err
 }
 
-func (ev *ReleaseEvidence) record(f releaseFacts) {
+func recordFacts(ev *ReleaseEvidence, f releaseFacts) {
 	ev.Row, ev.ExitClass, ev.ChildExited, ev.GroupEmpty = f.row, f.exit, f.exited, f.empty
 }
 
