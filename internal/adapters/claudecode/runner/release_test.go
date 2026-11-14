@@ -63,8 +63,17 @@ func TestReleaseAfterAConfirmedExitFreesTheGuard(t *testing.T) {
 		t.Fatalf("the release sent %d signals", n-before)
 	}
 	// the session is free again: a new execution is admitted and starts a child
-	h.mustSend(1, "again", "key-rel-00000002")
+	b := h.mustSend(1, "again", "key-rel-00000002")
 	until(t, "the second child", func() bool { return h.sp.count() == 2 })
+	// The released execution is still unknown, ended and reaped, but the guard is B's now: a
+	// second release of the OLD execution must not free B's guard (compare-and-swap).
+	if _, err := h.release(1, id); errCode(err) != "INVALID_INPUT" || !h.guardHeld(1) {
+		t.Fatalf("a repeated release of the old execution: %v (guard held %v)", err, h.guardHeld(1))
+	}
+	if held, _ := h.ex.SessionGuard(h.sid(1)); !held {
+		t.Fatal("the new execution lost its guard")
+	}
+	_ = b
 }
 
 // Refused while the child is live (row 9, SIGINT ignored): SESSION_BUSY, guard kept.
