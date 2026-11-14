@@ -179,7 +179,7 @@ writer; independent processes do not share execution/idempotency state.
 Same session/key with a different prompt returns `IDEMPOTENCY_CONFLICT`,
 `retryable:false` (previously INVALID_INPUT). Identical concurrent requests wait
 through admission and return the same execution/message IDs once accepted.
-Different keys on an active/uncertain session return SESSION_BUSY. Preflight
+Different keys on an active/uncertain session return SESSION_BUSY (for a `claudecode:` execution, ADR-021, unwired, a refusal for child capacity is also `SESSION_BUSY` with `retryable: true`; its code is a planner decision at wiring). Preflight
 rejection is not acceptance; it may be retried after resolving native state.
 All seven tool shapes remain unchanged. Caller cancellation while waiting for
 admission does not cancel an independently accepted execution. Explicit
@@ -258,7 +258,7 @@ Optional additive `Execution` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `unresolved.reason` | `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`, `OBSERVATION_UNAVAILABLE`, `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH` or `MANAGER_CLOSED` |
+| `unresolved.reason` | `MONITOR_EXPIRED`, `SUBMISSION_UNCONFIRMED`, `OBSERVATION_UNAVAILABLE`, `ABORT_UNCONFIRMED`, `IDENTITY_MISMATCH` or `MANAGER_CLOSED`. For a `claudecode:` execution (ADR-021 §3, unwired) three more additive values: `EXIT_UNCONFIRMED` (a result was seen but the child did not exit or its exit could not be confirmed), `PROCESS_ENDED_WITHOUT_RESULT` and `UNKNOWN_OUTCOME` (no named reason: rows 7, 8, 10). A `child_unconfirmed` flag accompanies an `unknown` verdict whose child could not be confirmed gone. |
 | `unresolved.since` | UTC time the currently retained uncertainty cause began |
 | `unresolved.last_checked_at` | Most recent on-demand evidence attempt, including inconclusive/unavailable reads |
 | `monitor_ended_at` | UTC time the bounded background worker exited; never native completion proof |

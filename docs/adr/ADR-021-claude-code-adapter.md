@@ -982,13 +982,14 @@ MCP schemas; allowlist file loading (§6).
   nothing in `cmd/bridge` or the MCP dispatch calls it: the adapter is unwired and
   `claudecode:` IDs are refused at execution with `INVALID_INPUT` ("not enabled"). Choices
   made inside the existing code set: a child-cap refusal is `SESSION_BUSY` with
-  `retryable: true`; a history size refusal is `INTERNAL`; an `unknown` verdict without
+  `retryable: true`; a history size refusal was `INTERNAL` (**superseded in slice 3: `UPSTREAM_FAILURE`, see
+  "As built (slice 3)"**); an `unknown` verdict without
   a named reason (rows 7, 8, 10) is reported with the existing reason `UNKNOWN_OUTCOME`.
   **The runner sends nothing but `SIGINT`, to the child's process group.** There is no
   SIGKILL (ADR-021 §4: "Never SIGKILL of the `sudo` parent"; removing a stuck process is an
-  operator action), no SIGTERM and no timer-driven escalation: those, with
-  `interrupt_execution`, the `StepEscalationExhausted` path and init-verification wiring,
-  are slice 3. A child that ignores SIGINT keeps its run, its session guard and its child
+  operator action), no SIGTERM and no timer-driven escalation in slice 2 (the escalation, with
+  `interrupt_execution` and the `StepEscalationExhausted` path, is slice 3, see "As built
+  (slice 3)"; the §3 init verification was already fed through the runner by the machine). A child that ignores SIGINT keeps its run, its session guard and its child
   slot until it exits; `Close` interrupts every live child, waits up to `CloseWait`
   (default 15 s) and then **abandons** the wait, returning the IDs of the abandoned
   executions for the caller to log; their guards stay held (memory-only, so a restart
@@ -1012,8 +1013,79 @@ MCP schemas; allowlist file loading (§6).
   in S2); the flag closes it for every signal sent after a **confirmed** `Wait`, and a
   `Wait` bounded by `WaitDelay` (a descendant holding stderr) or otherwise unknown leaves
   the group signalable; (c) the
-  allowlist file `null` parses as an empty allowlist (no session is usable) instead of
-  being refused.
+  allowlist file `null` parsed as an empty allowlist (no session is usable) instead of
+  being refused (**fixed in slice 3**).
+
+- **As built (slice 3, code part; the live acceptance is operator-run and NOT_EXERCISED).**
+  Still unwired: `claudecode:` IDs are refused "not enabled", nothing in `cmd/bridge`, the
+  manager or the MCP dispatch calls the `Executor`, and `interrupt_execution` support exists
+  inside `runner.Executor.Interrupt` only (authorization and the MCP exposure are the wiring
+  slice).
+  - **Escalation (§4).** Every Bridge-sent interrupt (`user`, `cap`, `grace`, `shutdown`,
+    `latch`, and the interrupt of a child whose prompt was not delivered) starts one
+    escalation per run: SIGINT to the child's process group, `IntWait` (default 10 s), SIGTERM
+    to the group if the child has not been reaped, `TermWait` (default 5 s), then the runner
+    stops signalling and feeds `StepEscalationExhausted` (row 6b for a `user` interrupt;
+    `child_unconfirmed` on a latched row; nothing for a run decided without a latch). A second
+    interrupt during an escalation does not restart it. **There is no SIGKILL**: the runner's
+    `Signal` type has two values (`SigInt`, `SigTerm`), `execChild.Signal` refuses any other
+    value on a live child, and the no-exec selector allowlist admits `syscall.SIGINT` and
+    `syscall.SIGTERM` only (a test refuses `SIGKILL`, `SIGQUIT`, `SIGHUP`, `SIGSTOP`). An
+    unknown `Wait` is not a reap and sends no signal. An acknowledged `user` interrupt
+    (`aborted_*` result, child exits) is never escalated.
+  - **`Executor.Interrupt(id)`** feeds `StepUserInterrupt` and starts the escalation; it returns
+    the execution as it was at request time and does nothing to a run that already has a
+    verdict (a latched run was interrupted by its own row; a later `user` interrupt cannot make
+    a late `aborted_*` result row 5).
+  - **`Close`** also escalates (shutdown reason) and is now idempotent: only the first call
+    interrupts and waits `CloseWait`; a repeated call returns at once with the executions still
+    unreaped (review #239 P3-2, #242 P3-3).
+  - **Argv (§8.3 item 2).** The pinned argv is now
+    `-p --resume <uuid> --output-format stream-json --verbose --model <m> --permission-mode default
+    --permission-prompts none --setting-sources user --strict-mcp-config --settings <json>
+    --tools <profile> --disallowedTools mcp__* --max-turns <N> [--max-budget-usd <X>]` (23 or 25
+    elements). The inline settings are one canonical JSON document: `disableAllHooks`, the root's
+    `CLAUDE.md`/`CLAUDE.local.md` exclusions (the glob semantics stay UNVERIFIED), and
+    `Read`/`Glob`/`Grep` deny rules on `~/.claude/**` and `~/.config/anthropic/**` (plus the
+    test-only `CLAUDE_CONFIG_DIR` rule). `CheckArgv` accepts exactly that rendering for some root
+    and nothing else; dropping a flag or a deny rule fails it. The rule syntax and `~` expansion
+    are UNVERIFIED until the live canary; the deny rules must also be present in the managed file
+    (§8.3 item 6).
+  - **`BRIDGE_CLAUDE_VERSIONS` (§8.5, D14 Q7).** `ParseVersions` accepts a comma-separated list of
+    exact `MAJOR.MINOR.PATCH` strings only (no wildcard, range, prefix, pre-release, whitespace,
+    duplicate or empty entry; at most 16). There is no default: an empty value is
+    `ErrNoVersions` and `runner.New` refuses an empty list, so the adapter cannot start until a
+    version has been validated by the live acceptance. `New` also refuses a tool profile outside
+    `{Read, Glob, Grep}`. Reading the environment variable is wiring.
+  - **Credential canary (code only).** `claudecode/canary.go` is the pre-flight (UID, HOME in the
+    tree in both forms, config dir, decoy paths: `Lstat`/`EvalSymlinks` only, no file is opened,
+    the real login names are refused), the closed probe set (`Read` of the decoy file and of the
+    decoy profile, `Grep` in both output modes, `Glob` of both decoy directories), the operator
+    prompts (decoy paths only) and the verdict (`EvaluateCanary`): a probe passes only with a
+    `tool_use` event aimed at its target **and** a matching `permission_denials` entry; the
+    positive control must read the decoy; the marker must not appear in the denied stream or
+    history; no canary file; no sink request; `init.mcp_servers` empty and `apiKeySource` `none`.
+    Committed evidence is verdict lines only (`CanaryReport.Lines`). Its unit tests use
+    FABRICATED streams. **It was not run**: with D14 Q10 there is no allowed authenticated run,
+    so the live canary is NOT_EXERCISED and slice 3 cannot ship (paragraph below; Q10 is not
+    reopened or answered here).
+  - **Review carry-overs.** Error and reason vocabulary (#236 P3-5): a history store or size
+    refusal is `UPSTREAM_FAILURE` (the CONTRACTS enum has no `INTERNAL`); the Claude-only
+    `unresolved.reason` values `EXIT_UNCONFIRMED`, `PROCESS_ENDED_WITHOUT_RESULT` and the
+    fallback `UNKNOWN_OUTCOME`, and a child-cap refusal as `SESSION_BUSY` `retryable: true`, are
+    recorded in CONTRACTS as additive deltas (the cap code remains a planner decision at wiring).
+    Allowlist decoding (#236 P3-6) is strict: top level array (never `null`), keys exactly
+    `session_id`/`root`/`label` in that spelling, no duplicate key; `insideAny` stays lexical
+    (the canonical root check is at admission). The drain after a broken stream is bounded by
+    `DrainMax` (default 64 MiB), after which the runner stops reading; the cap, the exit grace
+    and the escalation still end a child that then blocks on a full pipe. Not here (wiring slice):
+    the double writer lock (#236 P3-4) and the wrapper-side descendant check (#242 residual: the
+    wrapper exits with a known status while the CLI behind `sudo` keeps running).
+  - **Live acceptance still open (operator-run, NOT_EXERCISED):** the hostile-root test with the
+    credential canary, the result-to-exit lag measurement (validates or replaces the 10 s grace),
+    the post-`result` stream capture, `sudo` relay of SIGINT and SIGTERM with a live tool call,
+    `--safe-mode` versus item 2, managed settings applied in `-p`, live prompt-from-stdin,
+    SIGPIPE on Bridge death. See `internal/adapters/claudecode/ACCEPTANCE_S3.md`.
 
 **Consequence of D14 Q10, recorded here and NOT decided (reviews #219 P3-4, #224 P3-2).**
 D14 Q10 settled that there is no test account and that the real-login probe is

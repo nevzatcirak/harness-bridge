@@ -73,23 +73,26 @@ func (c *execChild) WriteStdin(p []byte) (int, error) { return c.stdin.Write(p) 
 
 func (c *execChild) CloseStdin() error { return c.stdin.Close() }
 
-// Signal sends sig to the child's process group. After Wait returned it does
-// nothing (the group id could have been reused).
+// Signal sends sig (SigInt or SigTerm, nothing else) to the child's process group. After a
+// confirmed reap it refuses (the group id could have been reused).
 func (c *execChild) Signal(sig Signal) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.done || c.cmd.Process == nil {
 		return errors.New("runner: the child was already reaped")
 	}
-	if sig != SigInt {
-		return errors.New("runner: only SIGINT is ever sent (ADR-021 §4 forbids killing the wrapper)")
+	switch sig {
+	case SigInt:
+		return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGINT)
+	case SigTerm:
+		return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM)
 	}
-	return syscall.Kill(-c.cmd.Process.Pid, syscall.SIGINT)
+	return errors.New("runner: only SIGINT and SIGTERM are ever sent (ADR-021 §4 forbids killing the wrapper)")
 }
 
 // markReaped records a confirmed reap: only then is a signal to the group refused. An
-// unknown Wait result leaves the child signalable, so the runner's SIGKILL can still
-// reach it.
+// unknown Wait result leaves the child signalable, so a later escalation step can still
+// reach it (the runner never sends anything stronger than SIGTERM).
 func (c *execChild) markReaped() {
 	c.mu.Lock()
 	c.done = true

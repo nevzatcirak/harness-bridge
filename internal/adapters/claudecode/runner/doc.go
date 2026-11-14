@@ -8,7 +8,9 @@
 // tested: os/exec is imported by exactly one file, spawn_linux.go; the pure core
 // imports nothing from this package or from the module.
 //
-// Slice 2 is NOT live and is not wired into cmd/bridge or the MCP dispatch. Not
-// here (slice 3): init verification wiring from BRIDGE_CLAUDE_VERSIONS, the
-// interrupt_execution escalation (SIGINT, SIGTERM), the hardening flags.
+// Slice 3 added the SIGINT, bounded wait, SIGTERM, bounded wait escalation (never a
+// SIGKILL: ADR-021 section 4), Executor.Interrupt, the hardening argv and the version
+// and tool-profile checks. The adapter is NOT live and is not wired into cmd/bridge or
+// the MCP dispatch: exposing interrupt_execution, reading BRIDGE_CLAUDE_VERSIONS from the
+// environment and the double writer lock are the wiring slice.
 package runner
