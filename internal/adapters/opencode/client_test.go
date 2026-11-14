@@ -222,3 +222,40 @@ func TestUnfinishedAssistant(t *testing.T) {
 		}
 	}
 }
+
+// ADR-022 S3: the native time and metadata are kept raw and read tolerantly, so an
+// unexpected shape never fails a session read (and with it every discovery).
+func TestSessionTimeAndMetadataAreTolerant(t *testing.T) {
+	var s Session
+	if err := json.Unmarshal([]byte(`{"id":"ses_a","time":{"created":1767225600000,"updated":1768003200000},"metadata":{"hb_origin":"bridge"}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.UpdatedAt()
+	if !ok || !got.Equal(time.UnixMilli(1768003200000)) || got.Location() != time.UTC || !s.CreatedByBridge() {
+		t.Fatalf("%v %v %v", got, ok, s.CreatedByBridge())
+	}
+	for name, body := range map[string]string{
+		"no time":        `{"id":"ses_a"}`,
+		"time string":    `{"id":"ses_a","time":"yesterday","metadata":"x"}`,
+		"time array":     `{"id":"ses_a","time":[1],"metadata":[1,2]}`,
+		"updated string": `{"id":"ses_a","time":{"updated":"2026"}}`,
+		"updated zero":   `{"id":"ses_a","time":{"updated":0}}`,
+		"updated neg":    `{"id":"ses_a","time":{"updated":-5}}`,
+		"updated huge":   `{"id":"ses_a","time":{"updated":1e30}}`,
+		"updated null":   `{"id":"ses_a","time":{"updated":null},"metadata":null}`,
+		"origin number":  `{"id":"ses_a","metadata":{"hb_origin":7}}`,
+		"origin other":   `{"id":"ses_a","metadata":{"hb_origin":"Bridge"}}`,
+	} {
+		var v Session
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			t.Errorf("%s: a session with an unexpected shape failed to decode: %v", name, err)
+			continue
+		}
+		if _, ok := v.UpdatedAt(); ok {
+			t.Errorf("%s: an update time was invented", name)
+		}
+		if v.CreatedByBridge() {
+			t.Errorf("%s: a provenance label was invented", name)
+		}
+	}
+}
