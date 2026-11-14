@@ -674,3 +674,45 @@ in short form with the answer.
   ancestors must not be replaceable by agent users). The TCP transport accepts
   only `127.0.0.1` and `::1`, the two literals on the Host allowlist.
 - Browser compatibility, mobile layout and accessibility were not tested.
+
+## As built (slice 5a, 2026-11-15)
+
+Facts only. The production `Source` for OpenCode sessions, its wiring, the operator redaction
+configuration and the Host/Origin hardening are implemented; the live acceptance (R-DASH) is
+**NOT_EXERCISED**.
+
+- **Source** (`internal/mcp/dashsource.go`, `(*Server).DashboardSource`). It lives in `internal/mcp`
+  so that the list equals `list_sessions`: it runs the same `discoverNative` pipeline over a derived
+  server whose ACL copy omits `claudecode:` IDs (own two discovery slots; the derived server is
+  `ReadOnly` and shares the client and the manager). Rows: the OpenCode sessions in `list_sessions`
+  order (sorted by native ID), then one pending row per `claudecode:` ACL entry (harness
+  `claudecode`, state `unknown`, no title or root); the detail page shows the documented "ADR-021
+  pending" text and its turn/diff methods answer `ErrNotFound`. A `claudecode:` ID never reaches
+  the native client.
+- **Detail** uses `authorized` + `describe` (the `get_session` path) and the manager's
+  `DashboardSnapshot` for guard, executions (newest first) and the current execution (newest
+  non-terminal; `unknown` counts as non-terminal). `FORBIDDEN`, `NOT_FOUND` and `INVALID_INPUT`
+  from native map to `ErrNotFound`; every other error is "unavailable". An ID outside the ACL is
+  refused before any native call. Last activity is the native `time.updated` when it is a usable
+  value, else absent.
+- **Turns and diffs**: `Client.History` (8 MiB client bound) lists the user messages with
+  `MessageInfo.DiffState`; the newest 1000 turns are returned. `Client.SessionDiff` reads one turn;
+  `Client.VCSDiff(mode=git)` reads the working tree through the directory-scoped client of the
+  session. No new native endpoint, no Bridge-side git, no mutating call.
+- **Archive**: `DashboardSource` takes an optional `ArchiveOverlay` (nil in production, so nothing is
+  hidden; no overlay exists yet).
+- **Wiring** (`cmd/bridge/dashboard.go`): the source factory is called only when the dashboard is
+  enabled. A disabled dashboard builds no source, opens no listener and starts no goroutine.
+- **Operator redaction (D17 Q5)**: `BRIDGE_DASHBOARD_REDACT_EXTRA`, a JSON array of up to 16 RE2
+  patterns of 1 to 256 bytes, **additive** to the shipped list (which is on with no configuration).
+  A value that does not parse or compile is a startup error; errors and logs never contain the
+  value. This env name is a slice-5a proposal, not an ADR decision; it is easy to rename.
+- **Origin**: a request with an `Origin` header is refused (403) unless its host is on the TCP Host
+  allowlist; on the unix socket (no allowlist) any `Origin` is refused. Requests without `Origin`
+  (curl, same-origin GET) are unaffected. Host checks, method limits and timeouts are the slice 1 to
+  4 ones.
+- **Not in slice 5a**: lifecycle-root rows (D17 Q6, after ADR-022 S5), an archive overlay, Claude Code
+  history and diffs (ADR-021 pending), `list_catalog`-equivalent filters, documentation of the
+  dashboard variables in `docs/CONTRACTS.md` and the deployment docs, and R-DASH (operator-present
+  live acceptance against the real native and a browser). The native response shapes remain
+  UNVERIFIED against a live server.

@@ -10,13 +10,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
 )
 
 func TestOpenDashboardDisabledByDefault(t *testing.T) {
-	srv, err := openDashboard(func(string) string { return "" })
+	srv, err := openDashboard(func(string) string { return "" }, nil)
 	if err != nil || srv != nil {
 		t.Fatalf("no dashboard configuration must start nothing: srv=%v err=%v", srv, err)
 	}
@@ -30,7 +33,7 @@ func TestOpenDashboardRefusesBadConfiguration(t *testing.T) {
 		"name":      {"BRIDGE_DASHBOARD_ADDR": "localhost:8080"},
 		"both":      {"BRIDGE_DASHBOARD_ADDR": "127.0.0.1:0", "BRIDGE_DASHBOARD_SOCKET": "/run/x/d.sock"},
 	} {
-		srv, err := openDashboard(func(k string) string { return env[k] })
+		srv, err := openDashboard(func(k string) string { return env[k] }, nil)
 		if err == nil || srv != nil {
 			t.Errorf("%s: want a startup error, got srv=%v err=%v", name, srv, err)
 		}
@@ -48,7 +51,7 @@ func TestOpenDashboardOnA0700Socket(t *testing.T) {
 			return sock
 		}
 		return ""
-	})
+	}, nil)
 	if err != nil || srv == nil {
 		t.Fatalf("openDashboard: %v", err)
 	}
@@ -73,7 +76,7 @@ func withLogState(t *testing.T) *bytes.Buffer {
 func TestAuditTeeIsNotInstalledWhenTheDashboardIsOff(t *testing.T) {
 	withLogState(t)
 	before := slog.Default()
-	if srv, err := openDashboard(func(string) string { return "" }); err != nil || srv != nil {
+	if srv, err := openDashboard(func(string) string { return "" }, nil); err != nil || srv != nil {
 		t.Fatalf("%v %v", srv, err)
 	}
 	if slog.Default() != before {
@@ -85,7 +88,7 @@ func TestAuditTeeIsNotInstalledWhenTheDashboardIsOff(t *testing.T) {
 			return "0.0.0.0:8080"
 		}
 		return ""
-	}); err == nil {
+	}, nil); err == nil {
 		t.Fatal("a wildcard address was accepted")
 	}
 	if slog.Default() != before {
@@ -106,7 +109,7 @@ func TestAuditTeeFeedsTheDashboardAndShutdownRestoresTheLogger(t *testing.T) {
 			return sock
 		}
 		return ""
-	})
+	}, nil)
 	if err != nil || srv == nil {
 		t.Fatalf("openDashboard: %v", err)
 	}
@@ -149,5 +152,71 @@ func TestAuditTeeFeedsTheDashboardAndShutdownRestoresTheLogger(t *testing.T) {
 	}
 	if slog.Default() != before {
 		t.Fatal("Shutdown did not put the original logger back")
+	}
+}
+
+// A disabled dashboard builds no source, starts no goroutine and makes no native request.
+func TestDisabledDashboardNeverBuildsTheSource(t *testing.T) {
+	built := 0
+	before := runtime.NumGoroutine()
+	srv, err := openDashboard(func(string) string { return "" }, func() dashboard.Source { built++; return dashboard.NullSource{} })
+	if err != nil || srv != nil || built != 0 {
+		t.Fatalf("srv %v err %v built %d", srv, err, built)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("goroutines %d -> %d", before, after)
+	}
+}
+
+// An enabled dashboard builds the source exactly once.
+func TestEnabledDashboardBuildsTheSourceOnce(t *testing.T) {
+	built := 0
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := openDashboard(func(k string) string {
+		if k == "BRIDGE_DASHBOARD_SOCKET" {
+			return filepath.Join(dir, "d.sock")
+		}
+		return ""
+	}, func() dashboard.Source { built++; return dashboard.NullSource{} })
+	if err != nil || srv == nil {
+		t.Fatalf("%v %v", srv, err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	if built != 1 {
+		t.Fatalf("built %d", built)
+	}
+}
+
+// An invalid operator redaction pattern is a startup error that opens no listener and
+// does not log the pattern.
+func TestInvalidRedactionPatternFailsClosedWithoutLogging(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "d.sock")
+	srv, err := openDashboard(func(k string) string {
+		switch k {
+		case "BRIDGE_DASHBOARD_SOCKET":
+			return sock
+		case dashboard.EnvRedactExtra:
+			return `["SECRETPATTERN("]`
+		}
+		return ""
+	}, nil)
+	if err == nil || srv != nil {
+		t.Fatalf("accepted: %v %v", srv, err)
+	}
+	if _, statErr := os.Stat(sock); statErr == nil {
+		t.Fatal("a socket was created for an invalid configuration")
+	}
+	if strings.Contains(buf.String(), "SECRETPATTERN") || strings.Contains(err.Error(), "SECRETPATTERN") {
+		t.Fatal("the pattern text was logged or echoed")
 	}
 }
