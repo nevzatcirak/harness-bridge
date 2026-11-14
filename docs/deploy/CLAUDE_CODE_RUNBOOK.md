@@ -59,6 +59,20 @@ Bridge, its tests and its authors perform none of them.
   carry a prompt injection (ADR-021 §8.3 item 5).
 - The sessions must already exist: the Bridge resumes by exact ID and never creates or forks.
 
+## 5a. Enabling the adapter in the Bridge (wiring slice; UNVERIFIED live)
+The adapter is OFF unless the Bridge's environment names the wrapper. Set, as the Bridge service
+user's service environment (never in a committed file, never a secret):
+`BRIDGE_CLAUDE_COMMAND` (absolute wrapper path), `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600),
+`BRIDGE_CLAUDE_VERSIONS` (exact list), `BRIDGE_CLAUDE_HISTORY_DIR` (private directory),
+`BRIDGE_CLAUDE_HOME` (the Claude user's HOME) and `BRIDGE_CLAUDE_MODEL`, with the existing
+`BRIDGE_WRITER_LOCK_DIR`, `BRIDGE_ALLOWED_ROOTS` and `BRIDGE_ALLOWED_SESSIONS` (each `claudecode:<uuid>`
+must be listed there too). Optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS`,
+`BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX`. A `BRIDGE_CLAUDE_*` value without the command, a
+missing required value or an unusable file stops the Bridge at start with an error (no partial
+enablement); a read-only ingress ignores the adapter. **The credential canary has not run and cannot
+without an authenticated run (D14 Q10): do not enable this against a real login until the maintainer has
+provisioned one.**
+
 ## 6. Operating it (once wired; UNVERIFIED)
 - Interrupt: SIGINT, then SIGTERM after 10 s, then the Bridge gives up after 5 s more
   (`child_unconfirmed`) and **never** sends SIGKILL. A child that ignores both must be removed by
@@ -70,6 +84,10 @@ Bridge, its tests and its authors perform none of them.
   the child is still alive, remove it first, then retry. A refused release changes nothing. A `failed`
   row-1 execution whose wait was unknown cannot be released: restart the Bridge (the guard is memory
   only).
+- After the wrapper exits the Bridge also checks that the child's process group is empty (up to one
+  second). A populated group keeps the guard and the run `unknown`; remove the member as the Claude user,
+  then release. An empty group does **not** prove that a `setsid`/detached descendant is gone: check the
+  systemd scope or cgroup of the Claude user's commands (ADR-021 section 4) before a release.
 - Restart gap: killing the Bridge mid-turn leaves a turn the next start marks `restart_gap`.
 
 ## 7. Live acceptance still open (operator-run, NOT_EXERCISED)

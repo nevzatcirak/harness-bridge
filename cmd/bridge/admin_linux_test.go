@@ -42,14 +42,14 @@ func envOf(m map[string]string) func(string) string { return func(k string) stri
 // ADR-020 group 9: the admin socket is never opened in read-only mode.
 func TestAdminSocketNotOpenedReadOnly(t *testing.T) {
 	path := filepath.Join(adminDir(t), "admin.sock")
-	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), true, &countingReleaser{})
+	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), true, &countingReleaser{}, nil)
 	if err != nil || srv != nil {
 		t.Fatalf("read-only: srv=%v err=%v", srv, err)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("socket created in read-only mode: %v", err)
 	}
-	if srv, err := openAdmin(envOf(nil), false, &countingReleaser{}); err != nil || srv != nil {
+	if srv, err := openAdmin(envOf(nil), false, &countingReleaser{}, nil); err != nil || srv != nil {
 		t.Fatalf("unset socket: srv=%v err=%v", srv, err)
 	}
 }
@@ -59,7 +59,7 @@ func TestAdminSocketUnsafeDirectoryFailsStartup(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": filepath.Join(dir, "admin.sock")}), false, &countingReleaser{}); err == nil {
+	if srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": filepath.Join(dir, "admin.sock")}), false, &countingReleaser{}, nil); err == nil {
 		srv.Close()
 		t.Fatal("0755 directory accepted")
 	}
@@ -68,7 +68,7 @@ func TestAdminSocketUnsafeDirectoryFailsStartup(t *testing.T) {
 func TestAdminCLIReleaseGuard(t *testing.T) {
 	path := filepath.Join(adminDir(t), "admin.sock")
 	runs := &countingReleaser{}
-	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), false, runs)
+	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), false, runs, nil)
 	if err != nil || srv == nil {
 		t.Fatalf("writer: srv=%v err=%v", srv, err)
 	}

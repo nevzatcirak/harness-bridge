@@ -230,7 +230,16 @@ func controlStream(plan CanaryPlan, drop map[string]bool) []byte {
 	}
 	for _, p := range Probes(plan) {
 		id := "toolu_c_" + p.ID
-		result := controlNeedle(plan, p)
+		// Literal expectations (#259 P3-4): the marker for Read and content-mode Grep, the decoy
+		// file's name for files-mode Grep and Glob. Not the production controlNeedle, so a change
+		// to it cannot pass its own test.
+		result := plan.Marker
+		switch p.ID {
+		case "grep-files", "glob-decoy-dir":
+			result = path.Base(plan.DecoyFile)
+		case "glob-profile-dir":
+			result = path.Base(plan.DecoyProfile)
+		}
 		if drop[p.ID] {
 			result = "nothing"
 		}

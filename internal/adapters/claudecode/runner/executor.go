@@ -50,6 +50,7 @@ type Config struct {
 
 	RunMax      time.Duration // wall-clock cap per child (default 15 min)
 	Grace       time.Duration // exit grace after a result (default 10 s)
+	GroupWait   time.Duration // after a known exit, how long the child's process group may stay populated before the exit is treated as unconfirmed (default 1 s)
 	IntWait     time.Duration // §4: wait after SIGINT before SIGTERM (default 10 s)
 	TermWait    time.Duration // §4: wait after SIGTERM before the escalation is exhausted (default 5 s)
 	DrainMax    int64         // bytes read and discarded after a broken stream (default 64 MiB)
@@ -80,6 +81,7 @@ type Executor struct {
 	fps      map[string][32]byte
 	pending  map[string]chan struct{}
 	closing  chan struct{} // closed by the first Close
+	version  string        // claude_code_version of the last init seen (informational)
 	children int
 	wg       sync.WaitGroup
 }
@@ -101,6 +103,9 @@ func New(cfg Config) (*Executor, error) {
 	}
 	if cfg.Grace <= 0 {
 		cfg.Grace = 10 * time.Second
+	}
+	if cfg.GroupWait <= 0 {
+		cfg.GroupWait = time.Second
 	}
 	if cfg.IntWait <= 0 {
 		cfg.IntWait = 10 * time.Second
@@ -343,6 +348,38 @@ func (e *Executor) find(id string) (*run, error) {
 		return nil, execution.Fail("NOT_FOUND", "unknown execution")
 	}
 	return r, nil
+}
+
+// Version is the claude_code_version of the last correlated init the Executor saw ("" before
+// any run). It is informational (the capabilities block), never used for correctness: the
+// allowlist check is the machine's.
+func (e *Executor) Version() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.version
+}
+
+func (e *Executor) setVersion(v string) {
+	if len(v) > 32 {
+		return
+	}
+	e.mu.Lock()
+	e.version = v
+	e.mu.Unlock()
+}
+
+// Sessions returns the allowlisted sessions this Executor serves, in allowlist order.
+func (e *Executor) Sessions() []claudecode.Session {
+	out := make([]claudecode.Session, len(e.cfg.Sessions))
+	copy(out, e.cfg.Sessions)
+	return out
+}
+
+// Owns reports whether the execution ID belongs to this Executor (routing in the MCP layer).
+func (e *Executor) Owns(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runs[id] != nil
 }
 
 // Get returns a snapshot of an execution.

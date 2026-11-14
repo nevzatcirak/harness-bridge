@@ -71,6 +71,28 @@ func (r *run) after(a claudecode.Action) {
 		r.interrupt()
 	}
 	r.sync()
+	r.refreshView()
+}
+
+// refreshView copies the Claude-only additive fields of ADR-021 §9 from the machine into the
+// execution view. It runs after every step: child_unconfirmed and the exit class can change
+// after the verdict was decided (an exhausted escalation, a late exit). The verdict itself is
+// never re-decided here. Caller holds mu.
+func (r *run) refreshView() {
+	if !r.decided {
+		return
+	}
+	v := r.m.Verdict()
+	x := &r.view
+	x.ChildUnconfirmed = v.ChildUnconfirmed
+	x.CostUSDReported = v.CostUSD
+	x.PermissionDenials = nil
+	for _, d := range v.PermissionDenials {
+		x.PermissionDenials = append(x.PermissionDenials, execution.PermissionDenial{ToolName: d.ToolName, Input: d.InputSummary})
+	}
+	if v.ExitClass != "" && v.ExitClass != "none" {
+		x.Exit = &execution.ExitInfo{Class: v.ExitClass}
+	}
 }
 
 // interrupt starts the §4 escalation: SIGINT to the child's group now, SIGTERM after
@@ -181,6 +203,9 @@ func (r *run) line(ev claudecode.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	correlated := ev.SessionID == r.uuid
+	if correlated && ev.Init != nil && ev.Init.Version != "" {
+		r.e.setVersion(ev.Init.Version)
+	}
 	if correlated && !r.decided {
 		for _, b := range ev.Blocks {
 			b := b
@@ -238,7 +263,12 @@ func (r *run) stopTimers() {
 // that returned Exit{Unknown:true} confirms nothing, so the child may still be alive:
 // exited stays false and the guard stays held (the only recovery is a Bridge restart,
 // the guard being memory-only).
-func (r *run) markExited(x Exit) {
+//
+// groupEmpty is the #242 residual check: the wrapper's known exit is not proof that the CLI
+// behind `sudo` is gone, so a deferred guard release also needs the child's process group to
+// be empty. With members left the guard stays held (a row 1 failed run stays held until a
+// Bridge restart; an unknown run can be released by the operator once the group is empty).
+func (r *run) markExited(x Exit, groupEmpty bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if x.Unknown {
@@ -246,9 +276,24 @@ func (r *run) markExited(x Exit) {
 	}
 	r.exited = true
 	r.esc = escDone
-	if r.pendingRelease {
+	if r.pendingRelease && groupEmpty {
 		r.pendingRelease = false
 		r.e.release(r.session, r.id)
+	}
+}
+
+// waitGroupEmpty polls the child's process group until it is empty or GroupWait ends. A
+// failing check counts as "not empty": every unknown fails closed.
+func (r *run) waitGroupEmpty(c Child) bool {
+	deadline := time.Now().Add(r.e.cfg.GroupWait)
+	for {
+		if empty, err := c.GroupEmpty(); err == nil && empty {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -321,7 +366,17 @@ func (e *Executor) work(r *run, prompt string) {
 	}
 	r.feed(claudecode.Step{Kind: claudecode.StepEOF})
 	x := child.Wait()
-	r.markExited(x)
+	groupEmpty := true
+	if !x.Unknown {
+		groupEmpty = r.waitGroupEmpty(child)
+	}
+	r.markExited(x, groupEmpty)
+	if !groupEmpty {
+		// A known wrapper exit with the group still populated: the exit status of the wrapper
+		// does not prove the run ended (ADR-021 §4 process tree). The machine gets an unknown
+		// exit, so the verdict is unknown and nothing releases the guard.
+		x = Exit{Unknown: true}
+	}
 	r.feed(claudecode.Step{Kind: claudecode.StepExit, ExitCode: x.Code, ExitSignal: x.Signal, ExitUnknown: x.Unknown})
 }
 

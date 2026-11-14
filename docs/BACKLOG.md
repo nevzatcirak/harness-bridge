@@ -112,3 +112,8 @@ Open items recorded here, not fixed:
 - The idempotency registry forgets the oldest finished record past 10,000 entries and everything at a restart (memory-only, ADR-022 3.3); a native 4xx/5xx is not recorded, so a caller retry after a 5xx that actually created a session would create a second one (the caps bound it).
 - `create_session` is serialized (one at a time) so the caps hold; a slow native read delays the next create by at most its 5 s bound.
 - Equivalent mutant noted in review: dropping the `..` component check in the tool still ends in `INVALID_INPUT`, because the S2 authorizer refuses the non-canonical joined path (two layers).
+
+### ADR-021 wiring (task #263, review fixes #268): deferred items (2026-11-14, appended)
+
+- **`list_catalog` omits Claude Code sessions** (a deviation from ADR-022 section 6.2, which lists every harness's sessions, until a later slice adds the Claude rows with an instance-qualified `session_ref`). A `claudecode:` entry in `BRIDGE_ALLOWED_SESSIONS` no longer fails the catalog (it is skipped before the native client, like every discovery call); the Claude session is simply not a catalog row. `list_sessions` and `find_sessions` do list it when the adapter is enabled.
+- Out of scope of the wiring slice, still open: the Claude history 8 MiB response bound (#266 P3-2), `BRIDGE_CLAUDE_HISTORY_MAX_AGE` retention (#266 P3-4, belongs to the enablement gate), ACL-before-allowlist ordering of the Claude session refusals (#267 P3-5), and the required-versus-optional wording of `BRIDGE_CLAUDE_HOME` and `BRIDGE_CLAUDE_MODEL` in the ADR (a maintainer item).
