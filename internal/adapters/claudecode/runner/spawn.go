@@ -42,6 +42,12 @@ type Child interface {
 	Signal(Signal) error
 	// Wait reaps the child. Call it after stdout was read to the end.
 	Wait() Exit
+	// GroupEmpty reports whether the child's process group has no member left. It is
+	// the one extra fact the ADR-020 release extension needs (ADR-021 §3, last bullet)
+	// and sends no signal. Only a definite "no such group" is true: every other answer
+	// (members left, a permission error, any failure) is false with a non-nil error or
+	// false, so release fails closed.
+	GroupEmpty() (bool, error)
 }
 
 // Spawner starts children. ExecSpawner is the production one (spawn_linux.go);

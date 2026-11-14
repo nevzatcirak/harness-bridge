@@ -79,6 +79,7 @@ type Executor struct {
 	keys     map[string]string
 	fps      map[string][32]byte
 	pending  map[string]chan struct{}
+	closing  chan struct{} // closed by the first Close
 	children int
 	wg       sync.WaitGroup
 }
@@ -132,7 +133,7 @@ func New(cfg Config) (*Executor, error) {
 		return nil, err
 	}
 	e := &Executor{cfg: cfg, sessions: map[string]claudecode.Session{}, runs: map[string]*run{}, busy: map[string]string{},
-		keys: map[string]string{}, fps: map[string][32]byte{}, pending: map[string]chan struct{}{}}
+		keys: map[string]string{}, fps: map[string][32]byte{}, pending: map[string]chan struct{}{}, closing: make(chan struct{})}
 	for _, s := range cfg.Sessions {
 		if !cfg.Locks.Held(s.ID) {
 			return nil, errors.New("runner: the writer lock of " + s.ID + " is not held")
@@ -184,6 +185,10 @@ func clone(x execution.Execution) execution.Execution {
 	if x.Ended != nil {
 		t := *x.Ended
 		x.Ended = &t
+	}
+	if x.GuardReleasedAt != nil {
+		t := *x.GuardReleasedAt
+		x.GuardReleasedAt = &t
 	}
 	return x
 }
@@ -403,7 +408,9 @@ func (e *Executor) Interrupt(id string) (execution.Execution, error) {
 // Close stops admitting and interrupts every live child (SIGINT, reason shutdown, §3
 // row 9s; then the §4 escalation). It waits up to CloseWait for them to be reaped, then
 // ABANDONS the wait: a child that ignores SIGINT is not killed (ADR-021 §4), its run keeps
-// its guard held, and its execution ID is returned so the caller can log the abandonment. The
+// its guard held, and its execution ID is returned so the caller can log the abandonment.
+// A run whose Wait returned an unknown status (the pipeline ended, the child may not have)
+// is returned too (#253 P3-3). The
 // guard of an interrupted run stays held in any case: the verdict is unknown.
 //
 // Close is idempotent: only the first call interrupts and waits. A repeated call returns
@@ -412,6 +419,9 @@ func (e *Executor) Close() []string {
 	e.mu.Lock()
 	first := !e.closed
 	e.closed = true
+	if first {
+		close(e.closing)
+	}
 	runs := make([]*run, 0, len(e.runs))
 	for _, r := range e.runs {
 		runs = append(runs, r)
@@ -425,15 +435,12 @@ func (e *Executor) Close() []string {
 		go func() { e.wg.Wait(); close(done) }()
 		select {
 		case <-done:
-			return nil
 		case <-time.After(e.cfg.CloseWait):
 		}
 	}
 	var abandoned []string
 	for _, r := range runs {
-		select {
-		case <-r.done:
-		default:
+		if r.unreaped() {
 			abandoned = append(abandoned, r.id)
 		}
 	}

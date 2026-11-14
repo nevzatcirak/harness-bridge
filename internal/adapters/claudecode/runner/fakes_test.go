@@ -70,6 +70,8 @@ type fakeChild struct {
 	// lives until the test (the operator) ends it.
 	ignoreTerm bool
 	log        []sigRec
+	groupBusy  bool   // a member of the process group is still alive
+	groupErr   error  // the group check fails
 	sessionID  string // set by a test whose reaction writes a result line
 }
 
@@ -103,7 +105,17 @@ func (c *fakeChild) WriteStdin(p []byte) (int, error) {
 	return len(p), nil
 }
 func (c *fakeChild) CloseStdin() error { return nil }
-func (c *fakeChild) Wait() Exit        { return <-c.exitCh }
+
+// GroupEmpty answers from the test: by default the group is empty once the child ended.
+func (c *fakeChild) GroupEmpty() (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groupErr != nil {
+		return false, c.groupErr
+	}
+	return !c.groupBusy, nil
+}
+func (c *fakeChild) Wait() Exit { return <-c.exitCh }
 func (c *fakeChild) Signal(s Signal) error {
 	c.mu.Lock()
 	c.log = append(c.log, sigRec{s, time.Now()})
@@ -366,3 +378,5 @@ func sessionIDs(list []claudecode.Session) []string {
 var errClosed = io.ErrClosedPipe
 
 func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }
+
+var io_ErrClosedPipe = io.ErrClosedPipe

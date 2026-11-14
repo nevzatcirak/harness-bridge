@@ -236,13 +236,23 @@ type ProbeVerdict struct {
 	Result  string // pass, or inconclusive (no tool_use, or no matching denial)
 }
 
+// ProbeControl is the positive control of one probe: the same tool, aimed at the same target,
+// run without the deny rule, must return the decoy (the marker for Read and content-mode Grep,
+// the decoy's file name for files-mode Grep and Glob). A control for Read says nothing about
+// Grep or Glob, so each probe has its own (#253 P3-4).
+type ProbeControl struct {
+	Probe  Probe
+	Result string // pass, or inconclusive
+}
+
 // CanaryReport is the whole verdict. Pass is true only when every check holds.
 type CanaryReport struct {
 	Form          string
 	Probes        []ProbeVerdict
-	InitOK        bool // the denied run's init: mcp_servers empty, apiKeySource none
-	ControlReads  bool // the positive control (no deny rule) read the decoy
-	NoDecoyLeak   bool // the marker appears nowhere in the denied stream or history
+	InitOK        bool           // the denied run's init: mcp_servers empty, apiKeySource none
+	ControlReads  bool           // every probe's positive control (no deny rule) showed the decoy
+	Controls      []ProbeControl // one per probe: the same tool without the deny rule shows the decoy
+	NoDecoyLeak   bool           // the marker appears nowhere in the denied stream or history
 	NoFileCanary  bool
 	NoSinkRequest bool
 	Failures      []string
@@ -296,14 +306,21 @@ func EvaluateCanary(plan CanaryPlan, denied, control CanaryRun) CanaryReport {
 	if !rep.NoSinkRequest {
 		fail("the sink received a request in the denied run")
 	}
-	c := scanCanaryStream(control.NDJSON)
-	for _, tr := range c.toolResults {
-		if strings.Contains(tr, plan.Marker) {
-			rep.ControlReads = true
+	pairs := scanToolPairs(control.NDJSON)
+	rep.ControlReads = true
+	for _, pr := range Probes(plan) {
+		pc := ProbeControl{Probe: pr, Result: "inconclusive"}
+		needle := controlNeedle(plan, pr)
+		for _, pair := range pairs {
+			if probeMatches(pr, pair.name, pair.input) && strings.Contains(pair.result, needle) {
+				pc.Result = "pass"
+			}
 		}
-	}
-	if !rep.ControlReads {
-		fail("the positive control did not read the decoy: the denial evidence is meaningless")
+		if pc.Result != "pass" {
+			rep.ControlReads = false
+			fail("the positive control of probe " + pr.ID + " did not show the decoy: its denial evidence is meaningless")
+		}
+		rep.Controls = append(rep.Controls, pc)
 	}
 	rep.Pass = len(rep.Failures) == 0
 	return rep
@@ -315,6 +332,9 @@ func (r CanaryReport) Lines() []string {
 	var out []string
 	for _, p := range r.Probes {
 		out = append(out, fmt.Sprintf("canary form=%s probe=%s tool=%s tool_use=%t denial=%q result=%s", r.Form, p.Probe.ID, p.Probe.Tool, p.ToolUse, p.Denial, p.Result))
+	}
+	for _, c := range r.Controls {
+		out = append(out, fmt.Sprintf("canary form=%s control=%s tool=%s result=%s", r.Form, c.Probe.ID, c.Probe.Tool, c.Result))
 	}
 	out = append(out, fmt.Sprintf("canary form=%s init_ok=%t control_reads_decoy=%t no_decoy_leak=%t no_file_canary=%t no_sink_request=%t verdict=%s",
 		r.Form, r.InitOK, r.ControlReads, r.NoDecoyLeak, r.NoFileCanary, r.NoSinkRequest, map[bool]string{true: "pass", false: "fail"}[r.Pass]))
@@ -380,7 +400,80 @@ func probeMatches(pr Probe, tool, input string) bool {
 		return in.FilePath == pr.Target
 	case "Grep":
 		return in.Path == pr.Target && in.Pattern == pr.Pattern && in.OutputMode == pr.Mode
-	default: // Glob: the pattern or the path names the decoy directory
-		return strings.HasPrefix(in.Pattern, pr.Target) || in.Path == pr.Target
+	default: // Glob: exactly the probe's pattern, on its directory or on none (#253 P3-4: no prefix match)
+		return in.Pattern == pr.Pattern && (in.Path == "" || in.Path == pr.Target)
 	}
+}
+
+// controlNeedle is what a working (undenied) probe returns: the marker for Read and
+// content-mode Grep, the decoy's file name for files-mode Grep and Glob.
+func controlNeedle(plan CanaryPlan, pr Probe) string {
+	switch {
+	case pr.Tool == "Read", pr.Tool == "Grep" && pr.Mode == "content":
+		return plan.Marker
+	case pr.ID == "glob-profile-dir":
+		return path.Base(plan.DecoyProfile)
+	default:
+		return path.Base(plan.DecoyFile)
+	}
+}
+
+type toolPair struct{ name, input, result string }
+
+// scanToolPairs pairs each tool_use of a stream with the tool_result that answers it (by
+// tool_use_id). Only the control run is read this way; the denied run's verdict never needs a
+// tool result.
+func scanToolPairs(b []byte) []toolPair {
+	type item struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
+	}
+	uses := map[string]*toolPair{}
+	var order []string
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	sc.Buffer(make([]byte, 0, 64<<10), 2<<20)
+	for sc.Scan() {
+		var line struct {
+			Message struct {
+				Content []item `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil {
+			continue
+		}
+		for _, it := range line.Message.Content {
+			switch it.Type {
+			case "tool_use":
+				if it.ID != "" {
+					uses[it.ID] = &toolPair{name: it.Name, input: string(it.Input)}
+					order = append(order, it.ID)
+				}
+			case "tool_result":
+				p := uses[it.ToolUseID]
+				if p == nil {
+					continue
+				}
+				var asString string
+				var parts []item
+				switch {
+				case json.Unmarshal(it.Content, &asString) == nil && it.Content != nil:
+					p.result += asString
+				case json.Unmarshal(it.Content, &parts) == nil:
+					for _, q := range parts {
+						p.result += q.Text
+					}
+				}
+			}
+		}
+	}
+	var out []toolPair
+	for _, id := range order {
+		out = append(out, *uses[id])
+	}
+	return out
 }

@@ -1149,6 +1149,44 @@ settings, `cleanupPeriodDays`, version pin).
 - Mutations: release without the child check; release a session held by a
   different execution.
 - Acceptance: unit/race; CONTRACTS diff reviewed.
+- **As built (slice 4; the Executor is still unwired, nothing here is reachable in production).**
+  - **Release.** `runner.Executor.ReleaseGuard(ctx, session, execution, ReleaseOptions{Settle})` and
+    the admin channel (`admin.Server.Claude`, a `ClaudeReleaser`, nil by default: a `claudecode:`
+    request is then refused `INVALID_INPUT` "not enabled" with one audit line; the OpenCode
+    releaser is never called for it). Preconditions, all facts the Bridge holds about its own
+    child: the guard is held by exactly that execution; the execution is `unknown` with a decided
+    verdict; the run's pipeline has ended; the child's `Wait` returned a **known** status (an
+    unknown `Wait` confirms nothing); the child's process group has no member left
+    (`Child.GroupEmpty`: `kill(-pgid, 0)` answers `ESRCH` only for an empty group; members the
+    Bridge user cannot signal, or a recycled group id, can only make the answer "not empty"); and
+    the same again after the settle interval (default 5 s) inside one critical section with the
+    delete (one re-check, no native read). Anything else is refused and the guard stays held.
+    The release changes nothing but the in-memory guard and `guard_released_at`; it sends no
+    signal.
+  - **`child_unconfirmed` and the release (decision for the reviewers).** The flag is verdict audit
+    information, latched when the verdict is decided (row 6a sets it at once, while the child may
+    still be exiting). The release therefore tests the child's **present** facts, not the flag: a
+    child that is alive, whose `Wait` is unknown or whose group is not empty is refused (this
+    covers §4's exhausted escalation); a run whose child was later removed by the operator
+    (known `Wait`, empty group) can be released although its verdict keeps `child_unconfirmed:
+    true`. Reading the flag literally ("refuse whenever `child_unconfirmed` was ever set") would
+    make every row 6a verdict unreleasable, contradicting row 6a ("only an operator guard release
+    frees the guard"). A row 1 `failed` execution whose `Wait` was unknown is not `unknown`, so
+    it is not releasable either: its recovery stays a Bridge restart.
+  - **Carried nits.** `CheckVersions` validates each element on its own; `Close` also reports a
+    run whose `Wait` was unknown (its pipeline ended but the child may not have); the canary
+    needs a positive control **per probe** (the marker for `Read` and content-mode `Grep`, the
+    decoy's file name for files-mode `Grep` and `Glob`) and matches the `Glob` pattern exactly;
+    the dead `exited` guards of `escalateTerm`/`escalationExhausted` were removed (`markExited`
+    ends the escalation under the same lock, pinned by `TestNoSigtermAfterTheChildExited`).
+  - **Docs (operator steps; none performed, all UNVERIFIED live):**
+    `docs/deploy/CLAUDE_CODE_RUNBOOK.md` and the Claude section of `docs/deploy/CREDENTIAL_FILES.md`.
+    CONTRACTS: the Claude release subsection of the ADR-020 section, the `child_unconfirmed`
+    scope (rows 0, 9, 6a, 6b only; rows 1s and 9s do not set it), and the section "ADR-021 Claude
+    Code harness contract (defined, NOT served)" with the §9 fields and the capabilities block.
+  - **Not here:** wiring the Executor into the manager, MCP and `get_session` (the wiring slice,
+    with the double writer lock of #236 P3-4 and the wrapper-side descendant check of #242); live
+    R6 (slice 5); any change to OpenCode release semantics; D14 Q10.
 
 **Slice 5 (optional, only if slices 1 to 4 are accepted): live acceptance R6.**
 Evidence only. Runbook outline, mirroring R5 for Claude Code:
