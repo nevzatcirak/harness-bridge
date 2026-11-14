@@ -1,7 +1,10 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"strconv"
@@ -18,7 +21,9 @@ import (
 // AuditRingSize is the capacity of the ring (D17 Q4): the oldest entry is dropped.
 const AuditRingSize = 1000
 
-// maxAuditValue bounds one displayed attribute value or message, in bytes.
+// maxAuditValue bounds one displayed attribute value or message to this many bytes; a
+// value that was cut carries a one-character ellipsis after them (so at most
+// maxAuditValue+3 bytes), which is what the ADR means by "cut at 256 bytes".
 const maxAuditValue = 256
 
 // auditEvents is the closed allowlist of events the ring keeps (task #250; the
@@ -234,21 +239,124 @@ func (t *auditTee) clean(s string) string {
 	return s
 }
 
-// InstallAuditTee replaces the process default logger with a tee of the original
-// default handler and ring, and returns a function that puts the original back.
-// slog.SetDefault would also point the log package at the new handler, and the
-// original default handler writes through the log package, so that would loop; the
-// log writer and flags are therefore restored right after, and the journal branch
-// writes exactly where it wrote before. Call it once, before the first audit line.
+// Test seams for the two windows of the swap (nil in production): each runs at the exact
+// point where the process logger is half swapped, so a test can log there.
+var teeInstallWindow, teeRestoreWindow func()
+
+// syncWriter serializes writes to the journal destination. The log package (after the swap)
+// and the tee's journal branch both write through one of these, so their lines never
+// interleave, as they never did when the log package's own lock was the only one.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// stdJournal is the journal branch used when the original default handler is Go's own.
+//
+// Go's default handler writes through the log package's GLOBAL logger, and slog.SetDefault
+// points that same global logger back at the new default handler: a journal branch made of
+// the original default handler would call the log lock that the very call being handled
+// already holds (or is about to take), and the global logger deadlocks. Between
+// SetDefault and the restore of the log writer that is a window in which any concurrent
+// log or slog call hangs (review #252 P2-1). stdJournal therefore never touches the global
+// logger: it formats a record exactly as the default handler does ("LEVEL message" and the
+// attributes in text form, which is the same code as slog.TextHandler) and writes it with a
+// private log.Logger on the original writer, prefix and flags. Nothing it calls can route
+// back to the tee, so no ordering of install, restore and concurrent loggers can loop or
+// block.
+type stdJournal struct {
+	enabled slog.Handler // the original default handler: only Enabled is ever called on it
+	lg      *log.Logger
+	ops     []func(slog.Handler) slog.Handler // WithAttrs/WithGroup, replayed in order
+}
+
+func (j *stdJournal) Enabled(ctx context.Context, l slog.Level) bool {
+	return j.enabled.Enabled(ctx, l)
+}
+
+func (j *stdJournal) Handle(ctx context.Context, r slog.Record) error {
+	var buf bytes.Buffer
+	var h slog.Handler = slog.NewTextHandler(&buf, nil)
+	for _, op := range j.ops {
+		h = op(h)
+	}
+	// The built-in fields are produced with a fixed level, no time and an empty message and
+	// stripped by their exact text, so a user attribute named time, level or msg is kept
+	// as an ordinary attribute, as the default handler keeps it.
+	nr := slog.NewRecord(time.Time{}, slog.LevelInfo, "", 0)
+	r.Attrs(func(a slog.Attr) bool { nr.AddAttrs(a); return true })
+	if err := h.Handle(ctx, nr); err != nil {
+		return err
+	}
+	attrs := strings.TrimPrefix(strings.TrimSuffix(buf.String(), "\n"), `level=INFO msg=""`)
+	return j.lg.Output(2, r.Level.String()+" "+r.Message+attrs)
+}
+
+func (j *stdJournal) WithAttrs(a []slog.Attr) slog.Handler {
+	c := *j
+	c.ops = append(append([]func(slog.Handler) slog.Handler(nil), j.ops...), func(h slog.Handler) slog.Handler { return h.WithAttrs(a) })
+	return &c
+}
+
+func (j *stdJournal) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return j
+	}
+	c := *j
+	c.ops = append(append([]func(slog.Handler) slog.Handler(nil), j.ops...), func(h slog.Handler) slog.Handler { return h.WithGroup(name) })
+	return &c
+}
+
+// isStdDefault reports whether h is Go's own default handler (an unexported type).
+func isStdDefault(h slog.Handler) bool { return fmt.Sprintf("%T", h) == "*slog.defaultHandler" }
+
+// InstallAuditTee replaces the process default logger with a tee of the original default
+// handler and ring, and returns a function that puts the original back.
+//
+// The swap is unobservable to concurrent loggers: no log or slog call can deadlock, loop or
+// lose its line at any moment of the install or of the restore (review #252 P2-1). The
+// journal branch never goes through the log package's global logger (see stdJournal), so
+// the half-swapped states are harmless: slog.SetDefault leaves the log package pointed at
+// the tee, and the writer and flags are put back right after; a log.Printf that runs in
+// between is converted by the log package into an Info record, goes to the tee and is
+// written to the journal as "INFO <message>" (its message is the same, the line carries the
+// "INFO " level word that a plain log line does not). On restore, slog.SetDefault with the
+// original default handler does not touch the log package at all. After install the log
+// package writes to the same original destination as before, through a lock that the
+// journal branch shares, so lines never interleave.
+//
+// When the original default handler is not Go's own (a program that installed its own),
+// it is used as the journal branch as it is. Not supported: the log flags Lshortfile and
+// Llongfile (a journal line would name the tee, not the caller; the Bridge uses neither),
+// and installing a second tee over this one. Call it once, before the first audit line.
 func InstallAuditTee(ring *AuditRing) (restore func()) {
 	prev := slog.Default()
-	w, flags := log.Writer(), log.Flags()
-	slog.SetDefault(slog.New(NewAuditTee(prev.Handler(), ring)))
-	log.SetOutput(w)
+	w, flags, prefix := log.Writer(), log.Flags(), log.Prefix()
+	shared := &syncWriter{w: w}
+	var journal slog.Handler = prev.Handler()
+	if isStdDefault(journal) {
+		journal = &stdJournal{enabled: journal, lg: log.New(shared, prefix, flags)}
+	}
+	slog.SetDefault(slog.New(NewAuditTee(journal, ring)))
+	if teeInstallWindow != nil {
+		teeInstallWindow()
+	}
+	log.SetOutput(shared)
 	log.SetFlags(flags)
+	log.SetPrefix(prefix)
 	return func() {
 		slog.SetDefault(prev)
+		if teeRestoreWindow != nil {
+			teeRestoreWindow()
+		}
 		log.SetOutput(w)
 		log.SetFlags(flags)
+		log.SetPrefix(prefix)
 	}
 }

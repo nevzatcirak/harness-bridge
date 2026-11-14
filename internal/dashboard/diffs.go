@@ -217,9 +217,9 @@ func unavailableView(scope string, err error) diffView {
 // flightCache holds a read for a short TTL and shares one in-flight read per key
 // (single-flight, ADR-023 section 4 and T7). It is generic so the diff reads and the
 // polling view models use the same code: memory only, a bounded number of entries,
-// never written to disk. A failed read is cached for the TTL like a good one only
-// when the caller returns it as a value; callers that must not cache an error
-// return it and the entry is dropped after the waiters have seen it (see get).
+// never written to disk. A read that failed is cached exactly like one that succeeded:
+// its error is served to every caller for one TTL (1 s for view models, 2 s for diffs)
+// and is read again afterwards, so a failing source is probed at most once per TTL.
 type flightCache[V any] struct {
 	mu  sync.Mutex
 	now func() time.Time

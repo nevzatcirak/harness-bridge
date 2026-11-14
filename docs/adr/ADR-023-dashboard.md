@@ -500,16 +500,33 @@ every D17 answer, the threat model and the other sections are unchanged.
   default. `internal/security/remote.go` also logs through `slog.Info` (no `event`
   attribute: the ring drops those lines, the journal keeps them).
 - **Tee.** `dashboard.InstallAuditTee(ring)` replaces the process default logger with a
-  fan-out handler: the journal branch is the original default handler, called once per record
-  it enables with the record untouched; the second branch copies an allowlisted projection into
-  the ring. `slog.SetDefault` also points the `log` package at the new handler, and the original
-  default handler writes through the `log` package, so installing it naively loops; the install
-  therefore restores the `log` writer and flags right after `SetDefault`, which keeps the journal
-  bytes and `log.Printf` where they were. A golden test over the real default handler, the real
-  `internal/mcp` writer and the real admin `guard_release` writer compares the output with and
-  without the tee byte for byte. It is installed by `openDashboard` only when the dashboard is
-  enabled (a disabled or refused configuration touches nothing) and put back by the server's
-  `Shutdown`; it is never installed twice.
+  fan-out handler: the journal branch writes each record the original default handler enables,
+  once and untouched, and the second branch copies an allowlisted projection into the ring.
+  **The swap is unobservable to concurrent loggers (review #252 P2-1, fixed after PR #251's
+  first head `6ed96d2`).** `slog.SetDefault` also points the `log` package at the new handler,
+  and Go's default handler writes through the `log` package's global logger; a journal branch
+  made of that handler therefore called the `log` lock that the call being handled already
+  held, and any `log` or `slog` call between `SetDefault` and the restore of the `log` writer
+  deadlocked the global logger (reachable at startup, the admin server being up, and at
+  shutdown). The journal branch no longer touches the global logger: it formats a record as
+  the default handler does (`LEVEL message` and the attributes in the `slog.TextHandler` text
+  form, the same code) and writes it with a private `log.Logger` on the original writer,
+  prefix and flags, behind a lock it shares with the `log` package's own output so lines never
+  interleave. On restore `slog.SetDefault` is given the original default handler, which does
+  not touch the `log` package. Tests: a record-by-record byte comparison with the default
+  handler (levels, quoting, groups, `With`, built-in attribute names, multi-line and empty
+  messages, flags and prefix), golden tests over the real mcp and admin writers, a test that
+  logs through `log` and `slog` **inside** the install and the restore windows (a test seam)
+  with a watchdog, and a `-race` test of 200 install/restore cycles under eight concurrent
+  loggers. **What a line logged in the install window looks like:** a `log.Printf` that runs
+  between `SetDefault` and the restore of the `log` writer is converted by the `log` package
+  into an Info record, goes through the tee and is written as `INFO <message>` (the same
+  message with the level word a plain `log` line does not carry); every other line is
+  byte-identical. Not supported and not needed by the Bridge: the `log` flags `Lshortfile` and
+  `Llongfile` (a journal line would name the tee, not the caller), a second tee installed over
+  the first, and a program whose own default handler writes through the `log` package. It is
+  installed by `openDashboard` only when the dashboard is enabled (a disabled or refused
+  configuration touches nothing) and put back by the server's `Shutdown`.
 - **Ring.** 1000 entries, drop-oldest, newest first; memory only; written only by the tee (the
   write method is unexported and the dashboard reads through an `AuditSource` interface with the
   single method `Entries`, pinned by a test). Kept events: `guard_release`, `prompt_submission`,

@@ -97,3 +97,8 @@ Open items recorded here, not fixed:
 - The detail's polling model excludes the diff section; a changed diff needs a reload (the diff cache is 2 s).
 - `Last-Modified` has one-second resolution and resets when the Bridge restarts (memory only), so a client holding an older validator across a restart gets a full 200 once.
 - A page whose patches are hidden to fit the 2 MiB bound shows that per file; there is no "show anyway" path (the bound is the contract).
+
+### ADR-023 slice 4 follow-up (audit tee swap, review #252 P2-1): notes (2026-11-14, appended)
+
+- The tee's journal branch is a private `log.Logger` over the original writer (see the ADR-023 as-built note). It does not support the `log` flags `Lshortfile`/`Llongfile`, a second tee installed over the first (a second `openDashboard` in one process), or a custom default handler that itself writes through the `log` package; the Bridge needs none of them.
+- One line can differ in the install window: a `log.Printf` logged between `slog.SetDefault` and the restore of the `log` writer is written as `INFO <message>` instead of `<message>`.
