@@ -21,7 +21,7 @@ import (
 // adding an import (any import) fails this test until a reviewer extends the list.
 var pureCoreImports = []string{
 	"bufio", "bytes", "crypto/sha256", "encoding/hex", "encoding/json", "errors", "fmt", "io", "io/fs",
-	"os", "path", "regexp", "sort", "strconv", "strings", "sync", "syscall", "time", "unicode/utf8",
+	"os", "path", "path/filepath", "regexp", "sort", "strconv", "strings", "sync", "syscall", "time", "unicode/utf8",
 }
 
 // Selectors of syscall and os the pure core may use. Anything else (Exec, ForkExec,
@@ -31,7 +31,7 @@ var (
 	syscallAllowed = map[string]bool{"Open": true, "Openat": true, "Close": true, "Fstat": true, "Lstat": true, "Stat_t": true}
 	osAllowed      = map[string]bool{"File": true, "Geteuid": true, "NewFile": true}
 	// Only the spawn file may also signal and group the child.
-	spawnSyscallExtra = map[string]bool{"Kill": true, "SysProcAttr": true, "SIGINT": true, "WaitStatus": true}
+	spawnSyscallExtra = map[string]bool{"Kill": true, "SysProcAttr": true, "SIGINT": true, "SIGTERM": true, "WaitStatus": true}
 )
 
 // The one file that may import os/exec and call its entry points, and the one
@@ -266,6 +266,13 @@ func TestPureCoreGuardRecognisesBannedImports(t *testing.T) {
 	}
 	if len(guardOn(t, "package x\nimport \"syscall\"\nfunc f(){ _ = syscall.Exec(\"a\", nil, nil) }", true)) == 0 {
 		t.Error("even the spawn file may not syscall.Exec")
+	}
+	// ADR-021 §4: the escalation ends at SIGTERM. SIGKILL (and SIGQUIT, SIGHUP, ...) is not
+	// on the selector allowlist even for the spawn file.
+	for _, sig := range []string{"SIGKILL", "SIGQUIT", "SIGHUP", "SIGSTOP"} {
+		if len(guardOn(t, "package x\nimport \"syscall\"\nfunc f(){ _ = syscall.Kill(-1, syscall."+sig+") }", true)) == 0 {
+			t.Errorf("syscall.%s is allowed in the spawn file", sig)
+		}
 	}
 }
 

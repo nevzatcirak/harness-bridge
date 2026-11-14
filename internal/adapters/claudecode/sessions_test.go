@@ -152,3 +152,32 @@ func TestLoadSessionsFromAFile(t *testing.T) {
 		t.Error("an oversized file must be refused, not truncated")
 	}
 }
+
+// #236 P3-6: the allowlist document is decoded strictly: Go's case-insensitive matching,
+// last-wins duplicates and `null` would all load a different list than the file says.
+func TestParseSessionsIsStrict(t *testing.T) {
+	roots := []string{"/srv/projects"}
+	id := `"session_id":"claudecode:` + testUUID + `"`
+	for name, doc := range map[string]string{
+		"null":                   `null`,
+		"null entry":             `[null]`,
+		"scalar entry":           `[1]`,
+		"upper-case key":         `[{"Session_ID":"claudecode:` + testUUID + `","root":"/srv/projects/a"}]`,
+		"mixed-case root key":    `[{` + id + `,"ROOT":"/srv/projects/a"}]`,
+		"duplicate key":          `[{` + id + `,"root":"/srv/projects/a","root":"/etc"}]`,
+		"duplicate key, cased":   `[{` + id + `,"root":"/srv/projects/a","Root":"/etc"}]`,
+		"duplicate session_id":   `[{` + id + `,` + id + `,"root":"/srv/projects/a"}]`,
+		"nested object entry":    `[[{` + id + `,"root":"/srv/projects/a"}]]`,
+		"object instead of list": `{"0":{` + id + `,"root":"/srv/projects/a"}}`,
+	} {
+		if _, err := ParseSessions([]byte(doc), roots); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if got, err := ParseSessions([]byte(`[]`), roots); err != nil || len(got) != 0 {
+		t.Errorf("an explicit empty list stays valid: %v %v", got, err)
+	}
+	if _, err := ParseSessions([]byte(`[{`+id+`,"root":"/srv/projects/a","label":"ok"}]`), roots); err != nil {
+		t.Errorf("a well-formed entry is refused: %v", err)
+	}
+}

@@ -64,7 +64,27 @@ type fakeChild struct {
 	once     sync.Once
 	// onSignal decides what a signal does; nil means SIGINT ends the child with exit 130.
 	onSignal func(c *fakeChild, s Signal)
-	ignoreIn bool // SIGINT is ignored (only SIGKILL ends it)
+	ignoreIn bool // SIGINT is ignored
+	// ignoreTerm: SIGTERM is ignored too. Without it SIGTERM ends the child like the real
+	// CLI (exit 143, no result). The runner has no SIGKILL, so a child that ignores both
+	// lives until the test (the operator) ends it.
+	ignoreTerm bool
+	log        []sigRec
+	sessionID  string // set by a test whose reaction writes a result line
+}
+
+func (c *fakeChild) sessionFor() string { return c.sessionID }
+
+// sigRec is one signal the child received, with the time it arrived.
+type sigRec struct {
+	sig Signal
+	at  time.Time
+}
+
+func (c *fakeChild) received() []sigRec {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]sigRec(nil), c.log...)
 }
 
 func newFakeChild(t *testing.T) *fakeChild {
@@ -85,12 +105,17 @@ func (c *fakeChild) WriteStdin(p []byte) (int, error) {
 func (c *fakeChild) CloseStdin() error { return nil }
 func (c *fakeChild) Wait() Exit        { return <-c.exitCh }
 func (c *fakeChild) Signal(s Signal) error {
+	c.mu.Lock()
+	c.log = append(c.log, sigRec{s, time.Now()})
+	c.mu.Unlock()
 	c.signals <- s
 	switch {
 	case c.onSignal != nil:
 		c.onSignal(c, s)
 	case s == SigInt && !c.ignoreIn:
 		c.finish(Exit{Code: 130, Signal: "interrupt"})
+	case s == SigTerm && !c.ignoreTerm:
+		c.finish(Exit{Code: 143, Signal: "terminated"})
 	}
 	return nil
 }
@@ -337,3 +362,7 @@ func sessionIDs(list []claudecode.Session) []string {
 	}
 	return out
 }
+
+var errClosed = io.ErrClosedPipe
+
+func jsonUnmarshal(s string, v any) error { return json.Unmarshal([]byte(s), v) }

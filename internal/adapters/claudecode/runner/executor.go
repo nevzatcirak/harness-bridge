@@ -26,9 +26,13 @@ type Config struct {
 	Model        string
 	MaxTurns     int
 	MaxBudgetUSD string
+	// ConfigDir is the test-only CLAUDE_CONFIG_DIR deny rule (§8.3 item 6); production
+	// leaves it empty.
+	ConfigDir string
 
-	// AllowedVersions and Tools are passed to the state machine as they are.
-	// Reading them from BRIDGE_CLAUDE_VERSIONS and the tool profile is slice 3.
+	// AllowedVersions (BRIDGE_CLAUDE_VERSIONS, parsed by claudecode.ParseVersions) must be a
+	// non-empty list of exact versions and Tools a valid profile: New refuses anything else,
+	// so no wiring can skip the §8.5 check.
 	AllowedVersions []string
 	Tools           []string
 
@@ -46,6 +50,9 @@ type Config struct {
 
 	RunMax      time.Duration // wall-clock cap per child (default 15 min)
 	Grace       time.Duration // exit grace after a result (default 10 s)
+	IntWait     time.Duration // §4: wait after SIGINT before SIGTERM (default 10 s)
+	TermWait    time.Duration // §4: wait after SIGTERM before the escalation is exhausted (default 5 s)
+	DrainMax    int64         // bytes read and discarded after a broken stream (default 64 MiB)
 	CloseWait   time.Duration // how long Close waits for interrupted children before it abandons them (default 15 s); nothing is ever killed
 	MaxChildren int           // concurrent children (default 4)
 	Now         func() time.Time
@@ -94,6 +101,15 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Grace <= 0 {
 		cfg.Grace = 10 * time.Second
 	}
+	if cfg.IntWait <= 0 {
+		cfg.IntWait = 10 * time.Second
+	}
+	if cfg.TermWait <= 0 {
+		cfg.TermWait = 5 * time.Second
+	}
+	if cfg.DrainMax <= 0 {
+		cfg.DrainMax = 64 << 20
+	}
 	if cfg.CloseWait <= 0 {
 		cfg.CloseWait = 15 * time.Second
 	}
@@ -104,6 +120,12 @@ func New(cfg Config) (*Executor, error) {
 		cfg.Now = time.Now
 	}
 	if err := claudecode.ValidateWrapper(cfg.FS, cfg.Wrapper); err != nil {
+		return nil, err
+	}
+	if err := claudecode.CheckVersions(cfg.AllowedVersions); err != nil {
+		return nil, err
+	}
+	if err := claudecode.CheckToolProfile(cfg.Tools); err != nil {
 		return nil, err
 	}
 	if err := claudecode.CheckSessionACL(cfg.Sessions, cfg.AllowedSessions); err != nil {
@@ -253,9 +275,9 @@ retry:
 	err := e.cfg.History.BeginTurn(uuid, r.id, claudecode.TurnStart{Prompt: req.Prompt, Principal: req.Principal, KeyHashPrefix: keyPrefix(req.Key)})
 	switch {
 	case errors.Is(err, claudecode.ErrSessionHistoryFull):
-		return reject(execution.Fail("INTERNAL", "session history is at its size bound; archive segments before a new execution"))
+		return reject(execution.Fail("UPSTREAM_FAILURE", "session history is at its size bound; archive segments before a new execution"))
 	case err != nil:
-		return reject(execution.Fail("INTERNAL", "history store unavailable"))
+		return reject(execution.Fail("UPSTREAM_FAILURE", "history store unavailable"))
 	}
 	e.mu.Lock()
 	e.keys[k] = r.id
@@ -364,28 +386,48 @@ func (e *Executor) SessionGuard(session string) (held bool, state string) {
 	return true, r.snapshot().State
 }
 
+// Interrupt is interrupt_execution (ADR-021 §4, reason user): SIGINT to the child's group,
+// then the bounded SIGINT-to-SIGTERM escalation, and the machine decides (row 5 only when the
+// CLI acknowledges with an aborted_* result, row 6b when the escalation is exhausted). It
+// returns the execution as it was at request time (it can still be running) and the caller
+// polls. An execution that already has a verdict is returned unchanged and nothing is sent.
+// Authorization is the caller's (wiring slice): it is not exposed through MCP here.
+func (e *Executor) Interrupt(id string) (execution.Execution, error) {
+	r, err := e.find(id)
+	if err != nil {
+		return execution.Execution{}, err
+	}
+	return r.userInterrupt(), nil
+}
+
 // Close stops admitting and interrupts every live child (SIGINT, reason shutdown, §3
-// row 9s). It waits up to CloseWait for them to be reaped, then ABANDONS the wait: a child
-// that ignores SIGINT is not killed (ADR-021 §4), its run keeps its guard held, and its
-// execution ID is returned so the caller can log the abandonment. The guard of an
-// interrupted run stays held in any case: the verdict is unknown. Close is idempotent.
+// row 9s; then the §4 escalation). It waits up to CloseWait for them to be reaped, then
+// ABANDONS the wait: a child that ignores SIGINT is not killed (ADR-021 §4), its run keeps
+// its guard held, and its execution ID is returned so the caller can log the abandonment. The
+// guard of an interrupted run stays held in any case: the verdict is unknown.
+//
+// Close is idempotent: only the first call interrupts and waits. A repeated call returns
+// at once with the executions that are STILL not reaped at that moment (no second wait).
 func (e *Executor) Close() []string {
 	e.mu.Lock()
+	first := !e.closed
 	e.closed = true
 	runs := make([]*run, 0, len(e.runs))
 	for _, r := range e.runs {
 		runs = append(runs, r)
 	}
 	e.mu.Unlock()
-	for _, r := range runs {
-		r.shutdown()
-	}
-	done := make(chan struct{})
-	go func() { e.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-time.After(e.cfg.CloseWait):
+	if first {
+		for _, r := range runs {
+			r.shutdown()
+		}
+		done := make(chan struct{})
+		go func() { e.wg.Wait(); close(done) }()
+		select {
+		case <-done:
+			return nil
+		case <-time.After(e.cfg.CloseWait):
+		}
 	}
 	var abandoned []string
 	for _, r := range runs {

@@ -421,7 +421,7 @@ func TestHistoryCapRefusesNewExecutions(t *testing.T) {
 	c.finish(Exit{Code: 0})
 	h.wait(x.ID)
 	_, _, err := h.send(1, "next", "key-hist-000002")
-	if errCode(err) != "INTERNAL" || !strings.Contains(err.Error(), "history") {
+	if errCode(err) != "UPSTREAM_FAILURE" || !strings.Contains(err.Error(), "history") {
 		t.Fatalf("at the history bound: %v", err)
 	}
 	if h.sp.count() != 1 {

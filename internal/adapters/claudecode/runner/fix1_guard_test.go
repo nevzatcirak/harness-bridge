@@ -141,7 +141,7 @@ func TestRejectedAdmissionGivesTheChildSlotBack(t *testing.T) {
 	c.emit(h.resultLine(1, nil))
 	c.finish(Exit{Code: 0})
 	h.wait(x.ID)
-	if _, _, err := h.send(1, "next", "key-slot-000002"); errCode(err) != "INTERNAL" {
+	if _, _, err := h.send(1, "next", "key-slot-000002"); errCode(err) != "UPSTREAM_FAILURE" {
 		t.Fatalf("history full: %v", err)
 	}
 	// Session 2 must still be admitted: the slot taken by the refused request was returned.
