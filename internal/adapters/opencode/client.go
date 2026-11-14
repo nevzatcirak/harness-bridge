@@ -25,7 +25,36 @@ type Session struct {
 	ProjectID   string `json:"projectID"`
 	ParentID    string `json:"parentID,omitempty"`
 	WorkspaceID string `json:"workspaceID,omitempty"`
+	// Time and Metadata are kept raw: a native shape this client does not expect must
+	// never fail a session read (and with it every discovery). The accessors below read
+	// them tolerantly and report "unknown" rather than guess.
+	Time     json.RawMessage `json:"time,omitempty"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
+
+// UpdatedAt is the native time.updated (epoch milliseconds). ok is false when the
+// session carries no usable value; the catalog then neither guesses one nor lets the
+// session satisfy an updated_since filter.
+func (s Session) UpdatedAt() (t time.Time, ok bool) {
+	var v struct {
+		Updated *float64 `json:"updated"`
+	}
+	if len(s.Time) == 0 || json.Unmarshal(s.Time, &v) != nil || v.Updated == nil || *v.Updated <= 0 || *v.Updated > 1e15 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(int64(*v.Updated)).UTC(), true
+}
+
+// CreatedByBridge reports the best-effort provenance label metadata.hb_origin ==
+// "bridge" (ADR-022 section 3.3). It is a label only: any client with direct
+// OpenCode access can write or strip it, so it is never an authority.
+func (s Session) CreatedByBridge() bool {
+	var v struct {
+		Origin string `json:"hb_origin"`
+	}
+	return len(s.Metadata) > 0 && json.Unmarshal(s.Metadata, &v) == nil && v.Origin == "bridge"
+}
+
 type MessageInfo struct {
 	ID        string          `json:"id"`
 	Role      string          `json:"role"`

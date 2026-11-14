@@ -565,6 +565,74 @@ works on them (**UNVERIFIED**). The Bridge therefore also records, in memory
 only, the IDs it archived since startup, for audit and for the answer to "did I
 archive this". That memory is lost at restart by design.
 
+### As built (slice S3, dated 2026-11-14, task #245)
+
+`list_catalog` exists as the read-only tool of 6.1 to 6.3, with these decisions and
+limits (the design text above is unchanged):
+
+- **Which sessions it lists.** Exactly the sessions the existing authorization lists:
+  the immutable operator ACL through the same bounded discovery as `find_sessions`
+  (`discoverNative`, the shared pipeline). 6.1 does not name a source set, and 3.2
+  governs lifecycle *actions* (`create_session`, `archive_session`), not a read; the
+  only text that would widen a listing beyond the ACL (3.2 "The eleven existing tools",
+  O1/O2) is an ADR-012 amendment that is not accepted (slice S9), so the catalog does
+  not list a session that is not in `BRIDGE_ALLOWED_SESSIONS`. The lifecycle roots add
+  the `root` label and filter only; `existing_tools` still grants nothing. If the
+  maintainer wants the catalog to list every session under a lifecycle root, that is a
+  decision for S9 and the ADR-012 amendment, not a change to this slice. (The two sections
+  do not contradict each other here, so the slice was not blocked; this is the
+  conservative reading and is recorded for confirmation.)
+- **Registration.** The tool is registered only when the server is given a catalog
+  configuration (`Server.Catalog`, with the lifecycle roots), so a deployment without
+  lifecycle configuration has the same tool set as before (3.1: absent configuration, no
+  lifecycle tools). **Startup wiring from `BRIDGE_LIFECYCLE_CONFIG` is not done in this
+  slice**; until it is, the production Bridge does not register `list_catalog`.
+- **Entry.** `session_ref {harness: "harness:<hash>", session_id: "opencode:<id>"}`
+  (the client's instance identity and the existing ID form), `harness_name`,
+  `directory`, `root` (the lifecycle root that lexically contains the directory; absent
+  if none; the directory itself is already ACL-authorized), `title`, `state`,
+  `updated_at` (native `time.updated`, absent if the native record has none),
+  `created_by_bridge` (the `metadata.hb_origin == "bridge"` label; a label only, never an
+  authority) and `archived` (true only for an overlay-archived session). The native
+  `time` and `metadata` are decoded raw and read tolerantly: an unexpected shape never
+  fails a session read.
+- **Filters (exact match).** `root` (absolute, clean), `state` (the four contract values;
+  `archived` is refused), `updated_since` (RFC 3339; a session with no usable update time
+  never matches), `created_by_bridge`, `harness_name` (`claudecode` yields an empty page:
+  Claude Code entries are omitted, not guessed, and `harnesses` says which kinds the
+  catalog can list), `include_archived`. Bounds as `find_sessions` (limit 50 / 200, offset
+  0 to 1000, sorted by session ID). An invalid filter is `INVALID_INPUT` before any native read.
+- **Aggregates** `{scope: "page", window {offset, limit, returned}, total, by_state,
+  by_root}` are computed from the returned page only and are labelled so; `by_state`
+  always carries the four states; `by_root` counts only sessions that have a root.
+- **Deadline, no silent partial result.** One total deadline of 10 s over discovery and
+  the overlay reads; a deadline is `UPSTREAM_TIMEOUT` (retryable) with no sessions, and a
+  native error on any listed session is an error, never a short page. The two existing
+  discovery behaviours are kept and are not errors: a session in the ACL that the native
+  server no longer has (404) or that fails the workspace check is skipped, as in
+  `find_sessions`; and a status or permission read that fails leaves the state `unknown`
+  rather than dropping the session.
+- **`include_archived` (D16 Q5).** A read-only `ArchiveOverlay` interface answers "is this
+  session overlay-archived"; its production implementation is empty (nothing is archived,
+  because the persistence of S8/S6 does not exist). Overlay-archived sessions are hidden
+  by default and listed, with `archived: true`, only with `include_archived`; an overlay
+  error fails the call and is never guessed. A natively archived session that the native
+  `get` still returns is not interpreted as archived (6.3 UNVERIFIED), so it is listed like
+  any other. No write path, persistence or archive tool exists in this slice.
+- **Carried from reviews #230/#232 (slice S2), fixed here.** `core.bare` is read the way
+  git reads a boolean (unquoted inline comments, `true/yes/on`, non-zero integers in
+  decimal, octal and hex with a `k/m/g` suffix, a key with no value) and a value that cannot
+  be classified refuses (an empty value is refused although git reads it as false: the scan
+  errs towards refusing; the table was checked against `git config --type=bool`); the same
+  comment handling stops `extensions.refstorage = files # ok` from over-refusing. The hard-link
+  refusal of every file the Bridge reads (the `.git` file, `commondir`, `config`,
+  `config.worktree`) is tested; `HEAD` is only `Lstat`ed, never read, so a hard link there leaks
+  nothing. `security.NewLifecycleRoots` refuses duplicate and nested roots itself and `RootOf`
+  returns the nearest root, so the boundary no longer depends on `Config.Parse`. `Grant.Recheck`
+  re-runs the bounded top level and config scan from the root and refuses any difference, so a
+  same-size same-time config rewrite and a nearer `.git` that appeared after the decision are
+  seen (#232 P3-4).
+
 ## 7. Close and archive
 
 ### 7.1 Tools

@@ -48,6 +48,14 @@ func NewLifecycleRoots(paths []string) (*LifecycleRoots, error) {
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("lifecycle root %q must be a directory", p)
 		}
+		for _, other := range l.paths {
+			// A duplicate or nested root would make "the root that contains a path"
+			// depend on list order and let an ascent cross into another root (#230 P3-3,
+			// #232 P3-3). Config.Parse refuses this too; the primitive does not rely on it.
+			if contains(other, p) || contains(p, other) {
+				return nil, fmt.Errorf("lifecycle roots %q and %q overlap", other, p)
+			}
+		}
 		l.paths = append(l.paths, p)
 		l.info = append(l.info, info)
 	}
@@ -66,12 +74,13 @@ func (l *LifecycleRoots) RootOf(path string) string {
 	if l == nil || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return ""
 	}
+	best := ""
 	for _, base := range l.paths {
-		if contains(base, path) {
-			return base
+		if contains(base, path) && len(base) > len(best) {
+			best = base // the nearest root; with no overlap there is at most one
 		}
 	}
-	return ""
+	return best
 }
 
 func contains(base, path string) bool {

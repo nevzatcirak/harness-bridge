@@ -28,8 +28,11 @@ type Server struct {
 	// ReadOnly denies mutations while a staged ingress shares a native session.
 	ReadOnly bool
 	// Remote binds one expiring credential to this server instance and ACL.
-	Remote         *security.Remote
-	Policy         *security.Policy
+	Remote *security.Remote
+	Policy *security.Policy
+	// Catalog enables the read-only list_catalog tool (ADR-022 S3). Nil leaves the tool
+	// unregistered, so a deployment without lifecycle configuration is unchanged.
+	Catalog        *CatalogConfig
 	discoveryOnce  sync.Once
 	discoverySlots chan struct{}
 	once           sync.Once
@@ -46,6 +49,13 @@ type args struct {
 	Limit           int
 	Offset          int
 	Before          string
+	// list_catalog filters (ADR-022 6.1).
+	Root            string
+	State           string
+	UpdatedSince    string
+	CreatedByBridge *bool
+	HarnessName     string
+	IncludeArchived bool
 }
 
 func native(s string) (string, error) {
@@ -111,6 +121,8 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 	switch name {
 	case "list_repositories", "get_repository", "find_sessions", "get_harness_capabilities":
 		return s.discoveryCall(ctx, name, a)
+	case "list_catalog":
+		return s.catalogCall(ctx, a)
 	case "list_sessions":
 		list, e := s.discover(ctx)
 		return Sessions{Sessions: nonnil(list)}, e
@@ -243,6 +255,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		register[FindInput, FoundSessions](server, s, "find_sessions", "Find authorized sessions by repository, workspace or parent; sorted by session ID; limit 1–200, offset 0–1000", func(a FindInput) args {
 			return args{RepositoryID: a.RepositoryID, WorkspaceID: a.WorkspaceID, ParentSessionID: a.ParentSessionID, Limit: a.Limit, Offset: a.Offset}
 		})
+		if s.Catalog != nil && s.Catalog.Roots != nil {
+			register[CatalogInput, Catalog](server, s, "list_catalog", "Read-only catalog of the sessions the ACL authorizes, with an instance-qualified session_ref, optional exact-match filters (root, state, updated_since, created_by_bridge, harness_name), sorted by session ID; limit 1-200, offset 0-1000. Aggregates describe the returned page only. Overlay-archived sessions are hidden unless include_archived is true. Claude Code sessions are omitted until their adapter is wired.", func(a CatalogInput) args {
+				return args{Root: a.Root, State: a.State, UpdatedSince: a.UpdatedSince, CreatedByBridge: a.CreatedByBridge, HarnessName: a.HarnessName, IncludeArchived: a.IncludeArchived, Limit: a.Limit, Offset: a.Offset}
+			})
+		}
 		register[SessionInput, Capabilities](server, s, "get_harness_capabilities", "Inspect native agents and API declarations for an authorized session. Prefer native subagents for large exploration/review when permitted; no Claude Chat spawning API is assumed.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
 		register[PromptInput, execution.Execution](server, s, "send_prompt", "Submit once to the explicitly selected existing session ID; discovery does not grant write access", func(a PromptInput) args {
 			return args{SessionID: a.SessionID, Prompt: a.Prompt, IdempotencyKey: a.IdempotencyKey}
@@ -279,6 +296,10 @@ func validateArgs(name string, a args) error {
 	allowed := map[string]bool{}
 	switch name {
 	case "list_sessions", "list_repositories", "get_repository", "find_sessions":
+	case "list_catalog":
+		if _, e := parseCatalogFilter(a); e != nil {
+			return e
+		}
 	case "get_session", "read_session_history", "get_harness_capabilities":
 		allowed["session"] = true
 	case "send_prompt":

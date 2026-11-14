@@ -557,6 +557,33 @@ needs a restart. Live acceptance (ADR-020 §4) is not yet recorded.
   for old behavior. No promised numeric total, snapshot consistency or synthetic
   cursor; an upstream server ignoring the limit fails closed.
 
+### ADR-022 S3: `list_catalog` (read-only; registered only when configured)
+
+`list_catalog {root?, state?, updated_since?, created_by_bridge?, harness_name?,
+include_archived?, limit?, offset?}` -> `{harnesses:[], sessions:[{session_ref:
+{harness:"harness:<hash>", session_id:"opencode:<id>"}, harness_name, directory, root?,
+title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggregates:
+{scope:"page", window:{offset,limit,returned}, total, by_state, by_root}}`.
+
+- Lists exactly the sessions the immutable ACL authorizes (same bounded discovery as
+  `find_sessions`); it never lists a session outside the ACL and the lifecycle roots grant
+  nothing here. Filters are exact matches; `state` is `idle|running|waiting_for_permission|
+  unknown` (`archived` is refused); `updated_since` is RFC 3339 and a session with no native
+  update time never matches. Limit default 50, 1-200; offset 0-1000; session-ID order; a
+  fresh view, not a snapshot; one total deadline of 10 s.
+- `session_ref` is a first step toward an instance-qualified ID (ADR-022 6.2), not the
+  ADR-012 versioned ID; the other tools keep the `opencode:<id>` form. Aggregates describe the
+  returned page, not the fleet. Claude Code sessions are not listed (`harnesses` names the
+  kinds that are).
+- Errors, never a short page: `INVALID_INPUT` for a bad filter (before any native read);
+  `UPSTREAM_TIMEOUT` (retryable) when the deadline passes; the native error code when a native
+  read of a listed session fails; `INTERNAL` when the archive overlay cannot answer.
+- Read-only: no native write, not audited as a mutation, available under `BRIDGE_READ_ONLY`.
+  Overlay-archived sessions (no persistence yet, so none today) are hidden unless
+  `include_archived` is true.
+- The tool is registered only when the server has a catalog configuration; the startup wiring
+  from `BRIDGE_LIFECYCLE_CONFIG` is not done yet, so a deployed Bridge still lists the same tools.
+
 ### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
 
 Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,

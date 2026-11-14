@@ -216,8 +216,10 @@ func openRefusal(err error) error {
 
 // Recheck verifies, right before the native call, that the lifecycle root and
 // every directory and file the authorization looked at are still the same
-// objects (device and inode). A change refuses with FORBIDDEN; it is never
-// repaired by re-running the decision.
+// objects (device and inode; size and time for a regular file), and that the Git
+// top level and the config scan of rule 3 still give the same answer when run
+// again. A change refuses with FORBIDDEN; it is never repaired by re-running the
+// decision.
 func (g *Grant) Recheck(ctx context.Context) error {
 	if g == nil || g.a == nil {
 		return refusal(CodeForbidden, "", causeChanged)
@@ -225,6 +227,15 @@ func (g *Grant) Recheck(ctx context.Context) error {
 	res, err := g.a.group.Do(ctx, authKey{g.a, g.Directory, "recheck:" + g.Mode}, func(context.Context) authResult {
 		c := &confined{roots: g.a.roots, base: g.Root, seen: g.observed}
 		if !c.unchanged() {
+			return authResult{err: refusal(CodeForbidden, "", causeChanged)}
+		}
+		// Rule 3's evidence is refreshed too (#232 P3-4): the bounded top level and
+		// config scan run again, from the root, so a config rewritten to the same size
+		// and time, or a new .git between the directory and the old top level, is seen.
+		// Any difference, and any refusal, is a change.
+		fresh := &confined{roots: g.a.roots, base: g.Root}
+		top, err := fresh.topLevel(g.Directory)
+		if err != nil || top.dir != g.TopLevel || top.gitDir != g.GitDir || top.commonDir != g.CommonDir {
 			return authResult{err: refusal(CodeForbidden, "", causeChanged)}
 		}
 		return authResult{}

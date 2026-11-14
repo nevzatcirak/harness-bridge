@@ -223,10 +223,30 @@ send:
 	close(jobs)
 	wg.Wait()
 }
+
+// discovered is one authorized session: the projected view and the native record it
+// came from (the catalog reads the native time and metadata, nothing else adds a call).
+type discovered struct {
+	view   Session
+	native opencode.Session
+}
+
 func (s *Server) discover(ctx context.Context) ([]Session, error) {
+	all, e := s.discoverNative(ctx)
+	if e != nil {
+		return nil, e
+	}
+	out := make([]Session, 0, len(all))
+	for _, d := range all {
+		out = append(out, d.view)
+	}
+	return out, nil
+}
+
+func (s *Server) discoverNative(ctx context.Context) ([]discovered, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out := []Session{}
+	out := []discovered{}
 	if s.Policy == nil {
 		return out, nil
 	}
@@ -325,7 +345,7 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	for i, id := range ids {
 		if authorized[id] {
 			v := metadata[i]
-			out = append(out, s.view(v, evidence[directoryIndex[groupKey{v.Directory, workspaceBound(v)}]], authorized[v.ParentID]))
+			out = append(out, discovered{view: s.view(v, evidence[directoryIndex[groupKey{v.Directory, workspaceBound(v)}]], authorized[v.ParentID]), native: v})
 		}
 	}
 	return out, nil

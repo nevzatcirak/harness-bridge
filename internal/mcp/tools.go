@@ -96,6 +96,14 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 			// claudecode: ID is refused at execution until the adapter is wired.
 			p.AnyOf = []*jsonschema.Schema{{Pattern: `^opencode:ses[A-Za-z0-9_-]+$`}, {Pattern: claudeSessionPattern}}
 			p.MaxLength = intp(265)
+		case "root":
+			p.MaxLength = intp(maxCatalogRootBytes)
+		case "state":
+			p.Enum = []any{"idle", "running", "waiting_for_permission", "unknown"}
+		case "updated_since":
+			p.MaxLength = intp(40)
+		case "harness_name":
+			p.Pattern = harnessNamePattern.String()
 		case "execution_id":
 			p.MinLength = intp(1)
 		case "prompt":

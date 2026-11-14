@@ -77,3 +77,13 @@ Open items recorded here, not fixed:
 - `GET /vcs/diff/raw` and `mode=branch` are recorded in ADR-023 section 1.2 but not offered by the views.
 - The OpenCode client keeps its 8 MiB response bound; a `/vcs/diff` answer between 8 MiB and OpenCode's own 10 MB patch cap is shown as `unavailable`.
 - `DashboardSnapshot` has no context and no cap by decision (review #223 P3-2; see ADR-023 "As built (slice 3)").
+
+### ADR-022 slice S3 (list_catalog): deferred items (2026-11-14, appended)
+
+- Startup wiring is not done: nothing sets `Server.Catalog` from `BRIDGE_LIFECYCLE_CONFIG`, so the production Bridge does not register `list_catalog` (ADR-022 3.1 default off). The wiring belongs with the first slice that makes the lifecycle configuration live (S4).
+- The catalog lists ACL-authorized sessions only (ADR-012 is not amended; S9). If the maintainer wants every session under a lifecycle root listed, that is the S9 / ADR-012 amendment decision; see the ADR-022 "As built (slice S3)" note.
+- The overlay has no persistence: `EmptyArchiveOverlay` is the only production implementation (S8, then S6). `include_archived` is therefore exercised only with a fake overlay.
+- A natively archived session that `GET /session/:id` still returns is listed as an ordinary session (ADR-022 6.3 is UNVERIFIED about native archive visibility); nothing interprets `time.archived`.
+- `root` is the lexical lifecycle root of the session directory (the directory is already ACL-authorized and symlink-checked); `by_root` counts only sessions that have one.
+- Nothing ran against a live OpenCode: the native `time.updated` (epoch milliseconds) and `metadata` shapes are read from the existing session record and tested with a fake native server only (UNVERIFIED live).
+- `core.bare` with an empty value is refused although git reads it as false (the scan errs towards refusing).
