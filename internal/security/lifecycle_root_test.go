@@ -207,3 +207,38 @@ func TestOpenStorageBehaviorUnchanged(t *testing.T) {
 		t.Fatal("Allows accepted a lifecycle-only directory")
 	}
 }
+
+// #230 P3-3 / #232 P3-3: the primitive refuses duplicate and nested roots itself, so the
+// root a path belongs to never depends on list order and an ascent cannot cross into a
+// second root, whatever built the list.
+func TestNewLifecycleRootsRefusesOverlap(t *testing.T) {
+	base := canonicalDir(t)
+	outer := mk(t, base, "outer")
+	inner := mk(t, outer, "inner")
+	other := mk(t, base, "other")
+	for name, paths := range map[string][]string{
+		"duplicate":      {outer, outer},
+		"nested":         {outer, inner},
+		"nested reverse": {inner, outer},
+		"nested of 3":    {other, outer, inner},
+	} {
+		if _, err := NewLifecycleRoots(paths); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	l, err := NewLifecycleRoots([]string{outer, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.RootOf(inner); got != outer {
+		t.Errorf("RootOf(%s) = %q", inner, got)
+	}
+	// A sibling that shares a name prefix is not nested.
+	if _, err := NewLifecycleRoots([]string{outer, outer + "-2"}); err == nil {
+		t.Log("(outer-2 does not exist, so it is refused as missing; the prefix case is below)")
+	}
+	sib := mk(t, base, "outer-2")
+	if _, err := NewLifecycleRoots([]string{outer, sib}); err != nil {
+		t.Errorf("a name-prefix sibling is not nested: %v", err)
+	}
+}

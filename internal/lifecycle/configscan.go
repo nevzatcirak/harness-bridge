@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 )
 
@@ -78,9 +79,19 @@ func scanGitConfig(data []byte) string {
 		switch {
 		case section == "core" && key == "worktree":
 			return causeConfigWorktree
-		case section == "core" && key == "bare" && (!hasValue || truthy(value)):
-			return causeConfigBare
-		case section == "extensions" && key == "refstorage" && (!hasValue || strings.ToLower(strings.Trim(value, `"' `)) != "files"):
+		case section == "core" && key == "bare":
+			// A key with no value is true in git. Any value is classified like git's
+			// own boolean reader; one that cannot be classified refuses (fail closed).
+			if !hasValue {
+				return causeConfigBare
+			}
+			switch gitBool(value) {
+			case boolTrue:
+				return causeConfigBare
+			case boolUnknown:
+				return causeConfigMalform
+			}
+		case section == "extensions" && key == "refstorage" && (!hasValue || strings.ToLower(strings.Trim(stripInlineComment(value), `"' \t`)) != "files"):
 			return causeConfigReftable
 		}
 	}
@@ -114,10 +125,60 @@ func splitKey(line string) (key, value string, hasValue bool) {
 	return key, rest, false
 }
 
-func truthy(v string) bool {
-	switch strings.ToLower(strings.Trim(v, `"' `)) {
-	case "", "true", "yes", "on", "1":
-		return true
+type boolVerdict int
+
+const (
+	boolFalse boolVerdict = iota
+	boolTrue
+	boolUnknown // cannot be classified: the caller refuses
+)
+
+// gitBool classifies a config value the way git reads a boolean: an unquoted
+// inline comment ("#" or ";") is dropped, the value may be double-quoted, the
+// words true/yes/on and false/no/off are case-insensitive, and anything else is an
+// integer in decimal, octal or hex with an optional k/m/g suffix, true when it is
+// not zero. An empty value is classified true here (git reads it as false): the
+// scan only ever errs towards refusing. A value that is none of these is unknown.
+func gitBool(v string) boolVerdict {
+	v = strings.TrimSpace(stripInlineComment(v))
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		v = strings.TrimSpace(v[1 : len(v)-1])
 	}
-	return false
+	switch strings.ToLower(v) {
+	case "", "true", "yes", "on":
+		return boolTrue
+	case "false", "no", "off":
+		return boolFalse
+	}
+	n := strings.ToLower(v)
+	if last := n[len(n)-1]; last == 'k' || last == 'm' || last == 'g' {
+		n = n[:len(n)-1]
+	}
+	if n == "" {
+		return boolUnknown
+	}
+	if i, err := strconv.ParseInt(n, 0, 64); err == nil {
+		if i == 0 {
+			return boolFalse
+		}
+		return boolTrue
+	}
+	return boolUnknown
+}
+
+// stripInlineComment cuts v at the first "#" or ";" that is not inside double
+// quotes. A backslash escapes the next character inside quotes.
+func stripInlineComment(v string) string {
+	inQuote := false
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case c == '\\' && inQuote:
+			i++
+		case c == '"':
+			inQuote = !inQuote
+		case (c == '#' || c == ';') && !inQuote:
+			return v[:i]
+		}
+	}
+	return v
 }
