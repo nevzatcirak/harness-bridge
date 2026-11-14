@@ -181,8 +181,8 @@ func TestEmptyAndFailingSources(t *testing.T) {
 	}
 	checkSecurityHeaders(t, "503 list", hdr0)
 	code, body, hdr := fetch(NewHandler(&fakeSource{detailErr: errors.New("boom <b>")}, nil), "/session/opencode/ses_aaa")
-	if code != http.StatusServiceUnavailable || strings.Contains(body, "boom") {
-		t.Errorf("failing detail = %d %s", code, body)
+	if code != http.StatusServiceUnavailable || strings.Contains(body, "boom") || hdr.Get("Retry-After") != "5" {
+		t.Errorf("failing detail = %d retry=%q %s (review #243 P3-1: Retry-After on the detail too)", code, hdr.Get("Retry-After"), body)
 	}
 	checkSecurityHeaders(t, "503", hdr)
 	code, body, _ = fetch(NewHandler(NullSource{}, nil), "/")

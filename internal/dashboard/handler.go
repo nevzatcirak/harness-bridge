@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"net"
@@ -28,6 +29,9 @@ type Route struct {
 	Path    string
 	Methods []string
 	Handler http.Handler
+	// Data marks a route that reads the data source: it counts against the limit of
+	// concurrent data requests (limits.go). Every route counts against the in-flight limit.
+	Data bool
 	// Prefix routes every path under Path (which ends in "/") to Handler. The
 	// handler validates the remainder itself. An exact route always wins.
 	Prefix bool
@@ -51,13 +55,20 @@ type Options struct {
 	Redactor *Redactor
 	// Now is the cache clock; tests replace it.
 	Now func() time.Time
+	// Audit is the read-only audit feed (the ring of the tee handler). Nil means the
+	// feed is not enabled: the audit pages say so and show nothing.
+	Audit AuditSource
 }
 
 func routes(src Source, opts Options) []Route {
 	d := newDash(src, opts)
 	return []Route{
-		{Path: "/", Methods: getHead, Handler: d.indexHandler()},
-		{Path: sessionPrefix, Methods: getHead, Handler: d.detailHandler(), Prefix: true},
+		{Path: "/", Methods: getHead, Handler: d.indexHandler(), Data: true},
+		{Path: sessionPrefix, Methods: getHead, Handler: d.detailHandler(), Prefix: true, Data: true},
+		{Path: "/api/state", Methods: getHead, Handler: d.stateListHandler(), Data: true},
+		{Path: statePrefix, Methods: getHead, Handler: d.stateDetailHandler(), Prefix: true, Data: true},
+		{Path: "/audit", Methods: getHead, Handler: d.auditPageHandler()},
+		{Path: "/api/audit", Methods: getHead, Handler: d.auditJSONHandler()},
 		{Path: "/dashboard.css", Methods: getHead, Handler: assetHandler("assets/dashboard.css", "text/css; charset=utf-8")},
 		{Path: "/dashboard.js", Methods: getHead, Handler: assetHandler("assets/dashboard.js", "text/javascript; charset=utf-8")},
 	}
@@ -96,6 +107,7 @@ func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Han
 		}
 		table[r.Path] = r
 	}
+	lim := &limiter{}
 	hosts := map[string]bool{}
 	for _, h := range allowedHosts {
 		hosts[strings.ToLower(h)] = true
@@ -136,7 +148,17 @@ func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Han
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		route.Handler.ServeHTTP(w, r)
+		// Limits (ADR-023 section 4): never a queue. A request over a limit is refused at
+		// once; the others run with the 5 s request bound.
+		release, ok := lim.acquire(route.Data)
+		if !ok {
+			refuseBusy(w)
+			return
+		}
+		defer release()
+		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
+		defer cancel()
+		route.Handler.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

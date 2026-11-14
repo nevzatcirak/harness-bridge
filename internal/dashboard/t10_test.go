@@ -118,3 +118,30 @@ func TestSlowNativeDiffReadDoesNotBlockASend(t *testing.T) {
 		t.Fatal("the dashboard request outlived its bound")
 	}
 }
+
+// ADR-023 section 4 (third test) and T11: dashboard traffic, whatever the method and
+// route, creates no execution, takes or frees no guard and changes no execution the
+// manager holds (the dashboard has no path to the manager's writers at all). The
+// execution may finish on its own meanwhile, so only what traffic could add is compared.
+func TestDashboardTrafficDoesNotChangeTheManager(t *testing.T) {
+	m := execution.NewWithTiming(stubRunner{}, time.Second, 2*time.Millisecond)
+	t.Cleanup(m.Close)
+	x, err := m.Send(context.Background(), "ses_busy2", "prompt", "key-t11-00001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := m.DashboardSnapshot()
+	if len(before.Executions) != 1 || before.Executions[0].ID != x.ID {
+		t.Fatalf("setup: %+v", before)
+	}
+	h := dashboard.NewHandlerOptions(dashboard.NullSource{}, nil, dashboard.Options{Audit: dashboard.NewAuditRing()})
+	for _, p := range []string{"/", "/audit", "/api/audit", "/api/state", "/api/state/session/opencode/ses_busy2", "/session/opencode/ses_busy2", "/session/opencode/ses_busy2/turn/msg_a", "/dashboard.js", "/execution/" + x.ID, "/admin", "/send_prompt"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, p, strings.NewReader("prompt=x")))
+		}
+	}
+	after := m.DashboardSnapshot()
+	if len(after.Executions) != 1 || after.Executions[0].ID != x.ID || after.Executions[0].SessionID != before.Executions[0].SessionID {
+		t.Fatalf("dashboard traffic changed the manager: %+v -> %+v", before, after)
+	}
+}

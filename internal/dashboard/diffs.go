@@ -214,34 +214,48 @@ func unavailableView(scope string, err error) diffView {
 	return diffView{Label: LabelUnavailable, Scope: scope, Reason: unavailableReason(err)}
 }
 
-// diffCache holds a diff read for the poll interval and shares one in-flight read
-// per key (ADR-023 T7: single-flight diffs). It keeps nothing on disk.
-type diffCache struct {
+// flightCache holds a read for a short TTL and shares one in-flight read per key
+// (single-flight, ADR-023 section 4 and T7). It is generic so the diff reads and the
+// polling view models use the same code: memory only, a bounded number of entries,
+// never written to disk. A failed read is cached for the TTL like a good one only
+// when the caller returns it as a value; callers that must not cache an error
+// return it and the entry is dropped after the waiters have seen it (see get).
+type flightCache[V any] struct {
 	mu  sync.Mutex
 	now func() time.Time
-	m   map[string]*cacheEntry
+	ttl time.Duration
+	max int
+	m   map[string]*cacheEntry[V]
 }
 
-type cacheEntry struct {
+type cacheEntry[V any] struct {
 	done chan struct{}
-	res  DiffResult
+	res  V
 	err  error
 	at   time.Time
 }
 
-func newDiffCache(now func() time.Time) *diffCache {
+func newFlightCache[V any](now func() time.Time, ttl time.Duration, max int) *flightCache[V] {
 	if now == nil {
 		now = time.Now
 	}
-	return &diffCache{now: now, m: map[string]*cacheEntry{}}
+	return &flightCache[V]{now: now, ttl: ttl, max: max, m: map[string]*cacheEntry[V]{}}
 }
 
-func (c *diffCache) get(ctx context.Context, key string, load func(context.Context) (DiffResult, error)) (DiffResult, error) {
+// diffCache is the cache of diff reads: the detail poll interval, 64 entries.
+type diffCache = flightCache[DiffResult]
+
+func newDiffCache(now func() time.Time) *diffCache {
+	return newFlightCache[DiffResult](now, diffCacheTTL, diffCacheMax)
+}
+
+func (c *flightCache[V]) get(ctx context.Context, key string, load func(context.Context) (V, error)) (V, error) {
+	var zero V
 	c.mu.Lock()
 	if e, ok := c.m[key]; ok {
 		select {
 		case <-e.done:
-			if c.now().Sub(e.at) < diffCacheTTL {
+			if c.now().Sub(e.at) < c.ttl {
 				c.mu.Unlock()
 				return e.res, e.err
 			}
@@ -252,14 +266,14 @@ func (c *diffCache) get(ctx context.Context, key string, load func(context.Conte
 			case <-e.done:
 				return e.res, e.err
 			case <-ctx.Done():
-				return DiffResult{}, ctx.Err()
+				return zero, ctx.Err()
 			}
 		}
 	}
-	if len(c.m) >= diffCacheMax {
+	if len(c.m) >= c.max {
 		c.evict()
 	}
-	e := &cacheEntry{done: make(chan struct{})}
+	e := &cacheEntry[V]{done: make(chan struct{})}
 	c.m[key] = e
 	c.mu.Unlock()
 	e.res, e.err = load(ctx)
@@ -269,8 +283,8 @@ func (c *diffCache) get(ctx context.Context, key string, load func(context.Conte
 }
 
 // evict drops finished entries, oldest first, until the cache has room.
-func (c *diffCache) evict() {
-	for len(c.m) >= diffCacheMax {
+func (c *flightCache[V]) evict() {
+	for len(c.m) >= c.max {
 		oldestKey, oldest := "", time.Time{}
 		for k, e := range c.m {
 			select {
@@ -282,7 +296,7 @@ func (c *diffCache) evict() {
 			}
 		}
 		if oldestKey == "" {
-			return // only in-flight entries: leave them, the map stays bounded by the 4-request concurrency
+			return // only in-flight entries: leave them, the map stays bounded by the request concurrency limit
 		}
 		delete(c.m, oldestKey)
 	}

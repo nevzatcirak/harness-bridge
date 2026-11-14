@@ -2,3 +2,7 @@
 body { font-family: sans-serif; margin: 1.5rem; }
 header { display: flex; align-items: baseline; gap: 1rem; }
 .badge { border: 1px solid currentColor; padding: 0 .4rem; font-size: .8rem; }
+table { border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
+.note { color: #555; }
+pre { overflow-x: auto; background: #f6f6f6; padding: .5rem; }

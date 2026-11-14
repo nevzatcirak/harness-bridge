@@ -87,3 +87,13 @@ Open items recorded here, not fixed:
 - `root` is the lexical lifecycle root of the session directory (the directory is already ACL-authorized and symlink-checked); `by_root` counts only sessions that have one.
 - Nothing ran against a live OpenCode: the native `time.updated` (epoch milliseconds) and `metadata` shapes are read from the existing session record and tested with a fake native server only (UNVERIFIED live).
 - `core.bare` with an empty value is refused although git reads it as false (the scan errs towards refusing).
+
+### ADR-023 slice 4 (audit ring, polling, limits): deferred items (2026-11-14, appended)
+
+- Still no production `Source`: the Bridge wires `NullSource`, so the list, detail and polling JSON show "No data source is connected." and only the audit feed carries data; the R-DASH live acceptance stays NOT_EXERCISED. The adapter (ACL sessions, the manager's `DashboardSnapshot`, the native reads) and its wiring are the next dashboard task.
+- The audit ring keeps `guard_release`, `prompt_submission` and `interrupt` only. The future lifecycle and permission events of ADR-022 and ADR-024 are shown when the allowlist is amended with them; their attributes must be added to the attribute allowlist in the same change.
+- The page script was run only against a stub DOM under node, never in a real browser (UNVERIFIED): the first live run must watch the list and detail polling (304 on an unchanged model, a changed state appearing, hidden-tab slow-down) and the audit filter.
+- The 4 / 8 limits are global to the dashboard listener, not per client: one local client can use all four data slots. On a unix socket or loopback with a single operator that is the intended shape; a per-client budget would need a client identity the transport does not give.
+- The detail's polling model excludes the diff section; a changed diff needs a reload (the diff cache is 2 s).
+- `Last-Modified` has one-second resolution and resets when the Bridge restarts (memory only), so a client holding an older validator across a restart gets a full 200 once.
+- A page whose patches are hidden to fit the 2 MiB bound shows that per file; there is no "show anyway" path (the bound is the contract).
