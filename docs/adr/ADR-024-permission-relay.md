@@ -621,6 +621,47 @@ PASS.
    (a still-pending request after a restart is a fresh attempt 1), or route
    every post-restart pending request through an operator-only path.
 
+## As built (attempt writer), 2026-11-14
+
+Facts only; the open items of review #197 stay open. The D15 prerequisite of S3/S5 exists in
+`internal/audit` (task #274), **not wired into any tool** and not in `mutating()`.
+
+- **What it is.** `audit.Writer.Write` builds one AUDIT-01-shaped line (`event=permission_reply`,
+  `phase=attempt`, then the allowlisted attributes of section 6 in a fixed order, then
+  `decided_by=chat_client`, `human_verified=false`) and hands it to the process default `slog`
+  handler. It returns the handler's error. It defines no journal record type, changes no existing
+  line and does not touch the deferred AUDIT-01 middleware (`internal/mcp/audit.go`).
+- **Destination and lock.** It uses `slog.Default().Handler()` at call time, the same destination
+  the existing lines use. With the dashboard tee installed (#251) the line goes through the tee's
+  journal branch and the `syncWriter` the `log` package shares, so bytes and ordering equal an
+  `slog.Info` call with the same attributes (tested). The ring tee drops the line because
+  `permission_reply` is not in the dashboard `auditEvents` allowlist; changing that is a dashboard
+  change and is not part of this slice (proposal below).
+- **What can be observed.** With Go's default handler and the `log` writer, a writer error
+  (`EPIPE`, closed file, `io.ErrShortWrite`, any error) reaches the caller of `Handle`; the tests
+  cover a failing writer, a short write that returns an error, a closed file and a broken pipe.
+  **Not observable:** a writer that reports a short write with a nil error (it breaks the
+  `io.Writer` contract; `os.File` does not). Journald/stderr delivery after a successful `write(2)`
+  is not observable either; "written" means "the destination accepted the bytes".
+- **Latch (4.2 step 9).** After one failed write (handler error, panic, or a handler that does not
+  accept Info records) `Writer.Unavailable()` is true for the life of the process and every later
+  `Write` returns `ErrUnavailable` without calling the handler. It never resets on a later
+  success (there is no later write). Fields refused before writing (`ErrInvalid`) neither write nor
+  latch.
+- **Fields.** Every attribute has a closed shape (regex); an unknown key, a value outside its
+  shape, a missing required field (`tool`, `attempt_id`, `decision`, `permission_id`,
+  `execution_id`) is refused. `event`, `phase`, `decided_by` and `human_verified` cannot be
+  supplied.
+- **Refusal value.** `audit.Refusal()` returns `UPSTREAM_FAILURE`, `retryable: true`, message
+  starting `audit_unavailable` (the reason code of 4.2 step 8). No tool exposes it yet.
+
+Proposals for the maintainer (not implemented): (1) recovery of the latch: restart only (as built),
+or a probe write after a back-off, or an operator command; (2) whether `reject` and same-key
+replays that send nothing are still served while latched (the writer cannot tell; the S5 call site
+decides); (3) add `permission_reply` and its attributes to the dashboard `auditEvents`/`auditAttrs`
+allowlists so the audit ring shows attempts; (4) whether `audit_unavailable` needs its own error
+code instead of `UPSTREAM_FAILURE`.
+
 ## 13. Limitations of this record
 
 - Static reading of one upstream commit; OpenCode was not run and no Bridge or
