@@ -33,6 +33,9 @@ type Server struct {
 	// Catalog enables the read-only list_catalog tool (ADR-022 S3). Nil leaves the tool
 	// unregistered, so a deployment without lifecycle configuration is unchanged.
 	Catalog *CatalogConfig
+	// Claude is the ADR-021 Claude Code adapter. Nil (the default) leaves every claudecode:
+	// session ID refused as "not enabled" and every OpenCode response untouched.
+	Claude ClaudeHarness
 	// Create enables the create_session tool (ADR-022 S4). Nil leaves it unregistered.
 	Create         *CreateConfig
 	discoveryOnce  sync.Once
@@ -134,6 +137,9 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		list, e := s.discover(ctx)
 		return Sessions{Sessions: nonnil(list)}, e
 	case "get_session", "read_session_history", "send_prompt":
+		if cid, ok := s.claudeID(a.SessionID); ok {
+			return s.claudeSessionCall(ctx, name, cid, a, record)
+		}
 		id, e := native(a.SessionID)
 		if e != nil {
 			return nil, e
@@ -164,6 +170,9 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		record.replay = replay
 		return x, e
 	case "get_execution_status", "get_execution_result", "interrupt_execution":
+		if s.Claude != nil && s.Claude.Owns(a.ExecutionID) {
+			return s.claudeExecutionCall(name, a)
+		}
 		x, e := s.Runs.Snapshot(ctx, a.ExecutionID)
 		if e != nil {
 			return nil, e

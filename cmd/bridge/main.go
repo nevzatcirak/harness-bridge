@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/harness-bridge/internal/admin"
 	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/mcp"
@@ -43,20 +44,33 @@ func main() {
 	}
 	// Read-only ingress cannot mutate and does not acquire writer ownership.
 	// Every cooperating writer on this host must share this protected directory.
+	allSessions := make([]string, 0, len(policy.Sessions))
+	for id := range policy.Sessions {
+		allSessions = append(allSessions, id)
+	}
 	if !cfg.readOnly {
-		sessions := make([]string, 0, len(policy.Sessions))
-		for id := range policy.Sessions {
-			sessions = append(sessions, id)
-		}
-		owner, err := execution.AcquireOwnership(os.Getenv("BRIDGE_WRITER_LOCK_DIR"), sessions)
+		owner, err := acquireOpenCodeOwnership(os.Getenv("BRIDGE_WRITER_LOCK_DIR"), allSessions)
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer owner.Close()
+		if owner != nil {
+			defer owner.Close()
+		}
+	}
+	claude, err := openClaude(os.Getenv, splitList(os.Getenv("BRIDGE_ALLOWED_ROOTS"), string(os.PathListSeparator)), allSessions, cfg.readOnly)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if claude != nil {
+		defer claude.Close()
 	}
 	runs := execution.New(client)
 	defer runs.Close()
-	adminServer, err := openAdmin(os.Getenv, cfg.readOnly, runs)
+	var claudeRelease admin.ClaudeReleaser // stays a nil interface unless the adapter runs
+	if claude != nil {
+		claudeRelease = claude
+	}
+	adminServer, err := openAdmin(os.Getenv, cfg.readOnly, runs, claudeRelease)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,6 +80,9 @@ func main() {
 	// ADR-023 read-only dashboard: disabled unless BRIDGE_DASHBOARD_SOCKET or
 	// BRIDGE_DASHBOARD_ADDR is set; local transports only.
 	mcpServer := &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly}
+	if claude != nil {
+		mcpServer.Claude = claude // only when enabled: a nil *Harness must never reach the interface
+	}
 	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {
 		log.Fatal(err)

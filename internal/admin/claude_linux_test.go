@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"
+	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
 
@@ -21,12 +21,12 @@ const claudeSession1 = "claudecode:00000000-0000-4000-8000-000000000001"
 type stubClaude struct {
 	mu    sync.Mutex
 	calls []string
-	opts  []runner.ReleaseOptions
-	ev    runner.ReleaseEvidence
+	opts  []claudecode.ReleaseOptions
+	ev    claudecode.ReleaseEvidence
 	err   error
 }
 
-func (s *stubClaude) ReleaseGuard(_ context.Context, session, id string, opt runner.ReleaseOptions) (runner.ReleaseEvidence, error) {
+func (s *stubClaude) ReleaseGuard(_ context.Context, session, id string, opt claudecode.ReleaseOptions) (claudecode.ReleaseEvidence, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, session+" "+id)
@@ -58,7 +58,7 @@ func TestClaudeSessionIsRefusedWhileNoExecutorExists(t *testing.T) {
 
 func TestClaudeReleaseHappyPathWritesOneAuditLine(t *testing.T) {
 	at := time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
-	cl := &stubClaude{ev: runner.ReleaseEvidence{Harness: "claudecode", Row: "6", ExitClass: "signal", ChildExited: true, GroupEmpty: true, Rechecked: true, SettleMS: 5000, GuardReleasedAt: &at}}
+	cl := &stubClaude{ev: claudecode.ReleaseEvidence{Harness: "claudecode", Row: "6", ExitClass: "signal", ChildExited: true, GroupEmpty: true, Rechecked: true, SettleMS: 5000, GuardReleasedAt: &at}}
 	oc := &stubReleaser{}
 	h := startWith(t, oc, func(s *Server) { s.Claude = cl })
 	r := call(t, h, claudeRequest())
@@ -77,7 +77,7 @@ func TestClaudeReleaseHappyPathWritesOneAuditLine(t *testing.T) {
 }
 
 func TestClaudeRefusalCarriesTheReasonAndOneAuditLine(t *testing.T) {
-	cl := &stubClaude{ev: runner.ReleaseEvidence{Harness: "claudecode", ChildExited: false}, err: &execution.Error{Code: "SESSION_BUSY", Message: "child exit not confirmed"}}
+	cl := &stubClaude{ev: claudecode.ReleaseEvidence{Harness: "claudecode", ChildExited: false}, err: &execution.Error{Code: "SESSION_BUSY", Message: "child exit not confirmed"}}
 	h := startWith(t, &stubReleaser{}, func(s *Server) { s.Claude = cl })
 	r := call(t, h, claudeRequest())
 	refused(t, r, "SESSION_BUSY")

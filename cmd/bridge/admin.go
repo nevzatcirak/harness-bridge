@@ -16,7 +16,7 @@ import (
 // openAdmin opens the ADR-020 (b) admin socket in writer mode only, after
 // writer ownership is acquired. It returns nil when BRIDGE_ADMIN_SOCKET is
 // unset or the ingress is read-only.
-func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser) (*admin.Server, error) {
+func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser, claude admin.ClaudeReleaser) (*admin.Server, error) {
 	path := env("BRIDGE_ADMIN_SOCKET")
 	if path == "" {
 		return nil, nil
@@ -31,6 +31,9 @@ func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser) (*ad
 		return nil, err
 	}
 	srv := &admin.Server{Runs: runs, UID: uid}
+	if claude != nil {
+		srv.Claude = claude // nil otherwise: a claudecode: release is refused "not enabled"
+	}
 	go func() {
 		if err := srv.Serve(ln); err != nil {
 			log.Printf("admin socket stopped: %v", err)

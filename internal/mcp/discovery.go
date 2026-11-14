@@ -38,6 +38,8 @@ type Capabilities struct {
 	BridgeSessionCreation  bool     `json:"bridge_session_creation"`
 	Evidence               string   `json:"evidence"`
 	Guidance               string   `json:"guidance"`
+	// ClaudeCode is the ADR-021 §9 block, present only for a claudecode: session.
+	ClaudeCode *ClaudeCapabilities `json:"claudecode,omitempty"`
 }
 
 // directoryEvidence is request-local. Sharing it never claims an atomic native snapshot.
@@ -240,6 +242,9 @@ func (s *Server) discover(ctx context.Context) ([]Session, error) {
 	for _, d := range all {
 		out = append(out, d.view)
 	}
+	if s.Claude != nil {
+		out = s.mergeClaude(out)
+	}
 	return out, nil
 }
 
@@ -263,9 +268,18 @@ func (s *Server) discoverNative(ctx context.Context) ([]discovered, error) {
 	}
 	ids := []string{}
 	for id, allowed := range s.Policy.Sessions {
-		if allowed {
-			ids = append(ids, id)
+		if !allowed {
+			continue
 		}
+		// ADR-021 wiring: a claudecode: ACL entry (required there when the adapter is on, and
+		// harmless when it is off) belongs to the Claude adapter, never to the OpenCode client.
+		// Sent to Client.Get it is refused locally ("invalid native session ID", neither FORBIDDEN
+		// nor NOT_FOUND) and the whole OpenCode listing would fail (#267 P2-1). The Claude rows are
+		// merged by discover() when the adapter is enabled.
+		if _, claude := claudeCanonical(id); claude {
+			continue
+		}
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	metadata := make([]opencode.Session, len(ids))
@@ -352,6 +366,9 @@ func (s *Server) discoverNative(ctx context.Context) ([]discovered, error) {
 }
 func (s *Server) discoveryCall(ctx context.Context, name string, a args) (any, error) {
 	if name == "get_harness_capabilities" {
+		if cid, ok := s.claudeID(a.SessionID); ok {
+			return s.claudeCapabilities(cid)
+		}
 		id, e := native(a.SessionID)
 		if e != nil {
 			return nil, e
