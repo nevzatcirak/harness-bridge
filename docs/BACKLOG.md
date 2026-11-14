@@ -102,3 +102,13 @@ Open items recorded here, not fixed:
 
 - The tee's journal branch is a private `log.Logger` over the original writer (see the ADR-023 as-built note). It does not support the `log` flags `Lshortfile`/`Llongfile`, a second tee installed over the first (a second `openDashboard` in one process), or a custom default handler that itself writes through the `log` package; the Bridge needs none of them.
 - One line can differ in the install window: a `log.Printf` logged between `slog.SetDefault` and the restore of the `log` writer is written as `INFO <message>` instead of `<message>`.
+
+### ADR-022 slice S4 (create_session): deferred items (2026-11-15, appended)
+
+- **No audit line, no production wiring.** AUDIT-01 `event=session_create` (ADR-022 4.3, slice S5) must land BEFORE `Server.Create` is built from `BRIDGE_LIFECYCLE_CONFIG` in `cmd/bridge`; until then the tool is registered only in tests. The create path writes nothing to the journal.
+- The first prompt (4.1 step 6) and its derived key (`first 32 hex of sha256(key || ":first")`, with its 128-byte test) wait for O2 and slice S9; the helper is not shipped.
+- The fake native's `GET /session?directory=&limit=` and `POST /session?directory=` shapes follow ADR-022 section 2; whether the real server filters the list by directory, honours `limit` and returns the new session's `directory` as sent is **UNVERIFIED live** (the count is therefore filtered and bounded on the Bridge side, and a longer-than-window list refuses).
+- A created session is not in the ACL: the existing tools cannot act on it until the operator adds its ID (ADR-022 3.2 O1/O2/O3 is undecided, S9).
+- The idempotency registry forgets the oldest finished record past 10,000 entries and everything at a restart (memory-only, ADR-022 3.3); a native 4xx/5xx is not recorded, so a caller retry after a 5xx that actually created a session would create a second one (the caps bound it).
+- `create_session` is serialized (one at a time) so the caps hold; a slow native read delays the next create by at most its 5 s bound.
+- Equivalent mutant noted in review: dropping the `..` component check in the tool still ends in `INVALID_INPUT`, because the S2 authorizer refuses the non-canonical joined path (two layers).

@@ -104,6 +104,11 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 			p.MaxLength = intp(40)
 		case "harness_name":
 			p.Pattern = harnessNamePattern.String()
+		case "subdirectory":
+			p.MaxLength = intp(maxCreateSubdir)
+		case "title":
+			p.MinLength = intp(1)
+			p.MaxLength = intp(maxCreateTitle)
 		case "execution_id":
 			p.MinLength = intp(1)
 		case "prompt":

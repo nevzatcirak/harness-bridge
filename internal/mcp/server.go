@@ -32,7 +32,9 @@ type Server struct {
 	Policy *security.Policy
 	// Catalog enables the read-only list_catalog tool (ADR-022 S3). Nil leaves the tool
 	// unregistered, so a deployment without lifecycle configuration is unchanged.
-	Catalog        *CatalogConfig
+	Catalog *CatalogConfig
+	// Create enables the create_session tool (ADR-022 S4). Nil leaves it unregistered.
+	Create         *CreateConfig
 	discoveryOnce  sync.Once
 	discoverySlots chan struct{}
 	once           sync.Once
@@ -56,6 +58,9 @@ type args struct {
 	CreatedByBridge *bool
 	HarnessName     string
 	IncludeArchived bool
+	// create_session (ADR-022 4.1).
+	Subdirectory string
+	Title        string
 }
 
 func native(s string) (string, error) {
@@ -123,6 +128,8 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		return s.discoveryCall(ctx, name, a)
 	case "list_catalog":
 		return s.catalogCall(ctx, a)
+	case "create_session":
+		return s.createCall(ctx, a)
 	case "list_sessions":
 		list, e := s.discover(ctx)
 		return Sessions{Sessions: nonnil(list)}, e
@@ -260,6 +267,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return args{Root: a.Root, State: a.State, UpdatedSince: a.UpdatedSince, CreatedByBridge: a.CreatedByBridge, HarnessName: a.HarnessName, IncludeArchived: a.IncludeArchived, Limit: a.Limit, Offset: a.Offset}
 			})
 		}
+		if s.Create != nil {
+			register[CreateInput, CreateOutput](server, s, "create_session", "Create a new OpenCode session in a directory under a configured lifecycle root (the root itself unless max_depth allows a subdirectory). It never creates directories, never accepts a prompt, permission, agent or model, makes exactly one native write per accepted request and never retries it: an unknown outcome is UNKNOWN_OUTCOME and the session must be found through the catalog. Unavailable under BRIDGE_READ_ONLY.", func(a CreateInput) args {
+				return args{Root: a.Root, Subdirectory: a.Subdirectory, Title: a.Title, IdempotencyKey: a.IdempotencyKey}
+			})
+		}
 		register[SessionInput, Capabilities](server, s, "get_harness_capabilities", "Inspect native agents and API declarations for an authorized session. Prefer native subagents for large exploration/review when permitted; no Claude Chat spawning API is assumed.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
 		register[PromptInput, execution.Execution](server, s, "send_prompt", "Submit once to the explicitly selected existing session ID; discovery does not grant write access", func(a PromptInput) args {
 			return args{SessionID: a.SessionID, Prompt: a.Prompt, IdempotencyKey: a.IdempotencyKey}
@@ -300,6 +312,8 @@ func validateArgs(name string, a args) error {
 		if _, e := parseCatalogFilter(a); e != nil {
 			return e
 		}
+	case "create_session":
+		allowed["key"] = true
 	case "get_session", "read_session_history", "get_harness_capabilities":
 		allowed["session"] = true
 	case "send_prompt":

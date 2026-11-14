@@ -268,9 +268,14 @@ func TestCatalogFilters(t *testing.T) {
 // A session with no usable update time cannot satisfy updated_since (it is never guessed).
 func TestCatalogUpdatedSinceNeverGuessesATime(t *testing.T) {
 	e := newCatalogEnv(t, nil)
-	got := ids(e.mustCall(args{UpdatedSince: "1970-01-02T00:00:00Z"}))
-	if !eq(got, []string{"ses_a", "ses_b", "ses_c"}) {
-		t.Fatalf("%v: ses_d and ses_e carry no time and must not match", got)
+	// A "since" at the very beginning of time is the boundary at which a session with no
+	// update time (the zero time.Time, year 1) would compare as "not before" and slip in if
+	// the no-time guard were missing (review #247 P3-2); a 1970 "since" hides that.
+	for _, since := range []string{"1970-01-02T00:00:00Z", "0001-01-01T00:00:00Z", "0001-01-01T00:00:01Z"} {
+		got := ids(e.mustCall(args{UpdatedSince: since}))
+		if !eq(got, []string{"ses_a", "ses_b", "ses_c"}) {
+			t.Fatalf("since %s: %v: ses_d and ses_e carry no time and must not match", since, got)
+		}
 	}
 }
 
