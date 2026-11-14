@@ -633,6 +633,58 @@ limits (the design text above is unchanged):
   same-size same-time config rewrite and a nearer `.git` that appeared after the decision are
   seen (#232 P3-4).
 
+### As built (slice S4, dated 2026-11-15, task #260)
+
+`create_session` exists against a fake native (the design text above is unchanged). Facts and
+choices:
+
+- **Registration and wiring.** Registered only when the server has a create configuration
+  (`Server.Create`, built from a validated `lifecycle.Config`), so a deployed Bridge keeps its
+  eleven tools (3.1). Nothing wires it from `BRIDGE_LIFECYCLE_CONFIG`, and **its AUDIT-01 line
+  (`session_create`, 4.3, slice S5) does not exist yet and must land before any production
+  wiring.** The tool is deliberately not classified as a mutating tool of the existing audit
+  path: that path writes the prompt and interrupt lines.
+- **Input.** `root` (must equal a configured root path; the configuration has no root `id`, so
+  the path is the only spelling), `subdirectory`, `title` (1-200 characters, no control
+  characters), `idempotency_key` (8-128 bytes). **No `prompt`** (4.1 step 6 needs O2 and S9, D16
+  Q7) and no `permission`, `agent`, `model`, `parentID`, `workspaceID` or `harness`: the generated
+  input schema rejects any other property and the client's request body has no field for them. The
+  helper that derives a first-prompt key from a create key (`first 32 hex of sha256(key || ":first")`)
+  is **deferred with the first prompt** (no unused code is shipped).
+- **Order.** Input and `BRIDGE_READ_ONLY`; the idempotency lookup; the path (root, depth, the S2
+  authorizer: canonical path, Git top level, `non_git`/`not_in_root`, `NOT_FOUND`); the hourly
+  counter; the native count; the identity re-check; the one POST; the verification. 4.1 lists the
+  caps before the path and the lookup after it; here every path refusal is made before any native
+  call ("no native call" in 4.2) and a recorded outcome is returned before the caps, so a replay is
+  never refused by the cap its own creation reached. A subdirectory deeper than `max_depth` is
+  `FORBIDDEN` (a policy refusal), an escaping or malformed one `INVALID_INPUT`, a missing one
+  `NOT_FOUND`. The reason (`non_git`, `not_in_root`) is carried in the message of the `FORBIDDEN`.
+- **The count.** One bounded native read per configured root (`GET /session?directory=<root>&limit=1001`,
+  5 s, at most 1000 entries), in parallel up to four. Sessions whose directory is under the root
+  count, once each by ID; one with no directory counts (an unplaceable entry is never under the cap).
+  A list longer than 1000, a failing page or an unreadable answer is `SESSION_LIMIT` ("cap state
+  unknown"), a timeout `UPSTREAM_TIMEOUT`; neither writes. Creates are serialized by one semaphore
+  so `max_sessions`, `max_total_sessions` and `create_per_hour` hold under concurrent requests.
+  The native default list hides archived sessions, so they do not count (6.3 is UNVERIFIED).
+- **Idempotency and uncertainty.** The registry is memory-only and keyed by the sha256 of the key
+  (never the raw key), compared with the sha256 of root, subdirectory and title, bounded at 10,000
+  records (the oldest finished record is forgotten: a retry of that key is then a new request, the
+  documented memory-only duplicate risk). A POST that timed out, lost its response, returned an
+  unreadable answer or no valid session ID is `UNKNOWN_OUTCOME` (`retryable: false`), recorded, and
+  returned again for the same key and input **without a second POST**. A native 4xx/5xx is
+  `UPSTREAM_FAILURE` and is not recorded. Concurrent identical requests share one POST. Every POST
+  that was sent counts against `create_per_hour`, whatever its outcome.
+- **Verification.** The returned directory must equal the requested canonical path exactly (the
+  Bridge does not resolve a path the native server returned: that would be an untrusted read), and
+  the grant is re-checked after the POST; otherwise `UNKNOWN_OUTCOME` with
+  `bootstrap_may_be_outside_root=true` (kept on the error for the audit line of S5; the session is
+  not used and the outcome is recorded).
+- **Not here:** audit (S5), the first prompt (S9), startup wiring, a `harness` selector (ADR-021),
+  archive (S6), any directory creation.
+- **Carried from review #247:** `gitBool` no longer reads the Go-only integer spellings (`0_0`,
+  `0x0_0`, `0b0_0`) or the `0b`/`0o` prefixes, which git rejects or reads only on some C libraries:
+  they refuse; `updated_since` is pinned at the year-1 boundary.
+
 ## 7. Close and archive
 
 ### 7.1 Tools

@@ -584,6 +584,48 @@ title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggrega
 - The tool is registered only when the server has a catalog configuration; the startup wiring
   from `BRIDGE_LIFECYCLE_CONFIG` is not done yet, so a deployed Bridge still lists the same tools.
 
+### ADR-022 S4: `create_session` (against a fake native; registered only when configured)
+
+`create_session {root, subdirectory?, title?, idempotency_key}` ->
+`{session_id, root, directory, title, created: true}`. `session_id` is `opencode:<id>`. The
+input schema has no other property: a `prompt`, `permission`, `agent`, `model`, `parentID`,
+`workspaceID` or `harness` is rejected before the handler runs (the first prompt needs the O2
+flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
+
+- **Authority** is the lifecycle configuration plus the live directory (ADR-022 3.2), not the
+  ACL: a created session is NOT in `BRIDGE_ALLOWED_SESSIONS` and the existing tools do not act on
+  it (ADR-022 3.2 O1/O2/O3 is undecided; until S9 the operator adds the ID to the ACL).
+- `root` must equal a configured root path exactly (no trailing slash, no alias). `subdirectory`
+  is relative and clean, without `..`, empty, `.` or control components, must already exist
+  without symlink components, and at most `max_depth` levels deep (absent = 0: the root itself).
+  The Bridge never creates a directory. The fully resolved canonical path is what is sent
+  (`POST /session?directory=<path>`, body `{title?, metadata: {hb_origin: "bridge", hb_key:
+  <first 16 hex of sha256(key)>}}`; nothing else, never the raw key).
+- **Order and errors** (every refusal up to the count makes no native call): input shape
+  `INVALID_INPUT`; `BRIDGE_READ_ONLY` `FORBIDDEN`; a recorded outcome for the same key is returned
+  before any cap, the same key with another input `IDEMPOTENCY_CONFLICT`; root not configured or
+  deeper than `max_depth` or not authorized `FORBIDDEN`, a Git top level missing or above the root
+  `FORBIDDEN` (`non_git`), a `gitdir:`/`commondir` leaving the root `FORBIDDEN` (`not_in_root`), a
+  missing path `NOT_FOUND`; `create_per_hour` reached `SESSION_LIMIT` (new code, retryable);
+  then one bounded native read per configured root (5 s, at most 1000 entries each): `max_sessions`
+  of the root or `max_total_sessions` reached `SESSION_LIMIT`; a count that is truncated, failed
+  or unreadable is `SESSION_LIMIT` ("cap state unknown"), a count that timed out
+  `UPSTREAM_TIMEOUT`, and neither writes anything.
+- **The one native write** follows an identity re-check and is never retried or replayed: a
+  timeout, a lost response, an unreadable answer or an answer without a valid session ID is
+  `UNKNOWN_OUTCOME` (`retryable: false`; the message gives the `hb_key` hint to find a stray
+  session through `list_catalog`), and the SAME key and input return that recorded outcome again
+  without a second POST. A native 4xx/5xx is `UPSTREAM_FAILURE` and is not recorded (the
+  caller's retry is a new request). A returned `directory` that differs from the requested path,
+  or an identity that changed during the POST, is `UNKNOWN_OUTCOME` carrying
+  `bootstrap_may_be_outside_root=true`; the session is not used.
+- The idempotency registry and the hourly counter are memory-only (a restart resets them,
+  ADR-022 3.3), the registry holds at most 10,000 records, and creates are serialized so the caps
+  hold under concurrency.
+- **No audit line yet:** `event=session_create` is slice S5 and must land before any production
+  wiring. The tool is registered only when the server has a create configuration; nothing wires
+  it from `BRIDGE_LIFECYCLE_CONFIG`, so a deployed Bridge keeps its eleven tools.
+
 ### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
 
 Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,

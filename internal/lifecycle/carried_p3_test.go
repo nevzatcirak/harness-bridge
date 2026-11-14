@@ -47,6 +47,15 @@ func TestCoreBareFollowsGitBooleanSpellings(t *testing.T) {
 		"0xzz":                 causeConfigMalform,
 		"99999999999999999999": causeConfigMalform, // out of range: git errors, the scan refuses
 		"tru e":                causeConfigMalform,
+		"0_0":                  causeConfigMalform, // Go reads a digit separator, git rejects it (review #247 P3-1)
+		"0x0_0":                causeConfigMalform,
+		"0b0_0":                causeConfigMalform,
+		"1_0":                  causeConfigMalform,
+		"0b0":                  causeConfigMalform, // git accepts it only on some C libraries: refuse
+		"0b1":                  causeConfigMalform,
+		"0o7":                  causeConfigMalform,
+		"-0b1":                 causeConfigMalform,
+		"0X1F":                 causeConfigBare,
 	} {
 		cfg := "[core]\n\tbare = " + value + "\n"
 		if got := scanGitConfig([]byte(cfg)); got != want {

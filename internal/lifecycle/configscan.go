@@ -157,6 +157,16 @@ func gitBool(v string) boolVerdict {
 	if n == "" {
 		return boolUnknown
 	}
+	// strconv.ParseInt with base 0 also reads spellings that git's own integer parser
+	// does not (a digit separator "0_0", "0x0_0", "0b0_0") or reads only on some C
+	// libraries (a "0b" or "0o" prefix). Anything the scan cannot be sure git accepts is
+	// unclassifiable and refuses (review #247 P3-1).
+	if strings.Contains(n, "_") {
+		return boolUnknown
+	}
+	if digits := strings.TrimLeft(n, "+-"); strings.HasPrefix(digits, "0b") || strings.HasPrefix(digits, "0o") {
+		return boolUnknown
+	}
 	if i, err := strconv.ParseInt(n, 0, 64); err == nil {
 		if i == 0 {
 			return boolFalse
