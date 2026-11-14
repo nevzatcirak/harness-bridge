@@ -732,15 +732,59 @@ func TestCreateIncompleteCountRefusesWithNoNativeWrite(t *testing.T) {
 			}
 		})
 	}
-	// Only a read that stays within the window counts: exactly the window is complete.
+	// #262 P3-1: a read of exactly the window may have been clamped by the native server, so it
+	// is not proof of completeness: the cap state is unknown and nothing is written. One entry
+	// fewer is complete.
 	e := newCreateEnv(t, func(c *lifecycle.Config) { c.Roots[0].MaxSessions = 5000; c.MaxTotalSessions = 5000 })
 	l := make([]opencode.Session, createCountWindow)
 	for i := range l {
 		l[i] = opencode.Session{ID: fmt.Sprintf("ses_y%d", i), Directory: "/elsewhere"}
 	}
 	e.listing[e.rootA] = l
-	if _, err := e.create(args{Root: e.rootA, IdempotencyKey: "key-count-0002"}); err != nil {
+	if _, err := e.create(args{Root: e.rootA, IdempotencyKey: "key-count-0002"}); codeOf(err) != "SESSION_LIMIT" || !strings.Contains(err.Error(), "cap state unknown") {
 		t.Fatalf("a list of exactly the window: %v", err)
+	}
+	if e.count("POST") != 0 {
+		t.Fatal("a native write after a full-window count")
+	}
+	e.listing[e.rootA] = l[:createCountWindow-1]
+	if _, err := e.create(args{Root: e.rootA, IdempotencyKey: "key-count-0003"}); err != nil {
+		t.Fatalf("a list one under the window: %v", err)
+	}
+}
+
+// #265 P3-4: the cap-count reads under the OTHER roots make the native server open an
+// instance at those paths, so each root is checked against its startup identity first; a
+// replaced root is a count that cannot be established: no read under it, no write.
+func TestCreateCapCountChecksTheIdentityOfEveryRoot(t *testing.T) {
+	e := newCreateEnv(t, nil)
+	if err := os.Rename(e.rootB, e.rootB+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(e.rootB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.create(args{Root: e.rootA, IdempotencyKey: "key-ident-0001"})
+	if codeOf(err) != "SESSION_LIMIT" || !strings.Contains(err.Error(), "cap state unknown") {
+		t.Fatalf("a replaced other root: %v", err)
+	}
+	for _, r := range e.requests() {
+		if r.directory == e.rootB {
+			t.Fatalf("a native request was made under the replaced root: %+v", r)
+		}
+	}
+	if e.count("POST") != 0 {
+		t.Fatal("a native write with an unverified root")
+	}
+	// restored: the same key succeeds (the refusal was not recorded).
+	if err := os.Remove(e.rootB); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(e.rootB+".old", e.rootB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.create(args{Root: e.rootA, IdempotencyKey: "key-ident-0001"}); err != nil {
+		t.Fatalf("after restoring the root: %v", err)
 	}
 }
 
@@ -796,7 +840,7 @@ func TestCreateInputValidation(t *testing.T) {
 
 func TestCreateIsNotAMutatingToolOfTheExistingAuditAndWritesNoAuditLine(t *testing.T) {
 	if mutating("create_session") {
-		t.Fatal("create_session must not use the prompt/interrupt AUDIT-01 path (its own line is slice S5)")
+		t.Fatal("create_session must not use the prompt/interrupt AUDIT-01 path (it has its own session_create line, create_audit_test.go)")
 	}
 }
 

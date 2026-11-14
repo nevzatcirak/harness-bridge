@@ -29,7 +29,7 @@ const maxAuditValue = 256
 // auditEvents is the closed allowlist of events the ring keeps (task #250; the
 // ADR's "future lifecycle/permission events" are not shown until this list is
 // amended). Every other record is dropped.
-var auditEvents = map[string]bool{"guard_release": true, "prompt_submission": true, "interrupt": true}
+var auditEvents = map[string]bool{"guard_release": true, "prompt_submission": true, "interrupt": true, "session_create": true}
 
 // auditAttrs is the attribute allowlist enumerated from the existing AUDIT-01
 // writers (internal/mcp/audit.go, internal/admin/admin.go). Any other attribute is
@@ -43,6 +43,9 @@ var auditAttrs = map[string]bool{
 	// (internal/admin/admin.go auditClaude, internal/mcp/audit.go harness). Enum, boolean
 	// and short-token values only; never stream content.
 	"harness": true, "child_exited": true, "group_empty": true, "rechecked": true, "row": true, "exit_class": true,
+	// ADR-022 slice S5: the session_create keys (internal/mcp/audit.go auditCreate). Closed
+	// tokens and counts only; never a title, a path or a raw key.
+	"root_id": true, "key_hash": true, "limit_state": true, "bootstrap_may_be_outside_root": true, "replay": true,
 }
 
 // AuditAttr is one kept attribute, in the order the writer logged it.

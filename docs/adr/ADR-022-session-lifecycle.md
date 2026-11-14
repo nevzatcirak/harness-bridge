@@ -685,6 +685,39 @@ choices:
   `0x0_0`, `0b0_0`) or the `0b`/`0o` prefixes, which git rejects or reads only on some C libraries:
   they refuse; `updated_since` is pinned at the year-1 boundary.
 
+### As built (slice S5, dated 2026-11-15, task #279)
+
+The `session_create` AUDIT-01 line (4.3) exists for `create_session`. Facts and choices:
+
+- **Where.** `Server.call` wraps `create_session` in a deferred step that writes the line before
+  `call` returns (so before the result reaches the transport), on every return path including a
+  panic (`error_code=INTERNAL`, the panic continues). Calls the SDK rejects against the input schema
+  never reach the handler; the AUDIT-01b receiving middleware writes their line. Fields and shapes
+  are in CONTRACTS ("ADR-022 S4: `create_session`"). `create_session` is still not classified by
+  `mutating()` (that path writes the prompt and interrupt lines); the existing lines are unchanged.
+- **Choices.** `root_id` is the root's index in the configuration (the configuration has no root
+  id; an index shifts if the configuration is reordered, a hash of the path would not hide the
+  path from an offline guess). `key_hash` is 16 hex characters, the value of the `hb_key` hint, so a
+  stray session found through the catalog correlates with the line; no hash is written for a key
+  outside 8 to 128 bytes. `limit_state` is one closed string. `replay=true` marks the replay of a
+  recorded error (a recorded success is `outcome=replay`). The ring allowlist gained the event and
+  five keys (closed tokens and counts only).
+- **Carried S4 items.** #262 P3-1: a native list of exactly 1000 entries is "cap state unknown"
+  (the native server may clamp the limit), not complete. #262 P3-3: the directory comparison of the
+  POST answer is an exact string compare, not a canonicalization: the Bridge never resolves a path
+  the native server returned (an untrusted read), so a native server that returns another spelling
+  of the same directory is `UNKNOWN_OUTCOME`; this is the fail-closed choice of 4.1 step 5.
+  #265 P3-4: each root read for the caps is first checked against its startup identity
+  (`Authorizer.CheckRoot`, bounded like `Authorize`); a changed root is a count that cannot be
+  established (`SESSION_LIMIT`, no read under it, no write). #265 P3-5: a panic after the
+  idempotency reservation releases the record (a refusal before the POST: the key is free again;
+  after the POST was sent: the recorded outcome is unknown and the key is never POSTed again).
+- **Maintainer item (not changed).** #262 P3-2: a native 5xx on the POST is `UPSTREAM_FAILURE` here
+  (the answer is definite); ADR 4.2 could be read to make it `UNKNOWN_OUTCOME`. This is a change of
+  the 4.2 behaviour and is left for the maintainer.
+- **Not here.** Archive and close lines (their tools do not exist until S6, after S8), startup
+  wiring from `BRIDGE_LIFECYCLE_CONFIG` (a separate, planner-scheduled task), the first prompt (S9).
+
 ## 7. Close and archive
 
 ### 7.1 Tools

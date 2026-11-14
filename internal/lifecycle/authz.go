@@ -149,6 +149,29 @@ func (a *Authorizer) Authorize(ctx context.Context, directory, mode string) (*Gr
 	return res.grant, res.err
 }
 
+// CheckRoot verifies that a configured lifecycle root is still the directory recorded at startup
+// (same file, no symlink), without authorizing any session directory. It is for the native
+// cap-count reads under roots other than the create target, which make the native server open
+// an instance at that path (#265 P3-4). Like Authorize it is bounded: a check that does not
+// complete wraps security.ErrCheckUnavailable and is never a success.
+func (a *Authorizer) CheckRoot(ctx context.Context, path string) error {
+	if a == nil || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return refusal(CodeInvalidInput, "", causeNotCanonical)
+	}
+	res, err := a.group.Do(ctx, authKey{a, path, "root"}, func(context.Context) authResult {
+		root, _, _, e := a.roots.Open(path)
+		if e != nil {
+			return authResult{err: refusal(CodeForbidden, "", causeChanged)}
+		}
+		root.Close()
+		return authResult{}
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", security.ErrCheckUnavailable, err)
+	}
+	return res.err
+}
+
 func (a *Authorizer) authorize(directory, mode string) (*Grant, error) {
 	// Rule 1: inside a configured root that has the needed mode.
 	base := a.roots.RootOf(directory)

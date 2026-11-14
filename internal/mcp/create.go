@@ -33,8 +33,9 @@ import (
 // slice: it needs the O2 flag and slice S9 (D16 Q7).
 
 const (
-	// createCountWindow is the largest native list a cap count may rest on: a read that
-	// returns more entries than this was truncated and its count is only a lower bound.
+	// createCountWindow is the size of the native list a cap count may rest on: a read that
+	// returns this many entries or more may have been truncated and its count is only a lower
+	// bound (the cap state is then unknown).
 	createCountWindow = 1000
 	// createRegistryMax bounds the memory-only idempotency registry. When it is full the
 	// oldest finished record is forgotten: a retry of THAT key becomes a new request (the
@@ -43,6 +44,34 @@ const (
 	maxCreateTitle    = 200
 	maxCreateSubdir   = 1024
 )
+
+// createAfterPostHook is a test seam called right after the native POST returned. Nil in production.
+var createAfterPostHook func()
+
+// createEvidence is what one create_session call learned, for its audit line (ADR-022 4.3). It
+// is written only by the call's own goroutine and read by the audit after the call returns.
+type createEvidence struct {
+	rootIdx           int // index of the configured root, -1 until it is resolved
+	rootMax, totalMax int
+	hour, hourMax     int
+	hourKnown         bool
+	rootN, totalN     int
+	counted           bool // the native catalog count was established
+	posted            bool // the native POST was sent
+	replay            bool // the outcome returned is a recorded one
+	created           bool
+	sessionID         string // "opencode:ses_..." only when well formed
+}
+
+type createEvKey struct{}
+
+// createEv returns the call's evidence; a call made without call() gets a throwaway one.
+func createEv(ctx context.Context) *createEvidence {
+	if ev, ok := ctx.Value(createEvKey{}).(*createEvidence); ok {
+		return ev
+	}
+	return &createEvidence{rootIdx: -1}
+}
 
 // createBound is the bound of each native step (ADR-022 4.1) in nanoseconds. Atomic and
 // settable only so a test can shorten it.
@@ -280,10 +309,12 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 	if !ok {
 		return nil, execution.Fail("INVALID_INPUT", "subdirectory must be a relative, clean path without .. or control characters")
 	}
+	ev := createEv(ctx)
 	var root *lifecycle.Root
 	for i := range c.cfg.Roots {
 		if c.cfg.Roots[i].Path == a.Root {
 			root = &c.cfg.Roots[i]
+			ev.rootIdx = i
 		}
 	}
 	if root == nil {
@@ -301,6 +332,7 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 		return nil, err
 	}
 	if !owner {
+		ev.replay = true
 		select {
 		case <-rec.done:
 		case <-ctx.Done():
@@ -312,6 +344,23 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 		out := *rec.out
 		return out, nil
 	}
+	// A panic below must not leave the record pending (a retry of the key would wait on it
+	// forever): before the POST was sent it is a refusal (the key is free again), after it the
+	// outcome is unknown (the same key is never POSTed again). The panic then continues.
+	defer func() {
+		if p := recover(); p != nil {
+			select {
+			case <-rec.done:
+			default:
+				if ev.posted {
+					c.reg.finish(keyHash, rec, nil, unknownOutcome("the Bridge failed after the native create was sent; the session may exist: find it through the catalog (hb_key "+keyHash[:16]+"); it is not retried", false))
+				} else {
+					c.reg.abandon(keyHash, rec, execution.Fail("INTERNAL", "panic during create_session"))
+				}
+			}
+			panic(p)
+		}
+	}()
 	out, err := c.run(ctx, s, root, a, keyHash, rec, fp)
 	return out, err
 }
@@ -337,7 +386,10 @@ func (c *CreateConfig) run(ctx context.Context, s *Server, root *lifecycle.Root,
 	case <-ctx.Done():
 		return refuse(&execution.Error{Code: "UPSTREAM_TIMEOUT", Message: "another create_session is in progress; retry", Retryable: true})
 	}
-	if c.reg.postsInWindow(c.now()) >= c.cfg.CreatePerHour {
+	ev := createEv(ctx)
+	ev.rootMax, ev.totalMax, ev.hourMax = root.MaxSessions, c.cfg.MaxTotalSessions, c.cfg.CreatePerHour
+	ev.hour, ev.hourKnown = c.reg.postsInWindow(c.now()), true
+	if ev.hour >= c.cfg.CreatePerHour {
 		return refuse(sessionLimit("create_per_hour reached; retry after the window"))
 	}
 	if err := c.checkCaps(ctx, s.Client, root); err != nil {
@@ -351,7 +403,12 @@ func (c *CreateConfig) run(ctx context.Context, s *Server, root *lifecycle.Root,
 	pctx, cancel := context.WithTimeout(ctx, createNativeBound())
 	defer cancel()
 	c.reg.notePost(c.now())
+	ev.posted = true
+	ev.hour++
 	sess, perr := s.Client.CreateSession(pctx, grant.Directory, a.Title, meta)
+	if createAfterPostHook != nil {
+		createAfterPostHook()
+	}
 	if perr != nil {
 		if opencode.IsDefiniteRefusal(perr) {
 			return refuse(execution.Fail("UPSTREAM_FAILURE", "the native server refused the create"))
@@ -369,11 +426,17 @@ func (c *CreateConfig) run(ctx context.Context, s *Server, root *lifecycle.Root,
 		return nil, e
 	}
 	if sess.Directory != grant.Directory || grant.Recheck(ctx) != nil {
+		ev.sessionID = "opencode:" + sess.ID // well formed (checked above); the native path is not logged
 		e := unknownOutcome("the created session's directory differs from the requested path or its identity changed; bootstrap_may_be_outside_root=true; the session is not used: find it through the catalog (hb_key "+meta["hb_key"]+")", true)
 		c.reg.finish(keyHash, rec, nil, e)
 		return nil, e
 	}
 	out := &CreateOutput{SessionID: "opencode:" + sess.ID, Root: root.Path, Directory: grant.Directory, Title: sess.Title, Created: true}
+	ev.created, ev.sessionID = true, out.SessionID
+	if ev.counted {
+		ev.rootN++
+		ev.totalN++
+	}
 	c.reg.finish(keyHash, rec, out, nil)
 	return *out, nil
 }
@@ -399,12 +462,22 @@ func (c *CreateConfig) checkCaps(ctx context.Context, client *opencode.Client, t
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
+			// The read below makes the native server open an instance at the root's path, so
+			// the root must still be the directory recorded at startup, like the create
+			// target (#265 P3-4). A root that changed is a count that cannot be established.
+			if err := c.auth.CheckRoot(rctx, roots[i].Path); err != nil {
+				results[i].err = err
+				return
+			}
 			list, err := client.ListDirectory(rctx, roots[i].Path, createCountWindow+1)
 			if err != nil {
 				results[i].err = err
 				return
 			}
-			if len(list) > createCountWindow {
+			// A full window is not proof of completeness: the native server may clamp the
+			// limit it is asked for, so exactly createCountWindow entries is "unknown", not
+			// "complete" (#262 P3-1). Any real cap is far below the window.
+			if len(list) >= createCountWindow {
 				results[i].err = errTruncated
 				return
 			}
@@ -443,6 +516,9 @@ func (c *CreateConfig) checkCaps(ctx context.Context, client *opencode.Client, t
 		if roots[i].Path == target.Path {
 			perRoot = len(r.ids)
 		}
+	}
+	if ev := createEv(ctx); ev != nil {
+		ev.rootN, ev.totalN, ev.counted = perRoot, len(total), true
 	}
 	if perRoot >= target.MaxSessions {
 		return sessionLimit(fmt.Sprintf("max_sessions %d of the root reached", target.MaxSessions))
