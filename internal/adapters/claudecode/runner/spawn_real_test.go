@@ -44,7 +44,7 @@ func TestSignalAfterAKnownWaitIsRefused(t *testing.T) {
 		t.Fatal("a signal after a confirmed reap must be refused (pid reuse)")
 	}
 	if err := c.Signal(Signal(99)); err == nil {
-		t.Fatal("only SIGINT may ever be sent")
+		t.Fatal("only SIGINT and SIGTERM may ever be sent")
 	}
 }
 

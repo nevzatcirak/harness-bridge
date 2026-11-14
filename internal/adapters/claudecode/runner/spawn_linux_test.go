@@ -50,7 +50,28 @@ func fakeCLI(i int) {
 		s := strings.ReplaceAll(strings.ReplaceAll(string(b), spikeRoot, root), spikeSession, uuid)
 		fmt.Print(s)
 	}
+	initLine := func() string {
+		return fmt.Sprintf(`{"type":"system","subtype":"init","cwd":%q,"session_id":%q,"model":"m","permissionMode":"default","apiKeySource":"none","claude_code_version":"2.1.322","mcp_servers":[],"plugins":[],"tools":["Read","Glob","Grep"]}`+"\n", root, uuid)
+	}
 	switch scenario {
+	case "init-abort": // a CLI that acknowledges SIGINT with an aborted_tools result and exits 0 (OBSERVED, spike step 6)
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT)
+		fmt.Print(initLine())
+		_ = os.WriteFile(filepath.Join(root, "ready"), nil, 0o600)
+		<-ch
+		fmt.Printf(`{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":1,"session_id":%q,"terminal_reason":"aborted_tools","permission_denials":[]}`+"\n", uuid)
+		os.Exit(0)
+	case "init-ignoreint": // ignores SIGINT; SIGTERM ends it (exit 143 by signal, no result)
+		signal.Ignore(syscall.SIGINT)
+		fmt.Print(initLine())
+		_ = os.WriteFile(filepath.Join(root, "ready"), nil, 0o600)
+		time.Sleep(time.Hour)
+	case "init-ignoreboth": // ignores SIGINT and SIGTERM: only the operator can end it
+		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
+		fmt.Print(initLine())
+		_ = os.WriteFile(filepath.Join(root, "ready"), nil, 0o600)
+		time.Sleep(time.Hour)
 	case "exit0":
 		emit()
 		os.Exit(0)

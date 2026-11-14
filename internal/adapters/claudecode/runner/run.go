@@ -27,7 +27,17 @@ type run struct {
 	pendingRelease       bool // a decided verdict frees the guard, but a child still runs
 	graceStarted, exited bool
 	timers               []*time.Timer
+	esc                  int // escalation step: escNone, escInt (SIGINT sent), escTerm (SIGTERM sent), escDone (exhausted)
 }
+
+// Escalation steps of ADR-021 §4: SIGINT, a bounded wait, SIGTERM, a bounded wait, then
+// the Bridge stops signalling. There is no further step, in particular no SIGKILL.
+const (
+	escNone = iota
+	escInt
+	escTerm
+	escDone
+)
 
 func (r *run) snapshot() execution.Execution {
 	r.mu.Lock()
@@ -63,16 +73,62 @@ func (r *run) after(a claudecode.Action) {
 	r.sync()
 }
 
-// interrupt sends SIGINT to the child's group. Without a child yet, the interrupt is
-// remembered and sent as soon as it exists. Nothing stronger is ever sent: a child that
-// ignores SIGINT keeps its run, its guard and its slot until it exits (an operator
-// action removes it, ADR-021 §4).
+// interrupt starts the §4 escalation: SIGINT to the child's group now, SIGTERM after
+// IntWait if the child has not exited, and after TermWait more the Bridge stops signalling
+// and tells the machine the escalation is exhausted (StepEscalationExhausted: row 6b for a
+// user interrupt, child_unconfirmed for a latched row). Nothing stronger is ever sent: a
+// child that ignores both keeps its run, its guard and its slot until it exits (an
+// operator action removes it, ADR-021 §4). A second interrupt while an escalation is in
+// progress does not restart it. Without a child yet, the interrupt is remembered and sent
+// as soon as it exists. Caller holds mu.
 func (r *run) interrupt() {
 	if r.child == nil {
 		r.pendingInt = true
 		return
 	}
+	if r.esc != escNone {
+		return
+	}
+	r.esc = escInt
 	_ = r.child.Signal(SigInt)
+	r.timers = append(r.timers, time.AfterFunc(r.e.cfg.IntWait, r.escalateTerm))
+}
+
+// escalateTerm is the second step: SIGTERM, only if the child has not been reaped.
+func (r *run) escalateTerm() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.exited || r.esc != escInt {
+		return
+	}
+	r.esc = escTerm
+	_ = r.child.Signal(SigTerm)
+	r.timers = append(r.timers, time.AfterFunc(r.e.cfg.TermWait, r.escalationExhausted))
+}
+
+// escalationExhausted ends the escalation with the child still alive: the Bridge stops
+// signalling and the machine records child_unconfirmed (never a kill).
+func (r *run) escalationExhausted() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.exited || r.esc != escTerm {
+		return
+	}
+	r.esc = escDone
+	r.after(r.m.Feed(claudecode.Step{Kind: claudecode.StepEscalationExhausted}))
+}
+
+// userInterrupt is interrupt_execution (reason user). It does nothing to a run that is
+// already decided (a latched or finished run was interrupted or ended by its own row) and
+// returns the snapshot at request time either way.
+func (r *run) userInterrupt() execution.Execution {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.decided && !r.m.Verdict().Decided {
+		r.after(r.m.Feed(claudecode.Step{Kind: claudecode.StepUserInterrupt}))
+		r.interrupt()
+	}
+	return clone(r.view)
 }
 
 // sync applies the first decided verdict: the execution view, the history
@@ -187,6 +243,7 @@ func (r *run) markExited(x Exit) {
 		return
 	}
 	r.exited = true
+	r.esc = escDone
 	if r.pendingRelease {
 		r.pendingRelease = false
 		r.e.release(r.session, r.id)
@@ -205,7 +262,8 @@ func (e *Executor) work(r *run, prompt string) {
 	defer e.childDone()
 	defer r.stopTimers()
 
-	argv, err := claudecode.BuildArgv(claudecode.ArgvConfig{UUID: r.uuid, Model: e.cfg.Model, MaxTurns: e.cfg.MaxTurns, MaxBudgetUSD: e.cfg.MaxBudgetUSD})
+	argv, err := claudecode.BuildArgv(claudecode.ArgvConfig{UUID: r.uuid, Model: e.cfg.Model, MaxTurns: e.cfg.MaxTurns, MaxBudgetUSD: e.cfg.MaxBudgetUSD,
+		Root: r.root, Tools: e.cfg.Tools, ConfigDir: e.cfg.ConfigDir})
 	if err == nil {
 		err = claudecode.CheckArgv(argv)
 	}
@@ -253,7 +311,11 @@ func (e *Executor) work(r *run, prompt string) {
 		// the order), and the rest of stdout is drained and discarded so the child can
 		// finish; the wall-clock cap still bounds it.
 		r.feed(claudecode.Step{Kind: claudecode.StepStreamBroken})
-		_, _ = io.Copy(io.Discard, child.Stdout())
+		// Bounded (#236 P3-6): a child that keeps writing cannot hold this loop for the
+		// whole wall-clock cap. At the bound the loop stops reading; the stream is broken
+		// already, so the verdict does not depend on what is left, and the cap, the exit
+		// grace and the §4 escalation still end a child that now blocks on a full pipe.
+		_, _ = io.CopyN(io.Discard, child.Stdout(), e.cfg.DrainMax)
 	}
 	r.feed(claudecode.Step{Kind: claudecode.StepEOF})
 	x := child.Wait()

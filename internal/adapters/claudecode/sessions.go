@@ -27,13 +27,16 @@ type Session struct {
 func (s Session) UUID() string { u, _ := ParseSessionID(s.ID); return u }
 
 // ParseSessions decodes and validates the allowlist document: strict JSON (no
-// unknown field, one document), at most MaxSessions entries, canonical
+// unknown field, no key in another letter case, no duplicate key, no null, one document), at most MaxSessions entries, canonical
 // `claudecode:<uuid>` IDs, no duplicates, absolute clean roots inside one of
 // allowedRoots (BRIDGE_ALLOWED_ROOTS), printable labels. Any violation fails the
 // whole file: startup refuses, nothing is partially loaded.
 func ParseSessions(data []byte, allowedRoots []string) ([]Session, error) {
 	if len(data) > maxSessionsFile {
 		return nil, errors.New("claudecode: sessions file too large")
+	}
+	if err := strictSessionsDocument(data); err != nil {
+		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -137,6 +140,59 @@ func ValidateConfigFile(fsys FS, p string, serviceUID uint32) error {
 		if di.Mode.Perm()&0o022 != 0 && !(di.Mode&fs.ModeSticky != 0 && di.UID == 0) {
 			return errors.New("claudecode: config file ancestor is writable by others")
 		}
+	}
+	return nil
+}
+
+var sessionKeys = map[string]bool{"session_id": true, "root": true, "label": true}
+
+// strictSessionsDocument closes what encoding/json leaves open for a security allowlist
+// (#236 P3-6, the class of ADR-022 review #215 P3-3): Go matches struct keys
+// case-insensitively and lets the last duplicate win, and accepts `null` as an empty list.
+// Here the document must be a JSON array (never null) of objects whose keys are exactly
+// session_id, root and label, each at most once, spelled exactly; an entry must be an object.
+func strictSessionsDocument(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("claudecode: sessions file: %w", err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return errors.New("claudecode: sessions file must be a JSON array (not null, not an object)")
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("claudecode: sessions file: %w", err)
+		}
+		if d, ok := tok.(json.Delim); !ok || d != '{' {
+			return errors.New("claudecode: every sessions entry must be an object")
+		}
+		seen := map[string]bool{}
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return fmt.Errorf("claudecode: sessions file: %w", err)
+			}
+			key, _ := kt.(string)
+			if !sessionKeys[key] {
+				return fmt.Errorf("claudecode: sessions entry has an unknown or mis-cased key")
+			}
+			if seen[key] {
+				return fmt.Errorf("claudecode: sessions entry repeats a key")
+			}
+			seen[key] = true
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return fmt.Errorf("claudecode: sessions file: %w", err)
+			}
+		}
+		if _, err := dec.Token(); err != nil { // the closing brace
+			return fmt.Errorf("claudecode: sessions file: %w", err)
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing bracket
+		return fmt.Errorf("claudecode: sessions file: %w", err)
 	}
 	return nil
 }
