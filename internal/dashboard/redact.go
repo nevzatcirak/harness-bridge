@@ -100,7 +100,7 @@ func RedactorFromEnv(env func(string) string) (*Redactor, error) {
 		return NewRedactor(nil)
 	}
 	var extra []string
-	if err := json.Unmarshal([]byte(raw), &extra); err != nil {
+	if err := json.Unmarshal([]byte(raw), &extra); err != nil || extra == nil { // "null" decodes to nil without error: not an array
 		return nil, errors.New(EnvRedactExtra + " must be a JSON array of strings")
 	}
 	r, err := NewRedactor(extra)

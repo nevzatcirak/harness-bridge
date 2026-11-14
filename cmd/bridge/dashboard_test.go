@@ -220,3 +220,50 @@ func TestInvalidRedactionPatternFailsClosedWithoutLogging(t *testing.T) {
 		t.Fatal("the pattern text was logged or echoed")
 	}
 }
+
+// #272 P3-1: the operator redaction patterns also apply to the audit ring, so /audit and
+// /api/audit never show a value the operator asked to redact, while the journal line is
+// byte-identical (redaction is display-only).
+func TestOperatorRedactionReachesTheAuditRingButNotTheJournal(t *testing.T) {
+	buf := withLogState(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "dash.sock")
+	srv, err := openDashboard(func(k string) string {
+		switch k {
+		case "BRIDGE_DASHBOARD_SOCKET":
+			return sock
+		case dashboard.EnvRedactExtra:
+			return `["corp-[0-9a-f]{8}"]`
+		}
+		return ""
+	}, nil)
+	if err != nil || srv == nil {
+		t.Fatalf("openDashboard: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	slog.Info("explicit interrupt", "event", "interrupt", "tool", "interrupt_execution corp-0123abcd", "outcome", "accepted", "principal", "local", "execution_id", "0123456789abcdef0123456789abcdef")
+	if !strings.Contains(buf.String(), "corp-0123abcd") {
+		t.Fatalf("the journal must keep the value unchanged: %q", buf.String())
+	}
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}, Timeout: 5 * time.Second}
+	for _, path := range []string{"/api/audit", "/audit"} {
+		resp, err := client.Get("http://dashboard" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || !strings.Contains(string(body), "interrupt_execution") {
+			t.Fatalf("GET %s = %d %s", path, resp.StatusCode, body)
+		}
+		if strings.Contains(string(body), "corp-0123abcd") || !strings.Contains(string(body), "[redacted]") {
+			t.Errorf("GET %s shows the operator-redacted value: %s", path, body)
+		}
+	}
+}

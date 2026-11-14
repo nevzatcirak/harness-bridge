@@ -38,7 +38,7 @@ func openDashboard(env func(string) string, source func() dashboard.Source) (*da
 		return nil, err
 	}
 	if srv != nil {
-		srv.AtShutdown(dashboard.InstallAuditTee(ring))
+		srv.AtShutdown(dashboard.InstallAuditTeeRedacted(ring, red))
 		log.Printf("dashboard (read-only) listening on %s", srv.Addr())
 	}
 	return srv, nil

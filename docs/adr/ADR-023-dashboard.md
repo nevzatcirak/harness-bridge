@@ -716,3 +716,11 @@ configuration and the Host/Origin hardening are implemented; the live acceptance
   dashboard variables in `docs/CONTRACTS.md` and the deployment docs, and R-DASH (operator-present
   live acceptance against the real native and a browser). The native response shapes remain
   UNVERIFIED against a live server.
+- **2026-11-15, merge and review fixes (task #273).** Main `1a571fc` (ADR-021 wiring, PR #264) was merged
+  into the slice-5a branch (one `mcp.Server` value serves `/mcp` and the dashboard source; the Claude
+  adapter is set on it only when enabled). The ordering above is unchanged and now checked with the
+  adapter on and off: the OpenCode rows equal the OpenCode rows of `list_sessions`, and the Claude
+  session is one pending row after them (`list_sessions` sorts every row by session ID instead). Review #272
+  fixes: the dashboard redactor (shipped list plus `BRIDGE_DASHBOARD_REDACT_EXTRA`) is also given to the
+  audit tee, so the audit ring (`/audit`, `/api/audit`) redacts operator patterns too while the journal
+  line stays byte-identical; `BRIDGE_DASHBOARD_REDACT_EXTRA=null` is a startup error.

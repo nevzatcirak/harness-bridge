@@ -35,6 +35,7 @@ func TestRedactorFromEnv(t *testing.T) {
 	for name, v := range map[string]string{
 		"not json":      secretish,
 		"not an array":  `{"a":"b"}`,
+		"null":          `null`,
 		"bad regex":     `["` + secretish + `"]`,
 		"empty pattern": `[""]`,
 		"too long":      `["` + strings.Repeat("a", 257) + `"]`,

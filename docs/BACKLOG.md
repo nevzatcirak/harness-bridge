@@ -119,7 +119,7 @@ Open items recorded here, not fixed:
 - `BRIDGE_DASHBOARD_REDACT_EXTRA` (JSON array of patterns) is a proposal of this slice; the ADR did not name the source. The dashboard variables are still not documented in `docs/CONTRACTS.md` or the deployment docs (slice 5b/docs).
 - Lifecycle-root rows (D17 Q6) and the archive overlay (D17 Q7) are not wired: `DashboardSource(nil)`; the overlay parameter exists so ADR-022 S6/S8 can plug in without a new contract.
 - The derived discovery server has its own two discovery slots, so dashboard polling and MCP discovery do not queue behind each other; the combined native load is up to four concurrent discoveries.
-- Claude Code rows are pending placeholders (state `unknown`); real state, history and diffs wait for ADR-021 wiring (PR #264) and its dashboard interface.
+- Claude Code rows are pending placeholders (state `unknown`); real state, history and diffs wait for the ADR-021 dashboard interface (the wiring, PR #264, is merged).
 - Last activity shows native `time.updated` only; Bridge-observed activity (executions) is shown in the detail page.
 
 ### ADR-021 wiring (task #263, review fixes #268): deferred items (2026-11-14, appended)

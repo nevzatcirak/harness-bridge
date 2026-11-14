@@ -144,13 +144,9 @@ func userMsg(id string, summary string) string {
 // reaches the native client.
 func TestDashboardSourceListEqualsListSessions(t *testing.T) {
 	s, n := newDashServer(t, []string{"ses_a", "ses_b", "ses_out", "ses_gone", dashClaude}, nil)
-	// The reference: list_sessions over the same ACL without the Claude entry (this
-	// Server version's discovery does not serve a claudecode: ACL entry).
-	ref := &Server{Client: s.Client, ReadOnly: true}
-	p := *s.Policy
-	p.Sessions = map[string]bool{"ses_a": true, "ses_b": true, "ses_out": true, "ses_gone": true}
-	ref.Policy = &p
-	want, err := ref.discover(context.Background())
+	// The reference: the real list_sessions discovery over the same ACL (a claudecode: entry
+	// is skipped before the OpenCode client, adapter on or off).
+	want, err := s.discover(context.Background())
 	if err != nil || len(want) != 2 {
 		t.Fatalf("reference: %v %v", want, err)
 	}
@@ -491,5 +487,53 @@ func TestDashboardSourceRunsNoGit(t *testing.T) {
 		if strings.Contains(string(src), bad) {
 			t.Fatalf("dashsource.go contains %q", bad)
 		}
+	}
+}
+
+// With the Claude adapter enabled (ADR-021 wiring on main), list_sessions merges the Claude row
+// next to the OpenCode ones; the dashboard's OpenCode rows still equal the OpenCode rows of
+// list_sessions, in the same order, and the Claude session is one pending row listed after them
+// (the documented dashboard order: OpenCode rows by native ID, then Claude rows by ID, where
+// list_sessions sorts every row by session ID). No claudecode: ID reaches the native client.
+func TestDashboardSourceListWithTheClaudeAdapterEnabled(t *testing.T) {
+	s, n := newDashServer(t, []string{"ses_a", "ses_b", "ses_out", "ses_gone", claudeGlobal}, nil)
+	s.Claude = newFakeClaude()
+	want, err := s.discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantOC []string
+	claudeRows := 0
+	for _, w := range want {
+		if w.Harness == "claudecode" {
+			claudeRows++
+			continue
+		}
+		wantOC = append(wantOC, w.SessionID)
+	}
+	if claudeRows != 1 || len(wantOC) != 2 {
+		t.Fatalf("list_sessions with the adapter on: %+v", want)
+	}
+	got, err := s.DashboardSource(nil).Sessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotOC []string
+	var claude []dashboard.Session
+	for _, g := range got {
+		if g.Harness == "claudecode" {
+			claude = append(claude, g)
+			continue
+		}
+		gotOC = append(gotOC, "opencode:"+g.ID)
+	}
+	if strings.Join(gotOC, ",") != strings.Join(wantOC, ",") {
+		t.Fatalf("OpenCode rows: dashboard %v, list_sessions %v", gotOC, wantOC)
+	}
+	if len(claude) != 1 || got[len(got)-1].Harness != "claudecode" || "claudecode:"+claude[0].ID != claudeGlobal {
+		t.Fatalf("claude rows: %+v (all %+v)", claude, got)
+	}
+	if n.count("claudecode") != 0 || n.count(claudeUUID) != 0 {
+		t.Fatalf("a claudecode: ID reached the native client: %v", n.log())
 	}
 }
