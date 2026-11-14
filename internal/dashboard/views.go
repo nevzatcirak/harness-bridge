@@ -145,6 +145,13 @@ type page struct {
 	Pending    bool // Claude Code: history and diffs pending ADR-021
 	Diff       *diffSection
 	BackHref   string
+	// Polling: the client script polls the JSON model of this view (data-poll).
+	Poll, PollHarness, PollID string
+	// Audit feed
+	AuditPage bool
+	AuditOn   bool
+	AuditMsg  string
+	Audit     []auditRow
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -156,7 +163,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 </head>
 <body>
 <header><h1>Harness Bridge dashboard</h1><span class="badge">read-only</span></header>
-<main id="app" data-slice="2">
+<main id="app" data-slice="4"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}"{{end}}{{end}}>
+<div id="live">
 {{if .Message}}<p>{{.Message}}</p>{{end}}
 {{if .Rows}}<table class="sessions">
 <thead><tr><th>Harness</th><th>Session</th><th>Title</th><th>Root</th><th>State</th><th>Guard</th><th>Current execution</th><th>Last activity</th></tr></thead>
@@ -173,16 +181,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 </tr>
 {{end}}</tbody></table>{{end}}
 {{if .Truncate}}<p class="note">{{.Truncate}}</p>{{end}}
+</div>
 {{with .Detail}}<section class="session">
 <p><a href="/">back to the list</a></p>
 <h2><span class="badge {{.HarnessClass}}">{{.Harness}}</span> {{.ID}}</h2>
 <dl>
-<dt>Title</dt><dd>{{.Title}}</dd>
-<dt>Root</dt><dd><code>{{.Root}}</code></dd>
-<dt>State</dt><dd>{{.State}}</dd>
-<dt>Guard</dt><dd>{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</dd>
-<dt>Current execution</dt><dd>{{if .Current}}{{.Current}}{{else}}-{{end}}</dd>
-<dt>Last activity</dt><dd>{{.LastActivity}}</dd>
+<dt>Title</dt><dd data-f="title">{{.Title}}</dd>
+<dt>Root</dt><dd data-f="root"><code>{{.Root}}</code></dd>
+<dt>State</dt><dd data-f="state">{{.State}}</dd>
+<dt>Guard</dt><dd data-f="guard">{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</dd>
+<dt>Current execution</dt><dd data-f="current">{{if .Current}}{{.Current}}{{else}}-{{end}}</dd>
+<dt>Last activity</dt><dd data-f="last">{{.LastActivity}}</dd>
 </dl>
 {{if $.Pending}}<p class="note">Claude Code: history and diffs unavailable (ADR-021 pending).</p>{{end}}
 </section>
@@ -190,7 +199,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <h3>Executions</h3>
 {{if $.Executions}}<table>
 <thead><tr><th>Execution</th><th>State</th><th>Started</th><th>Updated</th><th>Ended</th></tr></thead>
-<tbody>
+<tbody id="exec-rows">
 {{range $.Executions}}<tr><td>{{.ID}}{{if .Current}} (current){{end}}</td><td>{{.State}}</td><td>{{.Started}}</td><td>{{.Updated}}</td><td>{{.Ended}}</td></tr>
 {{end}}</tbody></table>{{else}}<p>No executions recorded by this Bridge process.</p>{{end}}
 </section>{{end}}
@@ -207,6 +216,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 {{end}}</tbody></table>{{end}}
 </section>{{end}}
 {{if .BackHref}}<p><a href="{{.BackHref}}">back to the session</a></p>{{end}}
+{{if .AuditPage}}<section class="audit">
+<h2>Audit</h2>
+<p><a href="/">back to the list</a></p>
+{{if .AuditMsg}}<p class="note">{{.AuditMsg}}</p>{{end}}
+{{if .AuditOn}}<p><label>Filter <input type="search" id="audit-filter" maxlength="64" autocomplete="off"></label></p>
+{{if .Audit}}<table class="audit-feed">
+<thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Error</th><th>Session</th><th>Execution</th><th>Principal</th><th>Other</th></tr></thead>
+<tbody id="audit-rows">
+{{range .Audit}}<tr><td>{{.Time}}</td><td>{{.Event}}</td><td>{{.Outcome}}</td><td>{{.Error}}</td><td>{{.Session}}</td><td>{{.Execution}}</td><td>{{.Principal}}</td><td>{{.Other}}</td></tr>
+{{end}}</tbody></table>{{end}}{{end}}
+</section>{{end}}
 </main>
 <script src="/dashboard.js"></script>
 </body>
@@ -218,25 +238,86 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 {{end}}{{if .More}}<p class="note">{{.More}}</p>{{end}}</div>{{end}}
 `))
 
-// renderPage executes the template into a buffer and refuses a body over the
-// cap, so a page is never served partially.
+// renderPage executes the template into a buffer and never serves a partial page. The
+// 2 MiB bound applies to the escaped body: html/template can expand a capped diff
+// (a '<' becomes four bytes), so a page over the bound is not an error (review #243
+// P3-2). It is degraded with a written notice instead: the patches that would not fit
+// are hidden, in order from the last file, and the page says so. Only a page that is
+// still over the bound without any patch is refused.
 func renderPage(w http.ResponseWriter, status int, p page) {
 	var buf bytes.Buffer
-	if err := pageTemplate.Execute(&buf, p); err != nil || buf.Len() > maxBodyBytes {
+	if pageTemplate.Execute(&buf, p) != nil {
 		http.Error(w, "page unavailable", http.StatusInternalServerError)
 		return
+	}
+	if buf.Len() > maxBodyBytes {
+		for _, budget := range []int{maxBodyBytes - pageChromeBytes, 0} {
+			fitPatches(&p, budget)
+			buf.Reset()
+			if pageTemplate.Execute(&buf, p) != nil {
+				http.Error(w, "page unavailable", http.StatusInternalServerError)
+				return
+			}
+			if buf.Len() <= maxBodyBytes {
+				break
+			}
+		}
+		if buf.Len() > maxBodyBytes {
+			http.Error(w, "page unavailable", http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
 
+// pageChromeBytes is the headroom kept for everything that is not patch text.
+const pageChromeBytes = 256 << 10
+
+const patchHiddenNote = "patch not shown: the escaped page would exceed the 2 MiB page bound"
+
+// fitPatches hides every shown patch that does not fit in budget bytes (measured
+// escaped), keeping the earlier files, and marks each hidden patch.
+func fitPatches(p *page, budget int) {
+	if p.Diff == nil {
+		return
+	}
+	used := 0
+	for _, v := range []*diffView{p.Diff.Working, p.Diff.Single} {
+		if v == nil {
+			continue
+		}
+		for i := range v.Files {
+			f := &v.Files[i]
+			if !f.ShowPatch {
+				continue
+			}
+			size := len(template.HTMLEscapeString(f.Patch)) + len(f.Patch)/16 // + a margin for escapes the string form leaves out
+			if used+size > budget {
+				f.ShowPatch, f.Patch = false, ""
+				if f.Note != "" {
+					f.Note += "; "
+				}
+				f.Note += patchHiddenNote
+				continue
+			}
+			used += size
+		}
+	}
+}
+
 // dash carries what the handlers share: the read-only Source, the redactor and
 // the diff cache. It holds no state of a session and writes nothing.
 type dash struct {
-	src   Source
-	red   *Redactor
-	cache *diffCache
+	src    Source
+	audit  AuditSource // read-only; nil when the audit feed is not enabled
+	red    *Redactor
+	cache  *diffCache
+	models *flightCache[modelResult]
+	now    func() time.Time
+	modMu  sync.Mutex
+	mod    map[string]modStamp
 }
 
 func newDash(src Source, opts Options) *dash {
@@ -244,7 +325,12 @@ func newDash(src Source, opts Options) *dash {
 	if red == nil {
 		red = DefaultRedactor()
 	}
-	return &dash{src: src, red: red, cache: newDiffCache(opts.Now)}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &dash{src: src, audit: opts.Audit, red: red, cache: newDiffCache(opts.Now), now: now, mod: map[string]modStamp{},
+		models: newFlightCache[modelResult](opts.Now, modelTTL, modelMax)}
 }
 
 // unavailablePage answers a data source that failed: HTTP 503 with Retry-After,
@@ -259,7 +345,7 @@ func (d *dash) indexHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
-		p := page{Title: "Harness Bridge dashboard"}
+		p := page{Title: "Harness Bridge dashboard", Poll: "list"}
 		if _, none := d.src.(NullSource); none {
 			p.Message = "No data source is connected."
 			renderPage(w, http.StatusOK, p)
@@ -272,13 +358,7 @@ func (d *dash) indexHandler() http.Handler {
 			return
 		}
 		p.Message = fmt.Sprintf("%d sessions.", len(rows))
-		if len(rows) > maxListRows {
-			p.Truncate = fmt.Sprintf("Showing the first %d of %d sessions.", maxListRows, len(rows))
-			rows = rows[:maxListRows]
-		}
-		for _, s := range rows {
-			p.Rows = append(p.Rows, toRow(s))
-		}
+		p.Rows, p.Truncate = listRows(rows)
 		renderPage(w, http.StatusOK, p)
 	})
 }
@@ -383,6 +463,8 @@ func (d *dash) detailHandler() http.Handler {
 			http.Error(w, notFoundText, http.StatusNotFound)
 			return
 		case err != nil:
+			// Same semantics as the list (#223 P3-1, #243 P3-1): 503 with Retry-After.
+			w.Header().Set("Retry-After", "5")
 			http.Error(w, unavailableText, http.StatusServiceUnavailable)
 			return
 		case det.Harness != harness || det.ID != id:
@@ -396,17 +478,8 @@ func (d *dash) detailHandler() http.Handler {
 			d.turnPage(ctx, w, p, harness, id, parts[3])
 			return
 		}
-		execs := det.Executions
-		if len(execs) > maxDetailRows {
-			p.Truncate = fmt.Sprintf("Showing the first %d of %d executions.", maxDetailRows, len(execs))
-			execs = execs[:maxDetailRows]
-		}
-		for _, e := range execs {
-			p.Executions = append(p.Executions, execRow{
-				ID: truncRunes(e.ID, 128), State: normExecutionState(e.State), Current: e.Current,
-				Started: fmtTime(e.Started), Updated: fmtTime(e.Updated), Ended: fmtTimePtr(e.Ended),
-			})
-		}
+		p.Executions, p.Truncate = execRows(det.Executions)
+		p.Poll, p.PollHarness, p.PollID = "detail", harness, id
 		p.Diff = d.detailSection(ctx, harness, id)
 		renderPage(w, http.StatusOK, p)
 	})

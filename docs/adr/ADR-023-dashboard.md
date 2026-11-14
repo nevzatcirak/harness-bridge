@@ -488,6 +488,95 @@ every D17 answer, the threat model and the other sections are unchanged.
 - **Not in slice 3:** a production `Source` (the Bridge still wires `NullSource`), reading
   the operator redaction patterns from configuration, the audit ring and polling (slice 4).
 
+**As built (slice 4, dated 2026-11-14, task #250).** Facts about the code, no new decision;
+every D17 answer, the threat model and the other sections are unchanged.
+
+- **Process logger (measured on `e81d445`).** `cmd/bridge` builds no slog handler and calls
+  no `slog.SetDefault`: the process default is Go's default handler, which writes through the
+  `log` package to stderr (the journal). AUDIT-01 is written by the package-global
+  `slog.Info` (`internal/mcp/audit.go:113-160`, the call at `:160`); the admin server calls
+  `s.logger().Info` (`internal/admin/admin.go:338`, writer `:310-338`), and `logger()`
+  (`:190-194`) returns `slog.Default()` evaluated at each call, so it follows a replaced
+  default. `internal/security/remote.go` also logs through `slog.Info` (no `event`
+  attribute: the ring drops those lines, the journal keeps them).
+- **Tee.** `dashboard.InstallAuditTee(ring)` replaces the process default logger with a
+  fan-out handler: the journal branch writes each record the original default handler enables,
+  once and untouched, and the second branch copies an allowlisted projection into the ring.
+  **The swap is unobservable to concurrent loggers (review #252 P2-1, fixed after PR #251's
+  first head `6ed96d2`).** `slog.SetDefault` also points the `log` package at the new handler,
+  and Go's default handler writes through the `log` package's global logger; a journal branch
+  made of that handler therefore called the `log` lock that the call being handled already
+  held, and any `log` or `slog` call between `SetDefault` and the restore of the `log` writer
+  deadlocked the global logger (reachable at startup, the admin server being up, and at
+  shutdown). The journal branch no longer touches the global logger: it formats a record as
+  the default handler does (`LEVEL message` and the attributes in the `slog.TextHandler` text
+  form, the same code) and writes it with a private `log.Logger` on the original writer,
+  prefix and flags, behind a lock it shares with the `log` package's own output so lines never
+  interleave. On restore `slog.SetDefault` is given the original default handler, which does
+  not touch the `log` package. Tests: a record-by-record byte comparison with the default
+  handler (levels, quoting, groups, `With`, built-in attribute names, multi-line and empty
+  messages, flags and prefix), golden tests over the real mcp and admin writers, a test that
+  logs through `log` and `slog` **inside** the install and the restore windows (a test seam)
+  with a watchdog, and a `-race` test of 200 install/restore cycles under eight concurrent
+  loggers. **What a line logged in the install window looks like:** a `log.Printf` that runs
+  between `SetDefault` and the restore of the `log` writer is converted by the `log` package
+  into an Info record, goes through the tee and is written as `INFO <message>` (the same
+  message with the level word a plain `log` line does not carry); every other line is
+  byte-identical. Not supported and not needed by the Bridge: the `log` flags `Lshortfile` and
+  `Llongfile` (a journal line would name the tee, not the caller), a second tee installed over
+  the first, and a program whose own default handler writes through the `log` package. It is
+  installed by `openDashboard` only when the dashboard is enabled (a disabled or refused
+  configuration touches nothing) and put back by the server's `Shutdown`.
+- **Ring.** 1000 entries, drop-oldest, newest first; memory only; written only by the tee (the
+  write method is unexported and the dashboard reads through an `AuditSource` interface with the
+  single method `Entries`, pinned by a test). Kept events: `guard_release`, `prompt_submission`,
+  `interrupt` (the lifecycle and permission events of the plan are **not** shown until the list is
+  amended). Kept attributes: the allowlist of section 1.1. Any other attribute is dropped, and so
+  is every attribute namespaced by `WithGroup` or inside a `Group` value; attributes bound with
+  `With` before any group are filtered the same way. Only plain strings, booleans and integers are
+  kept; each value is made valid UTF-8, stripped of control characters, passed through the default
+  redactor and cut at 256 bytes; the record message gets the same treatment. The ring branch
+  recovers from a panic (a `LogValuer` that panics) and can never fail a log call.
+- **Audit views.** `GET /audit` (a table, newest first, a browser-side text filter, every value
+  escaped by `html/template`) and `GET /api/audit` (JSON `{enabled, limit, entries[{time, message,
+  event, attrs[{key, value}]}]}`). Without a feed (`Options.Audit` nil) both say so. Dashboard
+  traffic writes nothing to the ring or the journal (tested over every route and method).
+- **Polling JSON.** `GET /api/state` (list) and `GET /api/state/session/<harness>/<id>` (detail)
+  return the same normalized, bounded values as the HTML pages; the detail model carries the
+  session, guard, current execution and executions and **no diff content** (diffs keep their own
+  pages and cache). Every model response has a strong `ETag` (a hash of the body) and
+  `Last-Modified` (the time the body last changed, so an unchanged rebuild keeps both);
+  `If-None-Match` (a list, `W/` and `*` accepted, a header over 4 KiB ignored) or, when absent,
+  `If-Modified-Since` gives `304` with no body. A model is built at most once a second per key
+  (the 1 s cache of section 4), concurrent builds of one key share one read (the diff cache's
+  single-flight, now generic and reused), at most 64 keys, memory only; the build runs under its
+  own 5 s bound detached from the first caller so one client leaving cannot hand its cancellation
+  to the polls sharing the read. A failing source is `503` with `Retry-After: 5` and a fixed JSON
+  body, an unknown or invalid session `404` with a fixed body; errors are not echoed.
+- **Page script.** `dashboard.js` (still the one embedded script, no inline script, no new origin,
+  CSP unchanged) polls with `GET` and `If-None-Match`: the list every 5 s, the detail every 2 s
+  while visible and every 10 s when hidden, one self-rescheduling timer, nothing on a failed
+  poll. It sets every value with `textContent` (no markup from data, no evaluation) and accepts a
+  link only when it starts with `/session/`. It updates the list and the detail's fields and
+  executions; the diff section is not polled (reload). A page rendered with no executions reloads
+  once when executions appear. The audit page's filter hides rows in the browser only. The page
+  works with scripts disabled.
+- **Limits.** Every routed request runs under a 5 s context. At most **4** requests that read the
+  data source (`/`, the session pages and the polling JSON) are served at once, and at most **8**
+  requests of any kind are in flight (those plus the audit pages and the assets); the 5th data
+  request or the 9th in-flight request gets `503`, `Retry-After: 1` and the fixed body `busy`
+  immediately, never a queue; HEAD counts like GET; unknown paths and refused methods are answered
+  before the limiter and take no slot.
+- **Carried from review #243.** P3-1: the detail's 503 now has `Retry-After: 5`. P3-2: the 2 MiB
+  bound applies to the escaped page; a page over it hides, from the last file, the patches that do
+  not fit (each hidden patch says "patch not shown: the escaped page would exceed the 2 MiB page
+  bound") and is served; only a page that is still over the bound with no patch at all is refused.
+  P3-3: the labels of the detail's turn list are pinned by a test.
+- **Not in slice 4:** a production `Source` (the Bridge still wires `NullSource`, so the R-DASH
+  acceptance stays NOT_EXERCISED), reading operator redaction patterns from configuration, SSE, and
+  any change to AUDIT-01, the MCP contract or `internal/adapters/claudecode`. The page script was
+  syntax-checked with `node --check` and exercised against a stub DOM, **not in a browser**.
+
 ### Live acceptance outline (R-DASH)
 
 1. Start the Bridge with the dashboard **disabled**; confirm no socket/port.

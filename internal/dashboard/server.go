@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -16,6 +17,17 @@ type Server struct {
 	ln      net.Listener
 	srv     *http.Server
 	closing atomic.Bool
+
+	mu      sync.Mutex
+	cleanup []func()
+}
+
+// AtShutdown registers f to run once when Shutdown has stopped the listener (the
+// Bridge uses it to put the original process logger back).
+func (s *Server) AtShutdown(f func()) {
+	s.mu.Lock()
+	s.cleanup = append(s.cleanup, f)
+	s.mu.Unlock()
 }
 
 // Open starts the dashboard if cfg enables it and returns nil, nil otherwise
@@ -24,6 +36,11 @@ type Server struct {
 // uid owns with mode exactly 0700; a TCP address must be a loopback IP literal.
 // uid is the service user that must own the socket directory.
 func Open(cfg Config, src Source, uid int) (*Server, error) {
+	return OpenWithOptions(cfg, src, uid, Options{})
+}
+
+// OpenWithOptions is Open with the optional parts of the handler (the audit feed).
+func OpenWithOptions(cfg Config, src Source, uid int, opts Options) (*Server, error) {
 	if !cfg.Enabled() {
 		return nil, nil
 	}
@@ -54,7 +71,7 @@ func Open(cfg Config, src Source, uid int) (*Server, error) {
 		hosts = DefaultHosts
 	}
 	s := &Server{ln: ln, srv: &http.Server{
-		Handler:           NewHandler(src, hosts),
+		Handler:           NewHandlerOptions(src, hosts, opts),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -87,7 +104,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	// http.Server.Shutdown closes the listeners it tracks too and reports the
 	// error of closing the one we already closed: that is expected, not a failure.
-	if err := s.srv.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+	err := s.srv.Shutdown(ctx)
+	s.mu.Lock()
+	cleanup := s.cleanup
+	s.cleanup = nil
+	s.mu.Unlock()
+	for _, f := range cleanup {
+		f()
+	}
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		return err
 	}
 	return nil
