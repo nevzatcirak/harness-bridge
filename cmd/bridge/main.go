@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/admin"
-	"github.com/nevzatcirak/harness-bridge/internal/claudewire"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/mcp"
 	"github.com/nevzatcirak/harness-bridge/internal/security"
@@ -49,15 +48,11 @@ func main() {
 		allSessions = append(allSessions, id)
 	}
 	if !cfg.readOnly {
-		// One owner per session (#236 P3-4): the claudecode: IDs belong to the Claude Code
-		// adapter's own locks (same directory, same hashed names); taking them here too would
-		// make the second flock of one name in this process fail.
-		_, opencodeSessions := claudewire.ClaudeSessionIDs(allSessions)
-		if len(opencodeSessions) > 0 {
-			owner, err := execution.AcquireOwnership(os.Getenv("BRIDGE_WRITER_LOCK_DIR"), opencodeSessions)
-			if err != nil {
-				log.Fatal(err)
-			}
+		owner, err := acquireOpenCodeOwnership(os.Getenv("BRIDGE_WRITER_LOCK_DIR"), allSessions)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if owner != nil {
 			defer owner.Close()
 		}
 	}

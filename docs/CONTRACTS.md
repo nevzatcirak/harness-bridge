@@ -582,7 +582,7 @@ allowlisted, ACL-authorized Claude sessions with the OpenCode ones (sorted by se
 carries no repository, workspace or parent, so those filters never match it); `get_session`,
 `read_session_history`, `send_prompt` and `get_harness_capabilities` take a `claudecode:` ID;
 `get_execution_status`, `get_execution_result` and `interrupt_execution` route by execution ownership. An ID
-outside the allowlist is `NOT_FOUND` (no child is started), outside the ACL `FORBIDDEN`. `list_catalog`
+outside the allowlist is `NOT_FOUND` (no child is started), outside the ACL `FORBIDDEN`; the execution tools re-check the execution's session the same way. `list_catalog`
 (ADR-022) still omits Claude sessions. `get_session` state: `running` while a child runs, `unknown` while an
 unknown or unreaped execution holds the guard, otherwise `idle` (only "the Bridge holds no guard and runs
 no child"; weaker than OpenCode's `idle`).

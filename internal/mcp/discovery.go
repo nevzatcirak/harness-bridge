@@ -268,9 +268,18 @@ func (s *Server) discoverNative(ctx context.Context) ([]discovered, error) {
 	}
 	ids := []string{}
 	for id, allowed := range s.Policy.Sessions {
-		if allowed {
-			ids = append(ids, id)
+		if !allowed {
+			continue
 		}
+		// ADR-021 wiring: a claudecode: ACL entry (required there when the adapter is on, and
+		// harmless when it is off) belongs to the Claude adapter, never to the OpenCode client.
+		// Sent to Client.Get it is refused locally ("invalid native session ID", neither FORBIDDEN
+		// nor NOT_FOUND) and the whole OpenCode listing would fail (#267 P2-1). The Claude rows are
+		// merged by discover() when the adapter is enabled.
+		if _, claude := claudeCanonical(id); claude {
+			continue
+		}
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	metadata := make([]opencode.Session, len(ids))

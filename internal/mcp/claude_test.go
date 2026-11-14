@@ -155,9 +155,8 @@ func TestClaudeDisabledChangesNothing(t *testing.T) {
 func TestClaudeEnabledRoutesTheSessionTools(t *testing.T) {
 	client, _, bridge, _ := integration(t, true)
 	f := enableClaude(t, bridge)
-	// list_sessions / find_sessions merge: the Claude session next to the OpenCode ones, sorted
-	// by session ID. (The discovery fixture of this package cannot serve a full native listing,
-	// so the merge step is exercised directly.)
+	// The merge step on its own (the real list_sessions / find_sessions handlers run end to end
+	// in claude_discovery_test.go, with an OpenCode session and a Claude one in the ACL).
 	merged := bridge.mergeClaude([]Session{{SessionID: "opencode:ses_b", Harness: "opencode"}, {SessionID: "opencode:ses_a", Harness: "opencode"}})
 	var ids []string
 	for _, s := range merged {
@@ -313,5 +312,41 @@ func TestClaudeEnabledLeavesOpenCodeAlone(t *testing.T) {
 		if _, ok := x[b]; ok {
 			t.Errorf("an OpenCode execution carries %q", b)
 		}
+	}
+}
+
+// #266/#267 P3-1: the Claude execution tools authorize the execution's session like the session
+// tools do: a session that left the ACL or the allowlist after the execution started is refused,
+// and an interrupt is not delivered.
+func TestClaudeExecutionToolsRecheckTheSession(t *testing.T) {
+	client, _, bridge, _ := integration(t, true)
+	f := enableClaude(t, bridge)
+	x := structured(t, invoke(t, client, "send_prompt", map[string]any{"session_id": claudeGlobal, "prompt": "p", "idempotency_key": "claude-key-0010"}, false))
+	id := x["execution_id"].(string)
+	for _, tc := range []struct {
+		name, code string
+		mod        func()
+		undo       func()
+	}{
+		{"left the ACL", "FORBIDDEN", func() { delete(bridge.Policy.Sessions, claudeGlobal) }, func() { bridge.Policy.Sessions[claudeGlobal] = true }},
+		{"left the allowlist", "NOT_FOUND", func() { f.mu.Lock(); f.sess = nil; f.mu.Unlock() }, func() { f.mu.Lock(); f.sess = newFakeClaude().sess; f.mu.Unlock() }},
+	} {
+		tc.mod()
+		for _, tool := range []string{"get_execution_status", "get_execution_result", "interrupt_execution"} {
+			if txt := toolText(invoke(t, client, tool, map[string]any{"execution_id": id}, true)); !strings.Contains(txt, tc.code) {
+				t.Errorf("%s (%s): %q", tool, tc.name, txt)
+			}
+		}
+		if len(f.interrupted) != 0 {
+			t.Fatalf("%s: an interrupt reached the adapter: %v", tc.name, f.interrupted)
+		}
+		tc.undo()
+	}
+	// authorized again: all three work
+	for _, tool := range []string{"get_execution_status", "get_execution_result", "interrupt_execution"} {
+		invoke(t, client, tool, map[string]any{"execution_id": id}, false)
+	}
+	if len(f.interrupted) != 1 {
+		t.Fatalf("interrupted %v", f.interrupted)
 	}
 }

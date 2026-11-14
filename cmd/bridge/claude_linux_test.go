@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
 	"github.com/nevzatcirak/harness-bridge/internal/admin"
+	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
 
 // ADR-021 wiring: default off, complete-or-nothing configuration.
@@ -137,5 +139,50 @@ func TestAdminGetsTheClaudeReleaserOnlyWhenEnabled(t *testing.T) {
 				t.Errorf("on: %+v", resp)
 			}
 		}
+	}
+}
+
+// #267 P3-4: the OpenCode writer-lock step of main, called by main and by this test. The
+// OpenCode IDs are locked, the claudecode: ones are left to the adapter.
+func TestOpenCodeOwnershipTakesOnlyTheNonClaudeSessions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "locks")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const claude = "claudecode:00000000-0000-4000-8000-000000000001"
+	free := func(id string) bool {
+		o, err := execution.AcquireOwnership(dir, []string{id})
+		if err != nil {
+			return false
+		}
+		o.Close()
+		return true
+	}
+	owner, err := acquireOpenCodeOwnership(dir, []string{"ses_a", claude, "ses_b"})
+	if err != nil || owner == nil {
+		t.Fatalf("owner %v err %v", owner, err)
+	}
+	if free("ses_a") || free("ses_b") {
+		t.Fatal("an OpenCode session lock was not taken")
+	}
+	if !free(claude) {
+		t.Fatal("the OpenCode writer took the Claude session's lock")
+	}
+	owner.Close()
+	if !free("ses_a") {
+		t.Fatal("Close did not release")
+	}
+	// only Claude entries: nothing to lock, no error, no owner
+	if o, err := acquireOpenCodeOwnership(dir, []string{claude}); o != nil || err != nil {
+		t.Fatalf("claude-only ACL: %v %v", o, err)
+	}
+	// a held lock is refused (a second writer)
+	held, err := acquireOpenCodeOwnership(dir, []string{"ses_a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if _, err := acquireOpenCodeOwnership(dir, []string{"ses_a"}); err == nil {
+		t.Fatal("a second owner of the same session was accepted")
 	}
 }

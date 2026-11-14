@@ -154,15 +154,21 @@ func claudeMessage(session string, r claudecode.Record) opencode.Message {
 
 // claudeExecutionCall serves the execution tools for an execution the adapter owns.
 func (s *Server) claudeExecutionCall(name string, a args) (any, error) {
-	switch name {
-	case "get_execution_status":
-		return s.Claude.Get(a.ExecutionID)
-	case "interrupt_execution":
-		return s.Claude.Interrupt(a.ExecutionID)
-	}
+	// Like the session tools (and like the OpenCode path, which authorizes the execution's
+	// session before every execution tool): the execution's session must still be in the
+	// operator allowlist and in the ACL (#266 P3-1, #267 P3-1).
 	x, e := s.Claude.Get(a.ExecutionID)
 	if e != nil {
 		return nil, e
+	}
+	if _, e = s.claudeSession(x.SessionID); e != nil {
+		return nil, e
+	}
+	switch name {
+	case "get_execution_status":
+		return x, nil
+	case "interrupt_execution":
+		return s.Claude.Interrupt(a.ExecutionID)
 	}
 	h, e := s.claudeHistory(x.SessionID, args{}, x.ID)
 	if e != nil {

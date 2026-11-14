@@ -1207,6 +1207,7 @@ explicit operator configuration. As built:
 - **Admin.** `admin.Server.Claude` is set from the same adapter only when it runs (a nil interface otherwise,
   so `bridge admin release-guard` keeps refusing `claudecode:` IDs). `ReleaseEvidence` and `ReleaseOptions`
   moved to the pure core (`claudecode`), so `internal/admin` no longer links `runner` or `os/exec` (tested).
+- **Discovery and the ACL (review #267 P2-1).** `discoverNative` skips every `claudecode:` ACL entry before the OpenCode client sees it (the wiring requires each Claude ID in `BRIDGE_ALLOWED_SESSIONS`, adapter on or off), so the OpenCode listing, `find_sessions`, the repository tools and `list_catalog` are unaffected; the Claude rows are merged by `discover()` only when the adapter is enabled. The Claude execution tools re-check the execution's session against the allowlist and the ACL like the session tools. The OpenCode writer-lock step is one function (`acquireOpenCodeOwnership`) used by `main` and tested.
 - **Audit.** A mutating call for a `claudecode:` ID writes the same one line as OpenCode plus `harness=claudecode`
   and the Claude session ID. The dashboard audit ring keeps the Claude keys `harness`, `child_exited`,
   `group_empty`, `rechecked`, `row`, `exit_class`.
