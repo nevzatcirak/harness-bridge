@@ -168,3 +168,10 @@ Open items recorded here, not fixed:
 - The archive overlay is empty in production (ADR-022 S8, then S6); the filter and the fail-closed unknown state are tested with a fake overlay only.
 - `BRIDGE_DASHBOARD_REDACT_EXTRA` is still a slice-5a proposal name; `docs/deploy/DASHBOARD.md` and `docs/CONTRACTS.md` mark it so.
 - The `newMCPServer` test pins the nil-adapter case and the pointer identity of a zero-value `Harness`; a fully opened adapter is not constructed there.
+
+### ADR-025 archive overlay persistence (ADR-022 slice S8, PROPOSED): deferred items (2026-11-15, appended)
+
+- ADR-025 is a **design only, PROPOSED**: no Go code, nothing configured, `EmptyArchiveOverlay` stays the production overlay. It is not accepted (D12 does not name ADR-025); its thirteen open questions (section 9) stay with the maintainer, and slice S6 (`archive_session`, `close_session`) does not start before the maintainer accepts it.
+- The proposed `BRIDGE_OVERLAY_DIR`, the file name, the 1000-entry and 512 KiB bounds and the `session_archived` refusal reason are proposals, not decisions.
+- Whether an overlay-archived session refuses `send_prompt` (ADR-022 7.2 (B)) changes an existing tool and is open question 1; rollback detection (an external counter) is accepted as a residual in the proposal (T3) and is open question 7.
+
