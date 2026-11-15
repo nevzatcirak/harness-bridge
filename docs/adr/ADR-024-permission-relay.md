@@ -30,6 +30,13 @@ and on open question 3 (registration default); this task does **not** start them
 The text nits of review #197 are applied in this revision (text only: no decision
 changed, no option added or removed).
 
+**Update (D15, issue #117, 2026-11-12; task #282).** The maintainer answered open
+questions 1, 3, 4, 7 and 8 (section 12, "Decided (D15)") and deferred 2, 5 and 6 to
+the backlog. S3's gating items are resolved: the attempt writer exists (PR #275,
+`internal/audit`, as built below), question 3 (registration default) and question 8
+(superseding attempt) are answered. S2 and S4 stay **not started: policy mode OFF
+(D15 Q1)**; D12 exception (b) is unchanged.
+
 Numbering: ADR-024 is reserved for this decision. It builds on ADR-018 §5
 (pending permission detail, PROPOSED until now) and may amend ADR-018 §5 if
 open question 2 is accepted (the bounded-pattern exposure relaxes §5's "never
@@ -554,9 +561,9 @@ reported to the maintainer through the open questions rather than by (c).
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
 | S1 | Wire `ObservedPermission` into the manager; `pending_permission` and `pending_permission_count` (no patterns) | `waiting_for_permission` exposes the fields; other states do not; unattributed/conflicting are count-only; no native text | expose a pattern in default mode; show an unattributed request as actionable |
-| S2 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
+| S2 (**not started: policy mode OFF (D15 Q1)**; D12 exception (b)) | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
 | S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native write (the still-pending re-read is a read), second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified`. **Contract tests:** the input schema accepts exactly `execution_id`, `permission_id`, `decision` and the optional `supersedes` (closed `[A-Za-z0-9_-]{22}` pattern) and rejects any other field or a malformed `supersedes`; the success result always carries `attempt_id`, `attempt`, `decided_by=chat_client`, `human_verified=false`; the `UNKNOWN_OUTCOME` envelope carries `attempt_id` and `attempt`, and no other error code does; `supersedes` is refused with the closed reason and **no native call** from `in_flight` (`SESSION_BUSY`, `attempt_in_flight`, retryable), for an `allow_once` record (`supersede_allow_once_not_offered`), `replied` (`already_replied`), `refused` or no record (`nothing_to_supersede`), a wrong value (`supersedes_mismatch`), and a second supersede (`supersede_limit`); `supersedes` is honored only from `unknown`; the audit line of a post-restart attempt 1 carries `process_start` (RFC 3339 UTC); `reason` is always one of the closed enum; **attempt-record failure: when the `phase=attempt` write fails (writer error or unavailable witness) there are zero native writes, the call returns `UPSTREAM_FAILURE`/`audit_unavailable`, and the record is `refused`; when the `phase=result` write fails after the native call the real outcome is still returned and every later call is refused with `audit_unavailable`**; `permission_id` must match `^per[A-Za-z0-9_-]{1,125}$` and a native 400 maps to `UPSTREAM_FAILURE`; the re-read and the reply use the session's directory/workspace routing; `allow_once_disabled` (step 2) makes zero native calls, and the same-key and `supersedes` rule 0 refusals make no permission read and no native write; `reply_permission` is refused under `BRIDGE_READ_ONLY` with no native read (it is in `mutating()`) | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified; **continue to the native write when the attempt record write fails; honor `supersedes` while the state is `in_flight` or `replied`; offer `supersedes` for `allow_once`; perform the re-read before the in-memory refusals; omit `reply_permission` from `mutating()`; route the re-read with the default directory instead of the session's; omit `attempt_id` from the `UNKNOWN_OUTCOME` envelope or the success result; accept an unknown input field or a malformed `supersedes`; skip the `supersedes_mismatch` check** |
-| S4 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native write on refusal (the policy rules need the live request, so the native read has happened; `allow_once_disabled` makes no native call at all) | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
+| S4 (**not started: policy mode OFF (D15 Q1)**; D12 exception (b)) | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native write on refusal (the policy rules need the live request, so the native read has happened; `allow_once_disabled` makes no native call at all) | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
 | S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit; **an attempt writer that reports failure (synchronous record or Mutation Gate witness)** | `reply_permission` is in `mutating()` so the audit middleware wraps it; one line per phase on every path; no free text; the attempt line is written before the native call and its failure blocks the write; the result-line failure blocks later calls | omit `human_verified`; skip the attempt line; log-and-continue on a failed attempt write |
 | S6 | CONTRACTS, runbook, ADR-018 §5 status update after acceptance | doc review | n/a |
 
@@ -600,18 +607,34 @@ PASS.
 
 ## 12. Open questions for the maintainer
 
+Questions 1, 3, 4, 7 and 8 were answered by the maintainer in decision **D15**
+(issue #117, 2026-11-12) and are recorded below as "Decided (D15)"; questions 2, 5
+and 6 are deferred to the backlog. Nothing else in this ADR changes.
+
 1. **Enable `policy` mode at all** (the unverifiable decider, section 1), or
    stay on `reject_only`?
+   **Decided (D15, issue #117): policy mode stays OFF; `reject_only`.** S2 and S4
+   (policy parser, `allow_once`) are **not started: policy mode OFF (D15 Q1)**;
+   D12 exception (b) is unchanged.
 2. **Patterns shown to Chat** (policy mode only, bounded and untrusted): accept
-   this relaxation of ADR-018 §5's "never expose raw patterns"?
+   this relaxation of ADR-018 section 5's "never expose raw patterns"?
+   **Deferred / backlog (D15):** policy mode only, so it follows question 1.
 3. **Default mode `reject_only` registered**, or default `off` until opted in?
+   **Decided (D15, issue #117): `reject_only` is registered as the default.**
+   Registration in the production server lands with S5 (the audit lines); S3
+   builds the tool and does not register it (section "As built (S3)").
 4. **Route:** current `POST /permission/:requestID/reply` (recommended), or the
    deprecated session route named in the task?
+   **Decided (D15, issue #117): `POST /permission/:requestID/reply`.**
 5. **Starting policy values** (allow-once caps per execution and per hour; the
    recommended denylist).
+   **Deferred / backlog (D15):** policy mode only.
 6. **Out-of-band approval page** (P4-PERM option (c)) as a follow-up ADR?
+   **Deferred / backlog (D15).**
 7. Is requiring per-call claude.ai approval on `reply_permission` a deployment
    requirement or only a recommendation?
+   **Decided (D15, issue #117): required if policy mode is ever enabled;
+   recommended for `reject`.**
 8. After an `UNKNOWN_OUTCOME`, is one explicit, distinctly keyed superseding
    attempt (section 4.3) acceptable, or should the Bridge never send a second
    reply for the same request and leave it to the operator? This ADR specifies
@@ -620,6 +643,10 @@ PASS.
    question covers the post-restart path of 4.3: keep the documented residual
    (a still-pending request after a restart is a fresh attempt 1), or route
    every post-restart pending request through an operator-only path.
+   **Decided (D15, issue #117): one explicit, distinctly keyed superseding
+   `reject` after `UNKNOWN_OUTCOME` is allowed (section 4.3); the post-restart
+   path keeps the documented residual.** An `allow_once` supersede stays not
+   offered.
 
 ## As built (attempt writer), 2026-11-14
 
