@@ -162,7 +162,7 @@ Open items recorded here, not fixed:
 
 ### ADR-025 archive overlay persistence (ADR-022 slice S8, PROPOSED): deferred items (2026-11-15, appended)
 
-- ADR-025 is a **design only, PROPOSED**: no Go code, nothing configured, `EmptyArchiveOverlay` stays the production overlay. It is not accepted (D12 does not name ADR-025); its twelve open questions (section 9) stay with the maintainer, and slice S6 (`archive_session`, `close_session`) does not start before the maintainer accepts it.
-- The proposed `BRIDGE_OVERLAY_DIR`, the file name, the 1000-entry and 256 KiB bounds and the `session_archived` refusal reason are proposals, not decisions.
+- ADR-025 is a **design only, PROPOSED**: no Go code, nothing configured, `EmptyArchiveOverlay` stays the production overlay. It is not accepted (D12 does not name ADR-025); its thirteen open questions (section 9) stay with the maintainer, and slice S6 (`archive_session`, `close_session`) does not start before the maintainer accepts it.
+- The proposed `BRIDGE_OVERLAY_DIR`, the file name, the 1000-entry and 512 KiB bounds and the `session_archived` refusal reason are proposals, not decisions.
 - Whether an overlay-archived session refuses `send_prompt` (ADR-022 7.2 (B)) changes an existing tool and is open question 1; rollback detection (an external counter) is accepted as a residual in the proposal (T3) and is open question 7.
 
