@@ -3,6 +3,8 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -257,5 +259,63 @@ func TestSessionTimeAndMetadataAreTolerant(t *testing.T) {
 		if v.CreatedByBridge() {
 			t.Errorf("%s: a provenance label was invented", name)
 		}
+	}
+}
+
+// ADR-024 4.2 step 8 / D15 Q4: the production reply is one POST /permission/:requestID/reply with
+// {"reply":"reject"} and nothing else, routed to the session's directory.
+func TestReplyPermissionSendsOnlyRejectOnTheCurrentRoute(t *testing.T) {
+	type seen struct {
+		method, path, directory, body, auth string
+	}
+	var got []seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		u, p, _ := r.BasicAuth()
+		got = append(got, seen{r.Method, r.URL.Path, r.URL.Query().Get("directory"), string(b), u + ":" + p})
+		w.Write([]byte("true"))
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL, "user", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReplyPermission(context.Background(), "ses_abc", "/srv/work", "per_0001", "reject"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != (seen{"POST", "/permission/per_0001/reply", "/srv/work", `{"reply":"reject"}`, "user:pw"}) {
+		t.Fatalf("native requests = %+v", got)
+	}
+	// Nothing but reject, and only for well-formed targets: no request is made.
+	for name, args := range map[string][4]string{
+		"once":           {"ses_abc", "/srv/work", "per_0001", "once"},
+		"always":         {"ses_abc", "/srv/work", "per_0001", "always"},
+		"empty reply":    {"ses_abc", "/srv/work", "per_0001", ""},
+		"bad session":    {"abc", "/srv/work", "per_0001", "reject"},
+		"bad request id": {"ses_abc", "/srv/work", "../per", "reject"},
+		"no per prefix":  {"ses_abc", "/srv/work", "x_0001", "reject"},
+		"relative dir":   {"ses_abc", "work", "per_0001", "reject"},
+		"empty dir":      {"ses_abc", "", "per_0001", "reject"},
+		"path in id":     {"ses_abc", "/srv/work", "per_1/reply?x=1", "reject"},
+	} {
+		if err := c.ReplyPermission(context.Background(), args[0], args[1], args[2], args[3]); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("a refused call reached the native server: %+v", got[1:])
+	}
+}
+
+func TestReplyPermissionReturnsTheHTTPStatus(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 404, 500} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+		c, _ := New(srv.URL, "", "")
+		err := c.ReplyPermission(context.Background(), "ses_abc", "/srv/work", "per_0001", "reject")
+		var h *HTTPError
+		if !errors.As(err, &h) || h.Status != status {
+			t.Errorf("status %d: err = %v", status, err)
+		}
+		srv.Close()
 	}
 }

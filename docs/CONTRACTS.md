@@ -800,15 +800,71 @@ per-call approval is configured: the server cannot verify which, and says so in 
   policy_mode=reject_only, policy_rule=reject_allowed, principal, decided_by=chat_client,
   human_verified=false`. The `phase=result` and `phase=refused` lines are slice S5; the generic
   AUDIT-01 writer writes no line for this tool.
-- **Not served by a deployed Bridge:** the tool is registered only when the server has a
-  `PermissionRelay` configuration (`reject_only`); nothing in `cmd/bridge` sets it (D15 Q3: the
-  registration lands with S5), and the manager has no production native reply client or attempt
-  writer installed, so a call would fail closed anyway. A deployed Bridge keeps its eleven tools.
+- **Registration (superseded by S5, below):** in S3 the tool was registered only when the server had
+  a `PermissionRelay` configuration and nothing in `cmd/bridge` set it. S5 sets it by default.
 - **ADR-024 S1 changes in this slice:** `get_session` reports a measured `pending_permission_count`
   of `0` while the state is `waiting_for_permission` (it stays absent when the permission read failed
   or the state is not waiting); a `resolved_externally` tombstone of an execution no longer hides its
   one pending request from `pending_permission` (uncertain entries still do); the permission-source
   call has a deadline of its own.
+
+### ADR-024 S5: `reply_permission` audit lines, production replier, default registration
+
+- **Registration (D15 Q3).** `cmd/bridge` registers `reply_permission` in `reject_only` by default: a
+  deployed Bridge now lists **twelve** tools (eleven plus this one; thirteen with `create_session`).
+  `BRIDGE_PERMISSION_RELAY` is the switch: unset or `reject_only` registers it, `off` keeps the
+  eleven-tool surface, `policy` and any other value refuse startup (policy mode, ADR-024 S2/S4, is
+  not started: D15 Q1). The name and its values are a maintainer proposal (ADR-024 section 5 names
+  the variable and the three values).
+- **Production replier.** `opencode.Client.ReplyPermission`: `POST /permission/:requestID/reply` with
+  the body `{"reply":"reject"}` and nothing else, in the session's directory (`?directory=`). It
+  accepts only `reject` (never once or always) and only well-formed ids and an absolute directory;
+  a refused call makes no request. The result of the HTTP call is classified by the manager: 404
+  `NOT_FOUND`/`resolved_elsewhere_or_dropped`, 400 `UPSTREAM_FAILURE`/`native_rejected_id`, every
+  other status (401, 403, 429 and 5xx included), a timeout or a lost response `UNKNOWN_OUTCOME`.
+- **No production permission source yet.** The fresh re-read of ADR-024 4.2 step 5 needs a
+  `PermissionSource`, which needs a `PermissionObservationAuthority` built from the manager's
+  submitted-run view; that is a slice of its own. Until it exists a deployed Bridge registers the
+  tool but every call fails closed with `UPSTREAM_FAILURE` before any attempt line and any native
+  write, and `pending_permission` stays count-only.
+- **Audit lines (ADR-024 section 6).** One closed-shape `event=permission_reply` line per phase on
+  every return path, written by `internal/audit` through the process-wide failure-reporting writer
+  (same journal, lock and tee as every AUDIT-01 line; no new record type; no other tool's line
+  changed): `phase=attempt` before the native write (its failure blocks the write); `phase=result`
+  after it for a definite outcome or `UNKNOWN_OUTCOME` (`outcome` is `replied`, `not_found`,
+  `native_rejected_id` or `unknown_outcome`, with `accepted` and, when not accepted, `error_code`
+  and `reason`); `phase=refused` for every other return that sent nothing (read-only denial,
+  `allow_once_disabled`, an unknown or Claude execution, a refused authorization, every closed
+  refusal reason, an input the SDK rejected, the replay of a recorded `UNKNOWN_OUTCOME`) with
+  `outcome=refused`, `accepted=false`, `error_code`, `reason`. A replay of a recorded success writes
+  a `phase=result` line with `outcome=replay`. Every line carries `decided_by=chat_client` and
+  `human_verified=false`. The values of a refused line come from the call's input reduced to their
+  closed shapes (a malformed id, a free-text reason or an unknown error code never reaches the
+  journal); a refused line carries no native request description and no attempt of its own.
+  `policy_mode=reject_only`; `policy_rule=reject_allowed` on an attempt, `allow_once_disabled` on
+  that refusal. The generic AUDIT-01 writer still writes nothing for this tool. The `kind` field has
+  the shape the Bridge accepts from the observer, `[A-Za-z0-9_.:-]{1,64}` (the same closed charset as
+  `native_tool`); a kind outside it is refused as `not_verified` before any attempt line. The result
+  and refused/replay lines are written on a context that outlives the caller's, with a 5 s bound of
+  their own (pinned by tests that cancel the caller after the native write).
+- **Latch and a failed result line (step 9).** After any failed audit write every later
+  `reply_permission` call is refused with `UPSTREAM_FAILURE`/`audit_unavailable` (`retryable: true`)
+  before any native call, replays that would send nothing included (S5 design of review #197; the
+  latch is process-wide and recovers only with a restart). A `phase=result` line that cannot be
+  written after the native write leaves the real outcome and the record as they are, is logged
+  loudly and latches the writer.
+- **Bound.** The attempt write honours the call's context (review #277 P3-2): a journal that does not
+  return before the 5 s bound latches the writer and the call refuses; a canceled caller refuses the
+  call without latching. The line may still reach the journal later (an attempt line without a
+  native write, never the reverse). Result and refused lines are written on a context that outlives
+  the caller's, with their own 5 s bound.
+- **Hardening of the S3 reviews.** A replier that panics settles the record to `unknown` and the call
+  returns `UNKNOWN_OUTCOME` with its `attempt_id` (an explicit supersede then works); the id bounds
+  agree (`permission_id` up to 128 characters, session id up to 256, in the tool, the manager and
+  the audit field); waiting for a slot or the run token past the deadline is a retryable
+  `UPSTREAM_TIMEOUT`; the manager refuses `allow_once` before any native read; the workspace identity
+  re-check before the write refuses a replaced workspace (`FORBIDDEN`) and a filesystem timeout
+  (`UPSTREAM_TIMEOUT`, retryable) with no native write and no attempt line.
 
 ### ADR-023 dashboard (read-only; disabled by default)
 

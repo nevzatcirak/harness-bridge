@@ -24,6 +24,9 @@ import (
 type auditRecord struct {
 	tool     string
 	readOnly bool
+	// replyTrace is set for reply_permission only: what the manager wrote for this call.
+	replyTrace *execution.ReplyTrace
+	replyCtx   context.Context
 	// replay is the execution manager's own decision (SendWithRunnerOutcome).
 	replay bool
 }
@@ -122,7 +125,8 @@ func rawAuditArgs(raw json.RawMessage) args {
 		}
 		return v
 	}
-	return args{SessionID: str("session_id"), ExecutionID: str("execution_id"), IdempotencyKey: str("idempotency_key")}
+	return args{SessionID: str("session_id"), ExecutionID: str("execution_id"), IdempotencyKey: str("idempotency_key"),
+		PermissionID: str("permission_id"), Decision: str("decision"), Supersedes: str("supersedes")}
 }
 
 func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err error) {
@@ -130,10 +134,19 @@ func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err
 		mark.written.Store(true)
 	}
 	if r.tool == "reply_permission" {
-		// ADR-024 S5 owns the permission_reply result/refused lines (section 6). The attempt line
-		// is written before the native call by internal/audit; a line from this generic writer
-		// would carry the event of a prompt submission. The tool is not registered in the
-		// production server until S5 (see PermissionRelayConfig), so no mutation goes unaudited.
+		// ADR-024 section 6 (S5): the permission_reply lines are written by internal/audit
+		// through the process-wide failure-reporting writer, never by this generic writer (whose
+		// event would be a prompt submission). The attempt line is written before the native call
+		// and the result line after it, both by the manager; this hook writes the one line of every
+		// other return path (a refused line, or a replay result line). It is the single place every
+		// path passes through, including a read-only denial and an input the SDK rejected.
+		if s.Runs != nil {
+			ctx := ctx
+			if r.replyCtx != nil {
+				ctx = r.replyCtx
+			}
+			s.Runs.AuditReply(ctx, execution.ReplyInput{ExecutionID: a.ExecutionID, PermissionID: a.PermissionID, Decision: a.Decision, Supersedes: a.Supersedes, Principal: s.auditPrincipal()}, out, err)
+		}
 		return
 	}
 	event, outcome := "prompt_submission", "new"

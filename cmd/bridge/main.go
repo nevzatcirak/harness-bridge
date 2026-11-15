@@ -78,7 +78,15 @@ func main() {
 	}
 	// ADR-023 read-only dashboard: disabled unless BRIDGE_DASHBOARD_SOCKET or
 	// BRIDGE_DASHBOARD_ADDR is set; local transports only.
+	// The one server builder (#291): a nil Claude adapter never reaches the interface.
 	mcpServer := newMCPServer(client, runs, token, policy, cfg.remote, cfg.readOnly, claude)
+	// ADR-024 S5 (D15 Q3): reply_permission is registered in reject_only by default;
+	// BRIDGE_PERMISSION_RELAY=off keeps the eleven-tool surface.
+	relay, err := permissionRelayMode(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wirePermissionRelay(mcpServer, runs, client, relay)
 	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {
 		log.Fatal(err)

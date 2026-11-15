@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strconv"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/audit"
@@ -19,8 +22,9 @@ import (
 // attempt record before the one native write (step 8). It sends nothing but reply "reject" with
 // no message, never retries, and never releases a guard or decides an execution's outcome.
 //
-// Not in this slice: allow_once and any policy (S2/S4), the phase=result and phase=refused lines
-// (S5), a production native client (the tool is not registered in the production server).
+// S5 adds the phase=result line (written here, after the native outcome) and the phase=refused line
+// (written by AuditReply for every return path that wrote no attempt), the production replier and the
+// hardening of the S3 reviews. Not here: allow_once and any policy (S2/S4).
 
 // Closed values of Error.Reason (ADR-024 section 4). Any other value is a defect.
 const (
@@ -63,16 +67,54 @@ func ValidPermissionID(s string) bool { return permissionIDPattern.MatchString(s
 func ValidAttemptID(s string) bool    { return attemptIDPattern.MatchString(s) }
 
 // PermissionReplier performs the one native reply write, routed through the session's own
-// directory/workspace exactly like PermissionSource. Nil (the default) means no reply can be
+// directory exactly like PermissionSource. Nil (the default) means no reply can be
 // sent: the call fails closed before the attempt record is written.
 type PermissionReplier interface {
-	ReplyPermission(ctx context.Context, session, requestID, reply string) error
+	// ReplyPermission sends reply (only "reject" is ever passed) for requestID of the native
+	// session, routed to the session's own directory (the one the run was accepted in).
+	ReplyPermission(ctx context.Context, session, directory, requestID, reply string) error
 }
 
 // AttemptWriter is the failure-reporting attempt record (internal/audit.Writer in production).
 // The error contract is the writer's: any non-nil error means the line was not written.
 type AttemptWriter interface {
 	Write(ctx context.Context, f audit.Fields) error
+	WritePhase(ctx context.Context, phase string, f audit.Fields) error
+	// Unavailable reports the process-wide latch: after a failed write every later call is
+	// refused with audit_unavailable (ADR-024 4.2 step 9).
+	Unavailable() bool
+}
+
+// auditWriteTimeout bounds the result and refused lines, which are written on a context that
+// outlives the caller's (the native write has already happened or the call is already refused).
+const auditWriteTimeout = 5 * time.Second
+
+// ReplyTrace is created by the MCP layer for one call and carried in the context. The manager
+// records on it what it wrote, so the layer that sees every return path writes exactly one line
+// for a call that the manager did not already close with a result line.
+type ReplyTrace struct {
+	mu            sync.Mutex
+	session       string
+	attemptWriten bool
+	resultDone    bool
+}
+type replyTraceKey struct{}
+
+// WithReplyTrace returns ctx carrying a new trace and the trace.
+func WithReplyTrace(ctx context.Context) (context.Context, *ReplyTrace) {
+	t := &ReplyTrace{}
+	return context.WithValue(ctx, replyTraceKey{}, t), t
+}
+func traceOf(ctx context.Context) *ReplyTrace {
+	t, _ := ctx.Value(replyTraceKey{}).(*ReplyTrace)
+	return t
+}
+func (t *ReplyTrace) mark(f func(*ReplyTrace)) {
+	if t != nil {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		f(t)
+	}
 }
 
 type replierBox struct{ r PermissionReplier }
@@ -97,6 +139,14 @@ func (m *Manager) SetAttemptWriter(w AttemptWriter) {
 		return
 	}
 	m.attempts.Store(&attemptBox{w})
+}
+
+// AuditLatched reports whether the attempt writer's process-wide latch is set: every
+// reply_permission call is then refused with audit_unavailable (ADR-024 4.2 step 9). The MCP layer
+// asks first so a latched call makes no native call at all, not even the authorization read.
+func (m *Manager) AuditLatched() bool {
+	abox := m.attempts.Load()
+	return abox != nil && abox.w.Unavailable()
 }
 
 // ReplyInput is the validated tool input plus the audit principal.
@@ -226,15 +276,29 @@ func (m *Manager) ReplyPermission(ctx context.Context, in ReplyInput) (ReplyResu
 		(in.Supersedes != "" && !attemptIDPattern.MatchString(in.Supersedes)) {
 		return ReplyResult{}, Fail("INVALID_INPUT", "invalid reply_permission input")
 	}
+	// ADR-024 4.2 step 9: once the audit is unavailable every later call is refused, replays that
+	// send nothing included (S5 design of review #197): a call whose line cannot be written is
+	// not served.
+	if abox := m.attempts.Load(); abox != nil && abox.w.Unavailable() {
+		return ReplyResult{}, AuditUnavailable()
+	}
 	x, err := m.find(in.ExecutionID)
 	if err != nil {
 		return ReplyResult{}, err
 	}
+	x.mu.Lock()
+	traceOf(ctx).mark(func(t *ReplyTrace) { t.session = x.native })
+	x.mu.Unlock()
 	if err = m.waitingGuard(x); err != nil {
 		return ReplyResult{}, err
 	}
 	if res, err := m.gate(in); err != nil || res != nil {
 		return derefReply(res), err
+	}
+	// The manager's own allow_once refusal, before any native read or write (review #285 B P3-4):
+	// the MCP layer refuses it earlier, this keeps the manager safe on its own.
+	if in.Decision != decisionReject {
+		return ReplyResult{}, refusal("FORBIDDEN", ReasonAllowOnceDisabled, "allow_once is disabled", false)
 	}
 	if !m.beginRead() {
 		return ReplyResult{}, Fail("UNKNOWN_OUTCOME", "manager closed")
@@ -244,11 +308,11 @@ func (m *Manager) ReplyPermission(ctx context.Context, in ReplyInput) (ReplyResu
 	defer cancel()
 	// Serialize with prompt, interrupt, reconcile and the ADR-020 release: the run's own token.
 	if err = take(bounded, m.reconcileSlots); err != nil {
-		return ReplyResult{}, err
+		return ReplyResult{}, waitErr(err)
 	}
 	defer give(m.reconcileSlots)
 	if err = take(bounded, x.op); err != nil {
-		return ReplyResult{}, err
+		return ReplyResult{}, waitErr(err)
 	}
 	defer give(x.op)
 	// Everything above was read before waiting for the token: check again, a concurrent call
@@ -262,6 +326,15 @@ func (m *Manager) ReplyPermission(ctx context.Context, in ReplyInput) (ReplyResu
 	return m.replyLocked(ctx, bounded, x, in)
 }
 
+// waitErr maps a wait for a slot or the run token that ended: a deadline is retryable and nothing
+// was sent (review #285 B P3-3); a cancellation keeps its own error.
+func waitErr(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &Error{Code: "UPSTREAM_TIMEOUT", Message: "the permission reply waited too long for the run; nothing was sent", Retryable: true}
+	}
+	return err
+}
+
 func derefReply(r *ReplyResult) ReplyResult {
 	if r == nil {
 		return ReplyResult{}
@@ -270,14 +343,14 @@ func derefReply(r *ReplyResult) ReplyResult {
 }
 
 // replyLocked runs steps 5, 7, 8 with the run token held and the gate passed.
-func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInput) (ReplyResult, error) {
+func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInput) (res ReplyResult, err error) {
 	x.mu.Lock()
-	session := x.native
+	session, directory := x.native, x.directory
 	x.mu.Unlock()
 	// Step 5: a fresh native re-read through the permission observer, never a cached view.
-	entry, err := m.verifyPending(bounded, session, in)
-	if err != nil {
-		return ReplyResult{}, err
+	entry, verr := m.verifyPending(bounded, session, in)
+	if verr != nil {
+		return ReplyResult{}, verr
 	}
 	// Step 7: directory identity recheck immediately before the write.
 	if err = revalidateSession(bounded, x, opencode.Session{ID: x.native, Directory: x.directory}); err != nil {
@@ -285,11 +358,6 @@ func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInpu
 			return ReplyResult{}, fsUnavailable("workspace filesystem check did not complete; reply not submitted")
 		}
 		return ReplyResult{}, err
-	}
-	if in.Decision != decisionReject {
-		// Defense in depth: the MCP layer refuses allow_once before any native call (step 2).
-		// S4 (policy) is not started; nothing but reject is ever sent.
-		return ReplyResult{}, refusal("FORBIDDEN", ReasonAllowOnceDisabled, "allow_once is disabled", false)
 	}
 	rbox := m.replier.Load()
 	abox := m.attempts.Load()
@@ -350,6 +418,21 @@ func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInpu
 	if in.Supersedes != "" {
 		fields["supersedes"] = in.Supersedes
 	}
+	// A panic anywhere after the record exists (a replier or a writer that panics) must not leave
+	// the record in_flight forever (reviews #285 B P3-5, #286 C P3-1). The native write may or may
+	// not have happened, so the record becomes unknown (an explicit supersede then works) and the
+	// call returns the typed UNKNOWN_OUTCOME; the result line is written when an attempt line exists.
+	attemptWritten := false
+	defer func() {
+		if p := recover(); p != nil {
+			settle(stateUnknown)
+			res, err = ReplyResult{}, (&replyRecord{attemptID: id, attempt: attempt}).unknownOutcome("the native reply has an unknown outcome and was not resent; quote attempt_id in supersedes to make one explicit reject attempt")
+			if attemptWritten {
+				m.auditResult(ctx, abox.w, fields, "unknown_outcome", false, "UNKNOWN_OUTCOME", "")
+				traceOf(ctx).mark(func(t *ReplyTrace) { t.resultDone = true })
+			}
+		}
+	}()
 	if werr := abox.w.Write(bounded, fields); werr != nil {
 		abandon()
 		if errors.Is(werr, audit.ErrInvalid) {
@@ -357,12 +440,19 @@ func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInpu
 		}
 		return ReplyResult{}, AuditUnavailable()
 	}
+	attemptWritten = true
+	traceOf(ctx).mark(func(t *ReplyTrace) { t.attemptWriten = true })
+	finish := func(outcome string, accepted bool, code, reason string) {
+		m.auditResult(ctx, abox.w, fields, outcome, accepted, code, reason)
+		traceOf(ctx).mark(func(t *ReplyTrace) { t.resultDone = true })
+	}
 	// The one native write: reply reject, no message, under its own 5 s bound.
 	wctx, wcancel := m.readContext(ctx)
 	defer wcancel()
-	werr := rbox.r.ReplyPermission(wctx, session, in.PermissionID, nativeReplyReject)
+	werr := rbox.r.ReplyPermission(wctx, session, directory, in.PermissionID, nativeReplyReject)
 	if werr == nil {
 		settle(stateReplied)
+		finish("replied", true, "", "")
 		return ReplyResult{ExecutionID: in.ExecutionID, PermissionID: in.PermissionID, Decision: in.Decision, Outcome: "replied", AttemptID: id, Attempt: attempt, DecidedBy: decidedByChatClient}, nil
 	}
 	var h *opencode.HTTPError
@@ -371,6 +461,7 @@ func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInpu
 		// attempt 2 the unknown first attempt may have landed (a 404 is exactly what a landed
 		// reply looks like), so the record stays unknown at attempt 2: the next same-key call is
 		// the recorded UNKNOWN_OUTCOME, never a fresh first attempt, and no third write is possible.
+		// 401, 403, 429 and every 5xx are NOT definite here: the request may have been processed.
 		definite := stateRefused
 		if attempt == maxSupersede {
 			definite = stateUnknown
@@ -378,15 +469,108 @@ func (m *Manager) replyLocked(ctx, bounded context.Context, x *run, in ReplyInpu
 		switch h.Status {
 		case 404: // first-wins: the request is gone (the TUI answered first, or it was dropped)
 			settle(definite)
+			finish("not_found", false, "NOT_FOUND", ReasonResolvedElsewhere)
 			return ReplyResult{}, refusal("NOT_FOUND", ReasonResolvedElsewhere, "the permission request was resolved elsewhere or dropped", false)
 		case 400:
 			settle(definite)
+			finish("native_rejected_id", false, "UPSTREAM_FAILURE", ReasonNativeRejectedID)
 			return ReplyResult{}, refusal("UPSTREAM_FAILURE", ReasonNativeRejectedID, "the native side rejected the permission id; no state changed", false)
 		}
 	}
 	// A timeout, a lost response or any other failure: the write may have landed. Never resend.
 	settle(stateUnknown)
+	finish("unknown_outcome", false, "UNKNOWN_OUTCOME", "")
 	return ReplyResult{}, (&replyRecord{attemptID: id, attempt: attempt}).unknownOutcome("the native reply has an unknown outcome and was not resent; quote attempt_id in supersedes to make one explicit reject attempt")
+}
+
+// auditResult writes the phase=result line of a call whose attempt line exists (ADR-024 4.2 step
+// 9). It never fails the call: the native write cannot be unsent, so a result line that cannot be
+// written is logged loudly and the writer's latch refuses every later call with audit_unavailable.
+func (m *Manager) auditResult(ctx context.Context, w AttemptWriter, base audit.Fields, outcome string, accepted bool, code, reason string) {
+	f := audit.Fields{}
+	for k, v := range base {
+		f[k] = v
+	}
+	f["outcome"], f["accepted"] = outcome, strconv.FormatBool(accepted)
+	if !accepted {
+		f["error_code"] = code
+		if reason != "" {
+			f["reason"] = reason
+		}
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditWriteTimeout)
+	defer cancel()
+	if err := w.WritePhase(wctx, audit.PhaseResult, f); err != nil {
+		slog.Error("permission_reply result line not written; every later reply_permission call is refused until restart", "tool", "reply_permission", "audit_error", "write_failed")
+	}
+}
+
+// AuditReply writes the one line of a call that the manager did not close with a result line
+// (ADR-024 section 6, one line per phase on every return path): a refused line for every error
+// (a refusal before any attempt, a replay of a recorded UNKNOWN_OUTCOME, an invalid input) and a
+// result line with outcome replay for the recorded success of an earlier call. The values come
+// from the call's own input and are reduced to their closed shapes (audit.Clean): free text, native
+// text and malformed ids never reach the journal. It writes nothing when the writer is absent or
+// latched (the line cannot be written; the call was or is refused anyway).
+func (m *Manager) AuditReply(ctx context.Context, in ReplyInput, out any, err error) {
+	tr := traceOf(ctx)
+	var session string
+	if tr != nil {
+		tr.mu.Lock()
+		done, sess := tr.resultDone, tr.session
+		tr.mu.Unlock()
+		if done {
+			return
+		}
+		session = sess
+	}
+	abox := m.attempts.Load()
+	if abox == nil || abox.w.Unavailable() {
+		return
+	}
+	f := audit.Fields{"tool": "reply_permission", "decision": in.Decision, "permission_id": in.PermissionID, "execution_id": in.ExecutionID,
+		"supersedes": in.Supersedes, "principal": in.Principal, "process_start": m.processStart, "policy_mode": policyModeRejectOnly}
+	if opencode.ValidID(session, "ses") {
+		f["session_id"] = "opencode:" + session
+	}
+	phase := audit.PhaseRefused
+	if res, ok := out.(ReplyResult); ok && err == nil {
+		phase = audit.PhaseResult
+		f["outcome"], f["accepted"] = "replay", "true"
+		f["attempt"], f["attempt_id"] = strconv.Itoa(res.Attempt), res.AttemptID
+		f["decision"] = res.Decision
+	} else {
+		f["outcome"], f["accepted"], f["error_code"] = "refused", "false", "INTERNAL"
+		var e *Error
+		if errors.As(err, &e) {
+			f["error_code"] = e.Code
+			f["reason"] = e.Reason
+			if e.AttemptID != "" && e.Attempt > 0 {
+				f["attempt"], f["attempt_id"] = strconv.Itoa(e.Attempt), e.AttemptID
+			}
+			if e.Reason == ReasonAllowOnceDisabled {
+				f["policy_rule"] = ReasonAllowOnceDisabled
+			}
+		}
+		// A replay of the recorded UNKNOWN_OUTCOME is the one refusal that carries an attempt; a
+		// supersedes that quotes it is a value of the input, not a second attempt.
+		if f["attempt"] == "" {
+			delete(f, "attempt_id")
+		}
+	}
+	f = audit.Clean(f)
+	if phase == audit.PhaseRefused && f["error_code"] == "" {
+		f["error_code"] = "INTERNAL" // an error code outside its closed shape: the line is still written
+	}
+	if phase == audit.PhaseRefused && (f["attempt"] != "") != (f["attempt_id"] != "") {
+		delete(f, "attempt")
+		delete(f, "attempt_id")
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditWriteTimeout)
+	defer cancel()
+	if werr := abox.w.WritePhase(wctx, phase, f); werr != nil {
+		slog.Error("permission_reply line not written", "tool", "reply_permission", "phase", phase, "audit_error", "write_failed")
+	}
 }
 
 // verifyPending is ADR-024 4.2 step 5: the request with id == permission_id must exist, belong
