@@ -599,3 +599,28 @@ func TestSetJournalForTestingClearsAndRestoresTheLatch(t *testing.T) {
 		t.Fatal("restore left the latch set")
 	}
 }
+
+// Review #293 P3-2: the attempt line accepts exactly the kinds the Bridge accepts from the
+// observer (safeTool: [A-Za-z0-9_.:-]{1,64}); anything outside that closed charset still refuses.
+func TestKindShapeMatchesTheBridgesAcceptedShape(t *testing.T) {
+	var buf bytes.Buffer
+	capture(t, &buf)
+	for _, kind := range []string{"edit", "Bash2", "mcp.tool", "mcp:server-tool_1", strings.Repeat("k", 64)} {
+		f := good()
+		f["kind"] = kind
+		if err := newWriter().Write(context.Background(), f); err != nil {
+			t.Errorf("kind %q refused: %v", kind, err)
+		}
+	}
+	for name, kind := range map[string]string{
+		"65 characters": strings.Repeat("k", 65), "empty": "", "space": "a b", "equals": "a=b", "quote": `a"b`, "newline": "a\nb",
+		"slash": "a/b", "unicode": "k\u00e9", "forged attribute": "x event=interrupt",
+	} {
+		f := good()
+		f["kind"] = kind
+		w := newWriter()
+		if err := w.Write(context.Background(), f); !errors.Is(err, ErrInvalid) || w.Unavailable() {
+			t.Errorf("%s: err = %v latched = %v, want ErrInvalid without a latch", name, err, w.Unavailable())
+		}
+	}
+}

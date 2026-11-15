@@ -554,3 +554,41 @@ func TestReplyPermissionSupersedeOverTheTransport(t *testing.T) {
 		t.Fatalf("attempt line 2 = %v", e.aw.lines[1])
 	}
 }
+
+// The tool surface after the merge of the relay: eleven (no create, no relay), twelve (either one),
+// thirteen (both). create_session is configured by tests only; cmd/bridge does not wire it.
+func TestToolCountsElevenTwelveThirteen(t *testing.T) {
+	count := func(create, relay bool) int {
+		e := newCreateEnv(t, nil)
+		e.s.Policy, _ = security.New([]string{e.rootA}, []string{"ses_none"})
+		e.s.Token = strings.Repeat("t", 32)
+		if !create {
+			e.s.Create = nil
+		}
+		if relay {
+			e.s.PermissionRelay = &PermissionRelayConfig{Mode: "reject_only"}
+		}
+		ts := httptest.NewServer(e.s)
+		t.Cleanup(ts.Close)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c, err := mcpclient.Connect(ctx, ts.URL, e.s.Token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		tools, err := c.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(tools.Tools)
+	}
+	for _, c := range []struct {
+		create, relay bool
+		want          int
+	}{{false, false, 11}, {false, true, 12}, {true, false, 12}, {true, true, 13}} {
+		if got := count(c.create, c.relay); got != c.want {
+			t.Errorf("create=%v relay=%v: %d tools, want %d", c.create, c.relay, got, c.want)
+		}
+	}
+}

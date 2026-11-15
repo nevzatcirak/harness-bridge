@@ -61,6 +61,7 @@ type replierFake struct {
 	args    [][3]string
 	dirs    []string
 	panicOn bool
+	after   func()        // runs when a call returns, as the native write ends
 	entered chan struct{} // closed on the first call when set
 	hold    chan struct{} // blocks every call until closed when set
 }
@@ -74,9 +75,12 @@ func (r *replierFake) ReplyPermission(ctx context.Context, session, directory, i
 	if len(r.errs) > 0 {
 		err, r.errs = r.errs[0], r.errs[1:]
 	}
-	entered, hold, pan := r.entered, r.hold, r.panicOn
+	entered, hold, pan, after := r.entered, r.hold, r.panicOn, r.after
 	r.entered = nil
 	r.mu.Unlock()
+	if after != nil {
+		defer after()
+	}
 	if pan {
 		panic("replier panic")
 	}
@@ -122,6 +126,7 @@ type attemptFake struct {
 	errs      []error
 	lines     []audit.Fields
 	phases    []phaseLine
+	bounds    []time.Duration
 	latched   bool
 	phaseErrs []error
 }
@@ -130,10 +135,20 @@ func (a *attemptFake) Unavailable() bool { a.mu.Lock(); defer a.mu.Unlock(); ret
 func (a *attemptFake) latch()            { a.mu.Lock(); a.latched = true; a.mu.Unlock() }
 
 // WritePhase records the result and refused lines apart from the attempt lines.
-func (a *attemptFake) WritePhase(_ context.Context, phase string, f audit.Fields) error {
+func (a *attemptFake) WritePhase(ctx context.Context, phase string, f audit.Fields) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ev.add("line:" + phase)
+	// Like the real writer: a context that is already done writes nothing. The bound of the call
+	// is recorded so a test can pin it (reviews #292 P3-1, #293 P3-3).
+	if err := ctx.Err(); err != nil {
+		return audit.ErrUnavailable
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		a.bounds = append(a.bounds, time.Until(dl))
+	} else {
+		a.bounds = append(a.bounds, -1)
+	}
 	if len(a.phaseErrs) > 0 {
 		var err error
 		err, a.phaseErrs = a.phaseErrs[0], a.phaseErrs[1:]

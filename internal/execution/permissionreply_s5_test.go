@@ -368,3 +368,102 @@ func TestTokenWaitDeadlineIsARetryableTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Review #293 P3-2: every kind the observer path accepts reaches the attempt line; one the Bridge
+// does not accept is refused as not verified before any attempt line (fail closed).
+func TestKindBoundaryReachesTheAttemptLine(t *testing.T) {
+	for _, kind := range []string{"Bash2", "mcp.tool", "mcp:server-tool_1", strings.Repeat("k", 64)} {
+		t.Run(kind, func(t *testing.T) {
+			fx := newReplyFixture(t)
+			fx.setMode(func(p opencode.ObservedPermission) opencode.ObservedPermission { p.Kind = kind; return p })
+			if _, err := fx.m.ReplyPermission(fx.ctx(), fx.in()); err != nil {
+				t.Fatalf("kind %q: %v", kind, err)
+			}
+			if got := fx.aw.written()[0]["kind"]; got != kind {
+				t.Fatalf("attempt line kind = %q", got)
+			}
+		})
+	}
+	for _, kind := range []string{strings.Repeat("k", 65), "a b", "a=b"} {
+		fx := newReplyFixture(t)
+		fx.setMode(func(p opencode.ObservedPermission) opencode.ObservedPermission { p.Kind = kind; return p })
+		_, err := fx.m.ReplyPermission(fx.ctx(), fx.in())
+		wantErr(t, err, "FORBIDDEN", ReasonNotVerified)
+		fx.noSideEffects("kind " + kind)
+	}
+}
+
+// Reviews #292 P3-1 / #293 P3-3: the result line and the refused/replay lines are written on a
+// context that outlives the caller's (a canceled caller does not lose its audit line) and carry a
+// bound of their own. A mutation that passes the caller's context makes these fail.
+func TestResultLineSurvivesTheCallersCancellation(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		native  error
+		outcome string
+	}{
+		{"replied", nil, "replied"},
+		{"404", &opencode.HTTPError{Status: 404}, "not_found"},
+		{"lost response", errors.New("lost"), "unknown_outcome"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fx := newReplyFixture(t)
+			if c.native != nil {
+				fx.rep.failWith(c.native)
+			}
+			ctx, cancel := context.WithCancel(fx.ctx())
+			defer cancel()
+			fx.rep.mu.Lock()
+			fx.rep.after = cancel // the caller goes away as the native write ends
+			fx.rep.mu.Unlock()
+			_, _ = fx.m.ReplyPermission(ctx, fx.in())
+			if ctx.Err() == nil {
+				t.Fatal("the caller's context was not canceled")
+			}
+			rl := fx.aw.phaseLines("result")
+			if len(rl) != 1 || rl[0]["outcome"] != c.outcome {
+				t.Fatalf("result lines after the caller went away = %v, want one %q", rl, c.outcome)
+			}
+			fx.aw.mu.Lock()
+			defer fx.aw.mu.Unlock()
+			if len(fx.aw.bounds) != 1 || fx.aw.bounds[0] <= 0 || fx.aw.bounds[0] > auditWriteTimeout {
+				t.Fatalf("the result line write is not bounded by its own %v deadline: %v", auditWriteTimeout, fx.aw.bounds)
+			}
+		})
+	}
+}
+
+func TestRefusedAndReplayLinesSurviveTheCallersCancellation(t *testing.T) {
+	fx := newReplyFixture(t)
+	fx.remove()
+	ctx, cancel := context.WithCancel(fx.ctx())
+	_, err := fx.m.ReplyPermission(ctx, fx.in())
+	cancel() // the caller goes away before the line of its refusal is written
+	fx.m.AuditReply(ctx, fx.in(), nil, err)
+	rl := fx.aw.phaseLines("refused")
+	if len(rl) != 1 || rl[0]["error_code"] != "NOT_FOUND" {
+		t.Fatalf("refused lines after the caller went away = %v", rl)
+	}
+	// the replay of a recorded success
+	fx2 := newReplyFixture(t)
+	res, err := fx2.m.ReplyPermission(fx2.ctx(), fx2.in())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel2 := context.WithCancel(fx2.ctx())
+	again, err := fx2.m.ReplyPermission(ctx2, fx2.in())
+	cancel2()
+	fx2.m.AuditReply(ctx2, fx2.in(), again, err)
+	if rl := fx2.aw.phaseLines("result"); len(rl) != 2 || rl[1]["outcome"] != "replay" || rl[1]["attempt_id"] != res.AttemptID {
+		t.Fatalf("replay lines after the caller went away = %v", rl)
+	}
+	for _, f := range []*replyFixture{fx, fx2} {
+		f.aw.mu.Lock()
+		for _, b := range f.aw.bounds {
+			if b <= 0 || b > auditWriteTimeout {
+				t.Fatalf("a line write is not bounded by its own %v deadline: %v", auditWriteTimeout, f.aw.bounds)
+			}
+		}
+		f.aw.mu.Unlock()
+	}
+}

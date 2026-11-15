@@ -795,6 +795,14 @@ lines; the production replier exists; the S3 review hardening is in.
   `attempt`/`attempt_id` only for that replay. Not done (maintainer proposals, unchanged): latch recovery, the
   dashboard ring allowlist for `permission_reply`, a distinct error code for `audit_unavailable`.
 
+**Delta (task #295, 2026-11-15).** `main` (#291) was merged into the S5 branch as a plain merge
+commit; `newMCPServer` constructs the server and the `BRIDGE_PERMISSION_RELAY` wiring applies to it
+(tool counts: eleven with `off`, twelve by default, thirteen with `create_session`). Reviews #292 P3-1
+and #293 P3-3: the result and refused/replay lines are pinned to `WithoutCancel` plus their own 5 s
+bound. Review #293 P3-2: the attempt line's `kind` shape now equals the Bridge's accepted shape
+(`[A-Za-z0-9_.:-]{1,64}`); the other option (a typed refusal before the attempt) was not needed because
+the charset is the same closed one `native_tool` already uses.
+
 ## 13. Limitations of this record
 
 - Static reading of one upstream commit; OpenCode was not run and no Bridge or

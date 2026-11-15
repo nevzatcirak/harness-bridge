@@ -86,7 +86,9 @@ var fields = map[string]field{
 	"execution_id":  s(`[0-9a-f]{32}`, true),
 	"session_id":    s(`opencode:ses[A-Za-z0-9_-]{1,253}`, false),
 	"native_tool":   s(`[A-Za-z0-9_.:-]{1,64}`, false),
-	"kind":          s(`[a-z_]{1,32}`, false),
+	// kind has the shape the Bridge accepts from the observer (execution.safeTool); a narrower
+	// shape here would pass the re-read and then fail the attempt line with INTERNAL (review #293 P3-2).
+	"kind":          s(`[A-Za-z0-9_.:-]{1,64}`, false),
 	"scope_digest":  s(`[0-9a-f]{16,64}`, false),
 	"pattern_count": {re: regexp.MustCompile(`^[0-9]{1,4}$`), kind: 'i'},
 	"policy_mode":   s(`reject_only|policy`, false),

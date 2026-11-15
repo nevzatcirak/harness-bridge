@@ -842,7 +842,11 @@ per-call approval is configured: the server cannot verify which, and says so in 
   closed shapes (a malformed id, a free-text reason or an unknown error code never reaches the
   journal); a refused line carries no native request description and no attempt of its own.
   `policy_mode=reject_only`; `policy_rule=reject_allowed` on an attempt, `allow_once_disabled` on
-  that refusal. The generic AUDIT-01 writer still writes nothing for this tool.
+  that refusal. The generic AUDIT-01 writer still writes nothing for this tool. The `kind` field has
+  the shape the Bridge accepts from the observer, `[A-Za-z0-9_.:-]{1,64}` (the same closed charset as
+  `native_tool`); a kind outside it is refused as `not_verified` before any attempt line. The result
+  and refused/replay lines are written on a context that outlives the caller's, with a 5 s bound of
+  their own (pinned by tests that cancel the caller after the native write).
 - **Latch and a failed result line (step 9).** After any failed audit write every later
   `reply_permission` call is refused with `UPSTREAM_FAILURE`/`audit_unavailable` (`retryable: true`)
   before any native call, replays that would send nothing included (S5 design of review #197; the
