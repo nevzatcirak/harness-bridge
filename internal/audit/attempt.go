@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
-
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
 
 // Errors.
@@ -39,17 +37,6 @@ var (
 
 // Message is the log message of an attempt line.
 const Message = "permission reply attempt"
-
-// AuditUnavailableMessage is the message of the typed refusal (ADR-024 4.2 step 8).
-const AuditUnavailableMessage = "audit_unavailable: the audit record could not be written; no native write was made"
-
-// Refusal is the typed refusal a tool returns when the attempt record could not be written (or
-// the writer is latched): UPSTREAM_FAILURE with reason audit_unavailable, retryable. CONTRACTS has
-// no local-failure code, so this is the nearest existing one (a proposal of ADR-024). It is
-// defined here and exposed by no tool yet.
-func Refusal() *execution.Error {
-	return &execution.Error{Code: "UPSTREAM_FAILURE", Message: AuditUnavailableMessage, Retryable: true}
-}
 
 // field is one allowlisted attribute: its closed shape and how it is typed in the line.
 type field struct {
@@ -71,7 +58,7 @@ var order = []string{"tool", "attempt", "attempt_id", "supersedes", "outcome", "
 // no pattern, no native text and no prompt can reach the line; a key that is not here is refused.
 var fields = map[string]field{
 	"tool":          s(`reply_permission`, true),
-	"attempt":       s(`1|2`, false),
+	"attempt":       s(`1|2`, true),
 	"attempt_id":    s(`[A-Za-z0-9_-]{22}`, true),
 	"supersedes":    s(`[A-Za-z0-9_-]{22}`, false),
 	"outcome":       s(`[a-z_]{1,32}`, false),
@@ -115,6 +102,9 @@ func (f Fields) attrs() ([]any, error) {
 			}
 		}
 	}
+	if err := f.crossCheck(); err != nil {
+		return nil, err
+	}
 	// The AUDIT-01 order puts tool right after event, then phase.
 	for _, k := range order {
 		v, ok := f[k]
@@ -139,6 +129,40 @@ func (f Fields) attrs() ([]any, error) {
 	return attrs, nil
 }
 
+// crossCheck refuses combinations that are individually well formed but inconsistent (review
+// #278 P3-3): a superseding attempt (attempt 2) carries `supersedes`, and only it does; a
+// superseding value never equals the attempt's own ID; `allow_once` is never recorded under
+// `policy_mode=reject_only`; the request description (native_tool, kind, scope_digest,
+// pattern_count) is all present or all absent. The call site (ADR-024 S3) always knows these.
+func (f Fields) crossCheck() error {
+	bad := func(m string) error { return fmt.Errorf("%w: %s", ErrInvalid, m) }
+	_, sup := f["supersedes"]
+	if (f["attempt"] == "2") != sup {
+		return bad("supersedes is required for attempt 2 and only allowed there")
+	}
+	if sup && f["supersedes"] == f["attempt_id"] {
+		return bad("supersedes equals attempt_id")
+	}
+	if f["policy_mode"] == "reject_only" && f["decision"] != "reject" {
+		return bad("only reject is recorded under policy_mode=reject_only")
+	}
+	n := 0
+	for _, k := range []string{"native_tool", "kind", "scope_digest", "pattern_count"} {
+		if _, ok := f[k]; ok {
+			n++
+		}
+	}
+	if n != 0 && n != 4 {
+		return bad("native_tool, kind, scope_digest and pattern_count are all or none")
+	}
+	return nil
+}
+
+// journalGate is implemented by a handler that fans out to a journal and something else.
+type journalGate interface {
+	JournalEnabled(context.Context, slog.Level) bool
+}
+
 // Writer is the attempt writer. Its latch is the availability state of ADR-024 4.2 step 9: after
 // one failed write it reports unavailable and every later attempt is refused WITHOUT writing
 // anything, until the process restarts (the fail-closed minimum; any other recovery rule is a
@@ -150,12 +174,15 @@ type Writer struct {
 	now     func() time.Time
 }
 
-// NewWriter returns a writer with its own latch, writing through the process logger.
-func NewWriter() *Writer {
+// newWriter returns a writer with its own latch, writing through the process logger. It is
+// unexported on purpose (review #277 P3-4): production has exactly one latch, Default(), so a
+// caller cannot obtain a fresh unlatched writer and bypass the process-wide fail-closed state.
+// Other packages take the AttemptWriter interface of their consumer and fake it.
+func newWriter() *Writer {
 	return &Writer{handler: func() slog.Handler { return slog.Default().Handler() }, now: time.Now}
 }
 
-var process = NewWriter()
+var process = newWriter()
 
 // Default is the process-wide writer: its latch is shared by every caller in the process.
 func Default() *Writer { return process }
@@ -179,6 +206,14 @@ func (w *Writer) Write(ctx context.Context, f Fields) error {
 	if h == nil || !h.Enabled(ctx, slog.LevelInfo) {
 		w.unavailable.Store(true)
 		return fmt.Errorf("%w: the journal handler does not accept info records", ErrUnavailable)
+	}
+	// A fan-out handler (the dashboard tee) reports Enabled when any branch wants the record, but
+	// its journal branch may refuse it (a Warn-level journal): Handle then returns nil with no
+	// line written (review #277 P3-1). Such a handler exposes JournalEnabled; the record is
+	// accepted only if the journal itself accepts it.
+	if g, ok := h.(journalGate); ok && !g.JournalEnabled(ctx, slog.LevelInfo) {
+		w.unavailable.Store(true)
+		return fmt.Errorf("%w: the journal branch does not accept info records", ErrUnavailable)
 	}
 	r := slog.NewRecord(w.now(), slog.LevelInfo, Message, 0)
 	r.Add(attrs...)

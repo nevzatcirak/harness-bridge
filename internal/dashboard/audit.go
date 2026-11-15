@@ -149,6 +149,14 @@ func (t *auditTee) Enabled(ctx context.Context, l slog.Level) bool {
 	return t.journal.Enabled(ctx, l) || l >= slog.LevelInfo
 }
 
+// JournalEnabled reports whether the journal branch alone wants a record of this level. Enabled is
+// true when either branch does (the ring displays Info and up), so it cannot tell a caller whether
+// the line will reach the journal; the failure-reporting attempt writer (internal/audit) asks this
+// instead, so a record the journal would drop is never reported as written.
+func (t *auditTee) JournalEnabled(ctx context.Context, l slog.Level) bool {
+	return t.journal.Enabled(ctx, l)
+}
+
 // Handle writes the journal branch, then the ring branch. The ring branch never
 // fails and never panics into the caller.
 func (t *auditTee) Handle(ctx context.Context, r slog.Record) error {

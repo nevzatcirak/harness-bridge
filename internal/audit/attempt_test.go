@@ -24,13 +24,13 @@ const (
 func good() Fields {
 	return Fields{"tool": "reply_permission", "attempt": "1", "attempt_id": aid, "decision": "reject",
 		"permission_id": "per_abc123", "execution_id": exID, "session_id": "opencode:ses_abc",
-		"native_tool": "bash", "kind": "bash", "pattern_count": "2", "policy_mode": "reject_only",
+		"native_tool": "bash", "kind": "bash", "scope_digest": "0123456789abcdef", "pattern_count": "2", "policy_mode": "reject_only",
 		"policy_rule": "reject_always_allowed", "principal": "local"}
 }
 
 const goodLine = "INFO permission reply attempt event=permission_reply tool=reply_permission phase=attempt attempt=1 attempt_id=" + aid +
 	" decision=reject permission_id=per_abc123 execution_id=" + exID + " session_id=opencode:ses_abc native_tool=bash kind=bash" +
-	" pattern_count=2 policy_mode=reject_only policy_rule=reject_always_allowed principal=local decided_by=chat_client human_verified=false\n"
+	" scope_digest=0123456789abcdef pattern_count=2 policy_mode=reject_only policy_rule=reject_always_allowed principal=local decided_by=chat_client human_verified=false\n"
 
 // capture routes the process logger (slog default and log package) to w with no timestamp, and
 // restores both.
@@ -70,7 +70,7 @@ func (s *shortWriter) Write(p []byte) (int, error) { s.calls++; return len(p) / 
 func TestShapeIsAudit01(t *testing.T) {
 	var buf bytes.Buffer
 	capture(t, &buf)
-	w := NewWriter()
+	w := newWriter()
 	if err := w.Write(context.Background(), good()); err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +97,13 @@ func TestShapeIsAudit01(t *testing.T) {
 func TestReachesTee(t *testing.T) {
 	var plain, teed bytes.Buffer
 	capture(t, &plain)
-	if err := NewWriter().Write(context.Background(), good()); err != nil {
+	if err := newWriter().Write(context.Background(), good()); err != nil {
 		t.Fatal(err)
 	}
 	capture(t, &teed)
 	restore := dashboard.InstallAuditTee(dashboard.NewAuditRing())
 	defer restore()
-	if err := NewWriter().Write(context.Background(), good()); err != nil {
+	if err := newWriter().Write(context.Background(), good()); err != nil {
 		t.Fatal(err)
 	}
 	if teed.String() != plain.String() || plain.String() != goodLine {
@@ -118,7 +118,7 @@ func TestTeeJournalFailureIsReported(t *testing.T) {
 	capture(t, fw)
 	restore := dashboard.InstallAuditTee(dashboard.NewAuditRing())
 	defer restore()
-	w := NewWriter()
+	w := newWriter()
 	err := w.Write(context.Background(), good())
 	if !errors.Is(err, ErrUnavailable) || !w.Unavailable() {
 		t.Fatalf("err = %v, latched = %v", err, w.Unavailable())
@@ -149,7 +149,7 @@ func TestFailureLatches(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dest, calls := mk()
 			capture(t, dest)
-			w := NewWriter()
+			w := newWriter()
 			var n native
 			err := n.attempt(w, good())
 			if !errors.Is(err, ErrUnavailable) {
@@ -200,7 +200,7 @@ func TestLatchIsProcessWide(t *testing.T) {
 func TestHandlerDisabledOrPanicIsFailure(t *testing.T) {
 	for name, h := range map[string]slog.Handler{"disabled": disabled{}, "panic": panicky{}, "nil": nil} {
 		t.Run(name, func(t *testing.T) {
-			w := NewWriter()
+			w := newWriter()
 			w.handler = func() slog.Handler { return h }
 			err := w.Write(context.Background(), good())
 			if !errors.Is(err, ErrUnavailable) || !w.Unavailable() {
@@ -245,7 +245,7 @@ func TestInvalidWritesNothingAndDoesNotLatch(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
 			capture(t, &buf)
-			w := NewWriter()
+			w := newWriter()
 			f := good()
 			m(f)
 			if err := w.Write(context.Background(), f); !errors.Is(err, ErrInvalid) {
@@ -268,8 +268,8 @@ func TestNoSecretInLine(t *testing.T) {
 	capture(t, &buf)
 	f := good()
 	f["token"] = "sk-ant-api03-SECRETSECRETSECRET"
-	_ = NewWriter().Write(context.Background(), f)
-	_ = NewWriter().Write(context.Background(), good())
+	_ = newWriter().Write(context.Background(), f)
+	_ = newWriter().Write(context.Background(), good())
 	if strings.Contains(buf.String(), "SECRET") || strings.Contains(buf.String(), "token=") {
 		t.Fatalf("secret reached the journal: %q", buf.String())
 	}
@@ -288,7 +288,7 @@ func TestConcurrentWithJournalTraffic(t *testing.T) {
 	capture(t, &buf)
 	restore := dashboard.InstallAuditTee(dashboard.NewAuditRing())
 	defer restore()
-	w := NewWriter()
+	w := newWriter()
 	const n = 50
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
@@ -325,9 +325,72 @@ func TestConcurrentWithJournalTraffic(t *testing.T) {
 	}
 }
 
-func TestRefusal(t *testing.T) {
-	r := Refusal()
-	if r.Code != "UPSTREAM_FAILURE" || !r.Retryable || !strings.HasPrefix(r.Message, "audit_unavailable") {
-		t.Fatalf("%+v", r)
+// P3-1 (#277 C): a tee over a Warn-level journal reports Info enabled (for the ring) but writes
+// nothing to the journal; Write must not report that as a written attempt record.
+func TestTeeOverWarnJournalIsNotAnAcceptedWrite(t *testing.T) {
+	var journal bytes.Buffer
+	tee := dashboard.NewAuditTee(slog.NewTextHandler(&journal, &slog.HandlerOptions{Level: slog.LevelWarn}), dashboard.NewAuditRing())
+	w := newWriter()
+	w.handler = func() slog.Handler { return tee }
+	err := w.Write(context.Background(), good())
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable (no journal line was written)", err)
+	}
+	if journal.Len() != 0 {
+		t.Fatalf("journal got %q", journal.String())
+	}
+	if !w.Unavailable() {
+		t.Fatal("the writer is not latched after a record that never reached the journal")
+	}
+	// the same tee over an Info journal still works, also through WithAttrs
+	var ok bytes.Buffer
+	tee2 := dashboard.NewAuditTee(slog.NewTextHandler(&ok, nil), dashboard.NewAuditRing()).WithAttrs([]slog.Attr{slog.String("k", "v")})
+	w2 := newWriter()
+	w2.handler = func() slog.Handler { return tee2 }
+	if err := w2.Write(context.Background(), good()); err != nil || ok.Len() == 0 {
+		t.Fatalf("Info journal: err = %v, wrote %d bytes", err, ok.Len())
+	}
+}
+
+// P3-3 (#278 B): cross-field consistency the S3 call site can now state.
+func TestCrossFieldConsistency(t *testing.T) {
+	second := func(f Fields) { f["attempt"] = "2"; f["supersedes"] = "BBBBBBBBBBBBBBBBBBBBBB" }
+	cases := map[string]func(Fields){
+		"attempt 2 without supersedes":    func(f Fields) { f["attempt"] = "2" },
+		"supersedes on attempt 1":         func(f Fields) { f["supersedes"] = "BBBBBBBBBBBBBBBBBBBBBB" },
+		"supersedes equals attempt_id":    func(f Fields) { second(f); f["supersedes"] = aid },
+		"attempt missing":                 func(f Fields) { delete(f, "attempt") },
+		"allow_once under reject_only":    func(f Fields) { f["decision"] = "allow_once" },
+		"native_tool without kind":        func(f Fields) { delete(f, "kind") },
+		"scope_digest without pattern_ct": func(f Fields) { delete(f, "pattern_count") },
+	}
+	for name, m := range cases {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			capture(t, &buf)
+			w := newWriter()
+			f := good()
+			m(f)
+			if err := w.Write(context.Background(), f); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			}
+			if buf.Len() != 0 || w.Unavailable() {
+				t.Fatalf("wrote %q, latched = %v", buf.String(), w.Unavailable())
+			}
+		})
+	}
+	// consistent combinations are accepted
+	var buf bytes.Buffer
+	capture(t, &buf)
+	f := good()
+	second(f)
+	if err := newWriter().Write(context.Background(), f); err != nil {
+		t.Fatalf("attempt 2 with supersedes: %v", err)
+	}
+	g := good()
+	g["decision"] = "allow_once"
+	g["policy_mode"] = "policy"
+	if err := newWriter().Write(context.Background(), g); err != nil {
+		t.Fatalf("allow_once under policy: %v", err)
 	}
 }

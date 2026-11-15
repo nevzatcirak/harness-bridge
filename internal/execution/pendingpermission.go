@@ -54,7 +54,7 @@ var (
 
 // selectPendingPermission returns the single request that the observer verified
 // for this execution, or nil. It fails closed: nil unless the batch is
-// "available", and nil when zero or more than one request is verified for the
+// "available", and nil when zero or more than one non-tombstone request is verified for the
 // execution (the ADR-024 object is singular), when any verified entry has a
 // field outside its closed charset, or when the entry is not exactly pending.
 // Unattributed, conflicting, tool-less, resolved and uncertain entries are never
@@ -67,6 +67,12 @@ func selectPendingPermission(b opencode.PermissionObservationBatch, session, exe
 	verified := 0
 	for _, p := range b.Permissions {
 		if p.Attribution != "verified" || p.SessionID != session || p.ExecutionID != executionID {
+			continue
+		}
+		if p.State == "resolved_externally" {
+			// A tombstone of an already answered request is not actionable and must not hide
+			// the one that is pending (review #208/#210). Uncertain and unavailable entries are
+			// not tombstones: they may hide a pending request, so they still fail closed below.
 			continue
 		}
 		verified++
@@ -90,7 +96,12 @@ func (m *Manager) pendingDetail(ctx context.Context, session, executionID string
 	if box == nil {
 		return nil
 	}
-	batch, err := box.s.PermissionView(ctx, session)
+	// The source performs bounded native reads of its own, but the call carries a deadline of
+	// the manager's too: a source that does not honour its own bound cannot hold the reconcile
+	// path (review #210).
+	bounded, cancel := context.WithTimeout(ctx, m.reconcileTimeout)
+	defer cancel()
+	batch, err := box.s.PermissionView(bounded, session)
 	if err != nil {
 		return nil
 	}

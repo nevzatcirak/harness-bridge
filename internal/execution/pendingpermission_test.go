@@ -285,3 +285,52 @@ func TestDetailDisappearsWhenNoLongerWaiting(t *testing.T) {
 		t.Fatalf("stale pending fields after leaving waiting_for_permission: %+v", got)
 	}
 }
+
+// ADR-024 S1 P3 (#208/#210): a resolved tombstone of this execution (another request, already
+// answered) must not hide the one genuinely pending request.
+func TestPendingPermissionTombstoneDoesNotHideThePendingRequest(t *testing.T) {
+	tomb := observed("ses_test", "EXEC")
+	tomb.RequestID, tomb.State = "per_0099", "resolved_externally"
+	got := selectPendingPermission(batchOf("available", tomb, observed("ses_test", "EXEC")), "ses_test", "EXEC")
+	if got == nil || got.PermissionID != testPerm {
+		t.Fatalf("a tombstone hid the pending request: %+v", got)
+	}
+	// An uncertain entry is NOT a tombstone: it may hide another pending request, so it stays
+	// fail-closed (count only).
+	unc := observed("ses_test", "EXEC")
+	unc.RequestID, unc.State = "per_0098", "observation_uncertain"
+	if got := selectPendingPermission(batchOf("available", unc, observed("ses_test", "EXEC")), "ses_test", "EXEC"); got != nil {
+		t.Fatalf("an uncertain entry beside a pending one must stay count-only, got %+v", got)
+	}
+	// Two pending requests of one execution stay count-only (the object is singular).
+	two := observed("ses_test", "EXEC")
+	two.RequestID = "per_0097"
+	if got := selectPendingPermission(batchOf("available", two, observed("ses_test", "EXEC")), "ses_test", "EXEC"); got != nil {
+		t.Fatalf("two pending requests must stay count-only, got %+v", got)
+	}
+}
+
+// ADR-024 S1 P3 (#210): the PermissionSource call has its own deadline; a source that blocks
+// until its context ends cannot hold the reconcile path past the manager's bound.
+func TestPendingDetailSourceCallIsBounded(t *testing.T) {
+	m := setup(t, &fake{status: "idle"})
+	m.reconcileTimeout = 50 * time.Millisecond
+	m.SetPermissionSource(blockingSource{})
+	done := make(chan *PendingPermission, 1)
+	go func() { done <- m.pendingDetail(context.Background(), "ses_test", "EXEC") }()
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Fatalf("a timed-out source produced %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pendingDetail did not return: the source call has no deadline of its own")
+	}
+}
+
+type blockingSource struct{}
+
+func (blockingSource) PermissionView(ctx context.Context, _ string) (opencode.PermissionObservationBatch, error) {
+	<-ctx.Done()
+	return opencode.PermissionObservationBatch{}, ctx.Err()
+}

@@ -20,6 +20,15 @@ type SessionInput struct {
 type ExecutionInput struct {
 	ExecutionID string `json:"execution_id"`
 }
+
+// ReplyPermissionInput is the whole input of reply_permission (ADR-024 section 4): four
+// properties, additionalProperties false, supersedes the only optional one.
+type ReplyPermissionInput struct {
+	ExecutionID  string `json:"execution_id"`
+	PermissionID string `json:"permission_id"`
+	Decision     string `json:"decision"`
+	Supersedes   string `json:"supersedes,omitempty"`
+}
 type PromptInput struct {
 	SessionID      string `json:"session_id"`
 	Prompt         string `json:"prompt"`
@@ -123,9 +132,17 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 		case "idempotency_key":
 			p.MinLength = intp(8)
 			p.MaxLength = intp(128)
+		case "permission_id":
+			// ADR-024 section 4: native IDs start with per; closed pattern, no free text.
+			p.Pattern = `^per[A-Za-z0-9_-]{1,125}$`
+		case "decision":
+			// No always, ever: the schema rejects any other value.
+			p.Enum = []any{"reject", "allow_once"}
+		case "supersedes":
+			p.Pattern = `^[A-Za-z0-9_-]{22}$`
 		}
 	}
-	sdk.AddTool(server, &sdk.Tool{Name: name, Description: description, InputSchema: input, OutputSchema: &jsonschema.Schema{Type: "object", AnyOf: []*jsonschema.Schema{schema[O](), schema[execution.Error]()}}}, func(ctx context.Context, _ *sdk.CallToolRequest, in I) (*sdk.CallToolResult, toolOutput[O], error) {
+	sdk.AddTool(server, &sdk.Tool{Name: name, Description: description, Annotations: toolAnnotations[name], InputSchema: input, OutputSchema: &jsonschema.Schema{Type: "object", AnyOf: []*jsonschema.Schema{schema[O](), schema[execution.Error]()}}}, func(ctx context.Context, _ *sdk.CallToolRequest, in I) (*sdk.CallToolResult, toolOutput[O], error) {
 		a := convert(in)
 		err := validateArgs(name, a)
 		var value any
@@ -143,7 +160,16 @@ func register[I, O any](server *sdk.Server, bridge *Server, name, description st
 		return nil, toolOutput[O]{success: &out}, nil
 	})
 }
-func intp(n int) *int { return &n }
+
+// toolAnnotations are untrusted hints to the client (research section 3), never authority.
+// reply_permission (ADR-024 section 8) is marked as a destructive, non-read-only mutation so a
+// client that honours per-call approval asks a human first; the server cannot see whether it did.
+var toolAnnotations = map[string]*sdk.ToolAnnotations{
+	"reply_permission": {ReadOnlyHint: false, DestructiveHint: boolp(true), IdempotentHint: false, OpenWorldHint: boolp(false)},
+}
+
+func boolp(b bool) *bool { return &b }
+func intp(n int) *int    { return &n }
 
 const claudeSessionPattern = `^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 

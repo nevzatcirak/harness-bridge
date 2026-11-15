@@ -30,6 +30,13 @@ and on open question 3 (registration default); this task does **not** start them
 The text nits of review #197 are applied in this revision (text only: no decision
 changed, no option added or removed).
 
+**Update (D15, issue #117, 2026-11-12; task #282).** The maintainer answered open
+questions 1, 3, 4, 7 and 8 (section 12, "Decided (D15)") and deferred 2, 5 and 6 to
+the backlog. S3's gating items are resolved: the attempt writer exists (PR #275,
+`internal/audit`, as built below), question 3 (registration default) and question 8
+(superseding attempt) are answered. S2 and S4 stay **not started: policy mode OFF
+(D15 Q1)**; D12 exception (b) is unchanged.
+
 Numbering: ADR-024 is reserved for this decision. It builds on ADR-018 §5
 (pending permission detail, PROPOSED until now) and may amend ADR-018 §5 if
 open question 2 is accepted (the bounded-pattern exposure relaxes §5's "never
@@ -268,7 +275,12 @@ and no native write, but are not "zero native calls".
    proposal), the in-memory record is `refused`, and nothing is sent. Only then
    `POST /permission/:requestID/reply` with `{reply}` and no `message`, under the
    5 s native bound and the run's token (so it cannot interleave with a prompt,
-   interrupt or an ADR-020 release).
+   interrupt or an ADR-020 release). **Blocking behaviour (S3, review #277 P3-2):**
+   the attempt write is not bounded by the call's context. A hung journal blocks the
+   call while it holds the run token; it also blocks every other log line of the
+   process (the destination and its lock are shared), so a per-call bound would not
+   unwedge the Bridge, and bounding it with a goroutine could leave an `attempt` line
+   written after the call refused. The behaviour is recorded, not changed.
 9. Write the outcome record (`phase=result`) and return. If the **result**
    record cannot be written after the native call happened, the call still
    returns the real outcome (it cannot be unsent), the in-memory record is kept,
@@ -554,9 +566,9 @@ reported to the maintainer through the open questions rather than by (c).
 | Slice | Content | Tests | Mutations |
 |---|---|---|---|
 | S1 | Wire `ObservedPermission` into the manager; `pending_permission` and `pending_permission_count` (no patterns) | `waiting_for_permission` exposes the fields; other states do not; unattributed/conflicting are count-only; no native text | expose a pattern in default mode; show an unattributed request as actionable |
-| S2 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
+| S2 (**not started: policy mode OFF (D15 Q1)**; D12 exception (b)) | Policy parser and evaluator (pure, no I/O) | table tests for every rule and every closed reason; fail-closed on unknown keys/unparseable patterns; path canonicalization (symlink, `..`, outside root) | drop the outside-root check; treat an unparseable pattern as allowed |
 | S3 | `reply_permission` with `reject`, fake native: binding, order of checks, no `message`, attempt-before-reply, no re-reply | wrong session, wrong execution, request gone, read-only, TUI-first (not-found), lost response (`UNKNOWN_OUTCOME`, exactly one native call), same-key call after `unknown` sends nothing and returns the recorded `UNKNOWN_OUTCOME`, overlapping call while `in_flight` sends nothing, superseding attempt only with `supersedes` + same decision + request still pending (and exactly one extra native call), supersede with a different decision `INVALID_INPUT`, supersede when the request is gone `NOT_FOUND` with no native write (the still-pending re-read is a read), second supersede refused, idempotent same decision, `IDEMPOTENCY_CONFLICT`, tool-less request refused as `not_verified`. **Contract tests:** the input schema accepts exactly `execution_id`, `permission_id`, `decision` and the optional `supersedes` (closed `[A-Za-z0-9_-]{22}` pattern) and rejects any other field or a malformed `supersedes`; the success result always carries `attempt_id`, `attempt`, `decided_by=chat_client`, `human_verified=false`; the `UNKNOWN_OUTCOME` envelope carries `attempt_id` and `attempt`, and no other error code does; `supersedes` is refused with the closed reason and **no native call** from `in_flight` (`SESSION_BUSY`, `attempt_in_flight`, retryable), for an `allow_once` record (`supersede_allow_once_not_offered`), `replied` (`already_replied`), `refused` or no record (`nothing_to_supersede`), a wrong value (`supersedes_mismatch`), and a second supersede (`supersede_limit`); `supersedes` is honored only from `unknown`; the audit line of a post-restart attempt 1 carries `process_start` (RFC 3339 UTC); `reason` is always one of the closed enum; **attempt-record failure: when the `phase=attempt` write fails (writer error or unavailable witness) there are zero native writes, the call returns `UPSTREAM_FAILURE`/`audit_unavailable`, and the record is `refused`; when the `phase=result` write fails after the native call the real outcome is still returned and every later call is refused with `audit_unavailable`**; `permission_id` must match `^per[A-Za-z0-9_-]{1,125}$` and a native 400 maps to `UPSTREAM_FAILURE`; the re-read and the reply use the session's directory/workspace routing; `allow_once_disabled` (step 2) makes zero native calls, and the same-key and `supersedes` rule 0 refusals make no permission read and no native write; `reply_permission` is refused under `BRIDGE_READ_ONLY` with no native read (it is in `mutating()`) | send a message with reject; resend on timeout; skip the fresh re-read; skip the session check; honor `supersedes` without the still-pending re-read; allow a second supersede; treat a tool-less request as verified; **continue to the native write when the attempt record write fails; honor `supersedes` while the state is `in_flight` or `replied`; offer `supersedes` for `allow_once`; perform the re-read before the in-memory refusals; omit `reply_permission` from `mutating()`; route the re-read with the default directory instead of the session's; omit `attempt_id` from the `UNKNOWN_OUTCOME` envelope or the success result; accept an unknown input field or a malformed `supersedes`; skip the `supersedes_mismatch` check** |
-| S4 (**starts only after the maintainer answers open question 1**; D12 exception (b)) | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native write on refusal (the policy rules need the live request, so the native read has happened; `allow_once_disabled` makes no native call at all) | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
+| S4 (**not started: policy mode OFF (D15 Q1)**; D12 exception (b)) | `allow_once` under policy | allowed in-root tool; refused out-of-root, denied pattern, unlisted tool, rate; `always` rejected by schema; no native write on refusal (the policy rules need the live request, so the native read has happened; `allow_once_disabled` makes no native call at all) | map `allow_once` to `always`; evaluate the policy on caller-supplied values |
 | S5 | Audit lines (`attempt`/`result`/`refused`), `decided_by`/`human_verified` in result and audit; **an attempt writer that reports failure (synchronous record or Mutation Gate witness)** | `reply_permission` is in `mutating()` so the audit middleware wraps it; one line per phase on every path; no free text; the attempt line is written before the native call and its failure blocks the write; the result-line failure blocks later calls | omit `human_verified`; skip the attempt line; log-and-continue on a failed attempt write |
 | S6 | CONTRACTS, runbook, ADR-018 §5 status update after acceptance | doc review | n/a |
 
@@ -600,18 +612,34 @@ PASS.
 
 ## 12. Open questions for the maintainer
 
+Questions 1, 3, 4, 7 and 8 were answered by the maintainer in decision **D15**
+(issue #117, 2026-11-12) and are recorded below as "Decided (D15)"; questions 2, 5
+and 6 are deferred to the backlog. Nothing else in this ADR changes.
+
 1. **Enable `policy` mode at all** (the unverifiable decider, section 1), or
    stay on `reject_only`?
+   **Decided (D15, issue #117): policy mode stays OFF; `reject_only`.** S2 and S4
+   (policy parser, `allow_once`) are **not started: policy mode OFF (D15 Q1)**;
+   D12 exception (b) is unchanged.
 2. **Patterns shown to Chat** (policy mode only, bounded and untrusted): accept
-   this relaxation of ADR-018 §5's "never expose raw patterns"?
+   this relaxation of ADR-018 section 5's "never expose raw patterns"?
+   **Deferred / backlog (D15):** policy mode only, so it follows question 1.
 3. **Default mode `reject_only` registered**, or default `off` until opted in?
+   **Decided (D15, issue #117): `reject_only` is registered as the default.**
+   Registration in the production server lands with S5 (the audit lines); S3
+   builds the tool and does not register it (section "As built (S3)").
 4. **Route:** current `POST /permission/:requestID/reply` (recommended), or the
    deprecated session route named in the task?
+   **Decided (D15, issue #117): `POST /permission/:requestID/reply`.**
 5. **Starting policy values** (allow-once caps per execution and per hour; the
    recommended denylist).
+   **Deferred / backlog (D15):** policy mode only.
 6. **Out-of-band approval page** (P4-PERM option (c)) as a follow-up ADR?
+   **Deferred / backlog (D15).**
 7. Is requiring per-call claude.ai approval on `reply_permission` a deployment
    requirement or only a recommendation?
+   **Decided (D15, issue #117): required if policy mode is ever enabled;
+   recommended for `reject`.**
 8. After an `UNKNOWN_OUTCOME`, is one explicit, distinctly keyed superseding
    attempt (section 4.3) acceptable, or should the Bridge never send a second
    reply for the same request and leave it to the operator? This ADR specifies
@@ -620,6 +648,10 @@ PASS.
    question covers the post-restart path of 4.3: keep the documented residual
    (a still-pending request after a restart is a fresh attempt 1), or route
    every post-restart pending request through an operator-only path.
+   **Decided (D15, issue #117): one explicit, distinctly keyed superseding
+   `reject` after `UNKNOWN_OUTCOME` is allowed (section 4.3); the post-restart
+   path keeps the documented residual.** An `allow_once` supersede stays not
+   offered.
 
 ## As built (attempt writer), 2026-11-14
 
@@ -652,8 +684,18 @@ Facts only; the open items of review #197 stay open. The D15 prerequisite of S3/
   shape, a missing required field (`tool`, `attempt_id`, `decision`, `permission_id`,
   `execution_id`) is refused. `event`, `phase`, `decided_by` and `human_verified` cannot be
   supplied.
-- **Refusal value.** `audit.Refusal()` returns `UPSTREAM_FAILURE`, `retryable: true`, message
-  starting `audit_unavailable` (the reason code of 4.2 step 8). No tool exposes it yet.
+- **Refusal value.** Originally `audit.Refusal()`; as built in S3 it is
+  `execution.AuditUnavailable()` (`audit` no longer imports `execution`): `UPSTREAM_FAILURE`,
+  `retryable: true`, `reason=audit_unavailable` (the reason code of 4.2 step 8).
+- **Changes in S3 (reviews #277 C / #278 B on #275).** P3-1: a fan-out handler (the dashboard tee)
+  that reports Enabled for its ring while its journal branch refuses the record is no longer reported
+  as a written line; the tee exposes `JournalEnabled` and `Write` requires it (an Info journal still
+  works, a Warn journal latches). P3-4: `NewWriter` is unexported; production has the one process-wide
+  latch `Default()`, and other packages fake the `AttemptWriter` interface of their consumer. P3-3:
+  cross-field checks, now that a call site exists: `attempt` is required, `attempt=2` iff `supersedes`
+  is present and never equals `attempt_id`, `allow_once` is never recorded under
+  `policy_mode=reject_only`, and `native_tool`, `kind`, `scope_digest`, `pattern_count` are all present
+  or all absent. P3-2 (a hung journal is not bounded by the context) is recorded in 4.2 step 8.
 
 Proposals for the maintainer (not implemented): (1) recovery of the latch: restart only (as built),
 or a probe write after a back-off, or an operator command; (2) whether `reject` and same-key
@@ -661,6 +703,53 @@ replays that send nothing are still served while latched (the writer cannot tell
 decides); (3) add `permission_reply` and its attributes to the dashboard `auditEvents`/`auditAttrs`
 allowlists so the audit ring shows attempts; (4) whether `audit_unavailable` needs its own error
 code instead of `UPSTREAM_FAILURE`.
+
+## As built (S3), 2026-11-15
+
+Facts only (task #282). `reply_permission` with decision `reject` exists against a fake native; it
+is **not registered in the production server** and a deployed Bridge keeps its eleven tools.
+
+- **Gating.** The tool is registered only when `Server.PermissionRelay` is set (mode `reject_only`);
+  `cmd/bridge` never sets it (D15 Q3: registration lands with S5, when its audit lines exist). The
+  manager also has no production native reply client (`PermissionReplier`) and no attempt writer
+  installed, so a call would fail closed (`UPSTREAM_FAILURE`) even if registered. A direct call while
+  unregistered returns `INVALID_INPUT`. Policy mode (S2/S4) does not exist: any mode other than
+  `reject_only` leaves the tool absent.
+- **Where the logic is.** `internal/mcp/replypermission.go` (steps 2 and 3: `allow_once` refused with
+  zero native calls before the execution lookup, Claude executions refused, ACL and workspace check);
+  `internal/execution/permissionreply.go` (step 4 record rules, the run token, step 5 fresh re-read,
+  step 7 identity re-check, step 8 attempt record then the one native write). `reply_permission` is in
+  `mutating()` (read-only refusal reads nothing natively).
+- **Order, as built.** Read-only; `allow_once`; Claude execution; execution exists; ACL read; the
+  execution waits with the guard held by itself; same-key and `supersedes` rules (in memory); take
+  the reconcile slot and the run token and **re-check both** (a concurrent call may have settled the
+  record); fresh `PermissionView`; `revalidateSession`; record `in_flight`; attempt line; native
+  write. The re-read, the identity check and the write happen under the run token, so an interrupt, a
+  prompt, a probe or a release cannot interleave.
+- **Closed outcomes.** Native 404: `NOT_FOUND`/`resolved_elsewhere_or_dropped`, record `refused`.
+  Native 400: `UPSTREAM_FAILURE`/`native_rejected_id`, record `refused`. Every other failure (timeout,
+  lost response, 5xx, canceled context) is `UNKNOWN_OUTCOME` with `attempt_id` and `attempt`, record
+  `unknown`; it is never resent. These two mappings are author choices (the ADR names only 400 and the
+  lost response): a 401/403 is treated as unknown (conservative; costs at most one explicit supersede).
+- **Differences from the S3 test row, stated.** (1) The `phase=result` write failure after the native
+  call and "every later call refused with `audit_unavailable`" need the result line, which is S5; the
+  attempt writer today writes only `phase=attempt`. What S3 pins is the attempt-record failure (zero
+  native writes, `audit_unavailable`, record `refused`) and that the process-wide latch refuses
+  everything after any failed write. (2) `IDEMPOTENCY_CONFLICT` (opposite decision on an answered
+  request) and "supersede with a different decision" are unreachable through the tool in `reject_only`
+  (`allow_once` is refused first); they are implemented in the manager and tested there with a seeded
+  record. (3) The generic AUDIT-01 middleware writes **no** line for `reply_permission`: adding the
+  tool to `mutating()` would otherwise make it write a prompt-shaped line; the attempt line is the only
+  line until S5.
+- **Failed supersede.** A failed attempt-2 attempt record restores the earlier `unknown` attempt, so a
+  failed supersede cannot turn the next same-key call into a fresh first attempt.
+- **Not done (maintainer proposals unchanged).** Latch recovery (restart only), the dashboard ring
+  allowlist, a distinct `audit_unavailable` error code.
+- **S1 follow-ups fixed here (#208/#210 P3s).** `get_session` reports a measured zero
+  `pending_permission_count` while waiting; a `resolved_externally` tombstone no longer hides the one
+  pending request (an uncertain entry still does); the `PermissionSource` call has its own deadline.
+  The waiting-state condition of `describe` is pinned by a test (a running guarded execution with a
+  measured zero reports no count).
 
 ## 13. Limitations of this record
 
@@ -679,4 +768,5 @@ code instead of `UPSTREAM_FAILURE`.
 - The `PermissionObserver` re-read costs more native reads than a bare
   `GET /permission` and runs inside the observer's 5 s bound; I did not measure
   it.
-- No code, test or live run was done for this ADR.
+- The original record: no code, test or live run was done for this ADR; the as-built notes above are
+  the implemented and tested facts (fakes only), and no live run was made for any slice.
