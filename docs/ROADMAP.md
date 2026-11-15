@@ -500,6 +500,8 @@ These are unresolved gates, not assumptions or additional authorized tasks:
   integration preserve existing boundaries without treating journal replay as
   restored consent? Later 06D-B1/B2 changes are not covered by the approved
   06D-A reviews and need their own review before integration.
+  (As built, 2026-11-14: the D15 failure-reporting attempt writer exists in
+  `internal/audit`, not wired to any tool; this item stays open.)
 - Which supported Claude Code permission and model-selection interfaces are
   actually installed? How will unavailable capabilities be reported safely?
 - Which authorized catalog sources and native identities can ground Phase 7
