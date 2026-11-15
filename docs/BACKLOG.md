@@ -126,3 +126,11 @@ Open items recorded here, not fixed:
 
 - **`list_catalog` omits Claude Code sessions** (a deviation from ADR-022 section 6.2, which lists every harness's sessions, until a later slice adds the Claude rows with an instance-qualified `session_ref`). A `claudecode:` entry in `BRIDGE_ALLOWED_SESSIONS` no longer fails the catalog (it is skipped before the native client, like every discovery call); the Claude session is simply not a catalog row. `list_sessions` and `find_sessions` do list it when the adapter is enabled.
 - Out of scope of the wiring slice, still open: the Claude history 8 MiB response bound (#266 P3-2), `BRIDGE_CLAUDE_HISTORY_MAX_AGE` retention (#266 P3-4, belongs to the enablement gate), ACL-before-allowlist ordering of the Claude session refusals (#267 P3-5), and the required-versus-optional wording of `BRIDGE_CLAUDE_HOME` and `BRIDGE_CLAUDE_MODEL` in the ADR (a maintainer item).
+
+### D15 attempt writer (task #274): deferred items (2026-11-14, appended)
+
+- The attempt writer is not wired: S5 adds `reply_permission`, the `mutating()` entry and the call site that makes no native write on any error from `audit.Writer.Write`.
+- Latch recovery is "until process restart" (fail-closed minimum); other rules are maintainer proposals in the ADR-024 as-built note.
+- The dashboard audit ring drops `permission_reply` (not in `auditEvents`), so attempts are in the journal but not in the ring until the dashboard allowlists are amended.
+- A destination that reports a short write with a nil error is not detectable; journald delivery after an accepted write is not observable.
+- Carry-overs #208/#210 P3s stay for the S3/S5 slice.
