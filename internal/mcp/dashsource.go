@@ -10,6 +10,7 @@ import (
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/harness-bridge/internal/security"
 )
 
 // maxDashTurns bounds the turns one detail read returns (the newest are kept; the
@@ -24,9 +25,18 @@ const maxDashTurns = 1000
 // mutating call, runs no git (ADR-023 section 1.3), and never calls the native harness
 // for a claudecode: session (ADR-021 is pending; D17 Q3).
 //
-// archive may be nil (nothing archived, like EmptyArchiveOverlay).
+// archive may be nil: the Server's catalog overlay when the lifecycle catalog is configured,
+// otherwise nothing is archived (EmptyArchiveOverlay). When the catalog is configured its
+// lifecycle roots label the rows (D17 Q6): the label widens nothing, the rows are still exactly
+// the ACL-authorized sessions (the rule of list_catalog, ADR-022 6.1).
 func (s *Server) DashboardSource(archive ArchiveOverlay) dashboard.Source {
 	d := &dashSource{runs: s.Runs, archive: archive, claude: map[string]bool{}}
+	if s.Catalog != nil {
+		d.roots = s.Catalog.Roots
+		if d.archive == nil {
+			d.archive = s.Catalog.overlay()
+		}
+	}
 	d.srv = &Server{Client: s.Client, Runs: s.Runs, ReadOnly: true}
 	if s.Policy != nil {
 		p := *s.Policy
@@ -52,7 +62,8 @@ type dashSource struct {
 	srv     *Server // derived: OpenCode ACL only, own discovery slots
 	runs    *execution.Manager
 	archive ArchiveOverlay
-	claude  map[string]bool // claudecode: IDs without the prefix
+	roots   *security.LifecycleRoots // nil: no lifecycle configuration, no label
+	claude  map[string]bool          // claudecode: IDs without the prefix
 }
 
 func nonTerminal(state string) bool {
@@ -102,6 +113,7 @@ func (v dashView) row(harness, id, qualified string) dashboard.Session {
 func (d *dashSource) openCodeRow(v dashView, m Session, native opencode.Session) dashboard.Session {
 	r := v.row("opencode", native.ID, "opencode:"+native.ID)
 	r.Title, r.Root, r.State = m.Title, m.Directory, m.State
+	r.LifecycleRoot = d.roots.RootOf(m.Directory)
 	if t, ok := native.UpdatedAt(); ok {
 		r.LastActivity = t
 	}
@@ -118,10 +130,16 @@ func (d *dashSource) Sessions(ctx context.Context) ([]dashboard.Session, error) 
 	v := d.snapshot()
 	out := make([]dashboard.Session, 0, len(all)+len(d.claude))
 	for _, x := range all {
-		if d.archived(ctx, "opencode:"+x.native.ID) {
+		archived, err := d.archivedState(ctx, "opencode:"+x.native.ID)
+		if err != nil {
+			return nil, err
+		}
+		if archived && !dashboard.ArchivedShown(ctx) {
 			continue
 		}
-		out = append(out, d.openCodeRow(v, x.view, x.native))
+		row := d.openCodeRow(v, x.view, x.native)
+		row.Archived = archived
+		out = append(out, row)
 	}
 	ids := make([]string, 0, len(d.claude))
 	for id := range d.claude {
@@ -134,12 +152,13 @@ func (d *dashSource) Sessions(ctx context.Context) ([]dashboard.Session, error) 
 	return out, nil
 }
 
-func (d *dashSource) archived(ctx context.Context, id string) bool {
+// archivedState reads the overlay. An error means the answer is unknown: it fails the call, as
+// list_catalog does, so a session is never listed or hidden by a guess.
+func (d *dashSource) archivedState(ctx context.Context, id string) (bool, error) {
 	if d.archive == nil {
-		return false
+		return false, nil
 	}
-	archived, err := d.archive.Archived(ctx, id)
-	return err == nil && archived // an unknown answer hides nothing in a read-only view
+	return d.archive.Archived(ctx, id)
 }
 
 // notListed maps the denials that mean "not in this dashboard" to ErrNotFound.
@@ -177,11 +196,17 @@ func (d *dashSource) SessionDetail(ctx context.Context, harness, id string) (das
 	if err != nil {
 		return dashboard.SessionDetail{}, err
 	}
-	if d.archived(ctx, "opencode:"+id) {
+	archived, err := d.archivedState(ctx, "opencode:"+id)
+	if err != nil {
+		return dashboard.SessionDetail{}, err
+	}
+	if archived && !dashboard.ArchivedShown(ctx) {
 		return dashboard.SessionDetail{}, dashboard.ErrNotFound
 	}
 	m := d.srv.describe(ctx, v, nil)
-	return detail(snap, d.openCodeRow(snap, m, v), "opencode:"+id), nil
+	row := d.openCodeRow(snap, m, v)
+	row.Archived = archived
+	return detail(snap, row, "opencode:"+id), nil
 }
 
 func detail(v dashView, r dashboard.Session, qualified string) dashboard.SessionDetail {

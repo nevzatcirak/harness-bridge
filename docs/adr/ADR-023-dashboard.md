@@ -724,3 +724,37 @@ configuration and the Host/Origin hardening are implemented; the live acceptance
   fixes: the dashboard redactor (shipped list plus `BRIDGE_DASHBOARD_REDACT_EXTRA`) is also given to the
   audit tee, so the audit ring (`/audit`, `/api/audit`) redacts operator patterns too while the journal
   line stays byte-identical; `BRIDGE_DASHBOARD_REDACT_EXTRA=null` is a startup error.
+
+## As built (slice 5b, 2026-11-15)
+
+Facts only (task #289). R-DASH stays **NOT_EXERCISED**; the native shapes stay UNVERIFIED live.
+
+- **Lifecycle-root rows (D17 Q6) are a label, not more rows.** `DashboardSource` takes the lifecycle
+  roots (and the overlay) from the Server's `Catalog` configuration when it is set; each row gets
+  `LifecycleRoot`, the root that lexically contains the session directory (`LifecycleRoots.RootOf`, the
+  value `list_catalog` returns as `root`). The rows are still exactly the ACL sessions: this is the
+  rule of ADR-022 6.1 ("they widen nothing"), and a created session that is not in the ACL is not
+  shown, because reading it would need the O2 flag (D16 Q7), which is out of scope. **Author choice
+  for the maintainer to confirm:** if D17 Q6 meant "also sessions under a lifecycle root that the ACL
+  does not list", that needs O2 and a separate task. Nothing wires `Server.Catalog` in `cmd/bridge`
+  yet, so in production the label is empty until the lifecycle wiring task.
+- **Archived filter (D17 Q7).** `Session.Archived`; hidden unless the request carries the context flag
+  `WithArchived`, which the handler sets in one place from the query `archived=1` (exactly that value)
+  for every data route. The `Source` interface keeps its five readers. The JSON model cache keys carry
+  the flag (found while building this: without it the archived model could answer an unfiltered
+  request inside the 1 s cache window; tested). An overlay that returns an error now fails the list and
+  the detail (503), like `list_catalog`; slice 5a hid nothing on an error. The list links to
+  `/?archived=1`, an archived row's link keeps the filter, and the poll script keeps it.
+- **Hardening sweep (7 row 5, code part).** The route sweep now covers the data routes with the filter
+  query for Host, Origin and method; the server timeouts and the header bound are pinned on both
+  transports; `-race -count=20` runs over `internal/dashboard` and `internal/mcp`.
+- **Carried P3s.** #276 P3-1: the server construction moved to `newMCPServer` in `cmd/bridge`, used by
+  `main`, with a test that a nil adapter leaves `Server.Claude` a nil interface and a running one is the
+  same pointer. #223 P3-1 (a failing source is 503 with `Retry-After` for the list and the detail) and
+  P3-2 (`DashboardSnapshot` takes no context and no cap, a decision) were already fixed or documented
+  in the slice 3 note ("Semantics (review #223)") and are pinned by tests; nothing changed.
+- **Docs.** `docs/CONTRACTS.md` ("ADR-023 dashboard") and `docs/deploy/DASHBOARD.md` (variables, unix
+  socket setup, SSH `-L` forwarding, redaction, what is shown). `BRIDGE_DASHBOARD_REDACT_EXTRA` is
+  still marked a slice-5a proposal name.
+- **Not here.** The archive overlay and ADR-022 S6/S8, the O2 flag, Claude Code history and diffs,
+  any new native endpoint, and the live R-DASH run.

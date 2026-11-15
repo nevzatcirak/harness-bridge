@@ -42,8 +42,14 @@ type Session struct {
 	ID      string // the harness-native session ID
 	Title   string
 	Root    string
-	State   string // idle|running|waiting_for_permission|unknown
-	Guard   Guard
+	// LifecycleRoot is the ADR-022 lifecycle root that contains the session directory, as a
+	// LABEL only (D17 Q6): it widens nothing. Empty when no lifecycle root contains it.
+	LifecycleRoot string
+	// Archived marks an overlay-archived session (D17 Q7); such sessions are listed only
+	// when the request asks for them (WithArchived).
+	Archived bool
+	State    string // idle|running|waiting_for_permission|unknown
+	Guard    Guard
 	// CurrentExecution is the ID of the newest non-terminal execution, if any.
 	CurrentExecution string
 	LastActivity     time.Time
@@ -98,4 +104,20 @@ func (NullSource) TurnDiff(context.Context, string, string, string) (DiffResult,
 // WorkingTreeDiff finds nothing.
 func (NullSource) WorkingTreeDiff(context.Context, string, string) (DiffResult, error) {
 	return DiffResult{}, ErrNotFound
+}
+
+type archivedKey struct{}
+
+// WithArchived marks a request context as asking for archived sessions too (D17 Q7: hidden by
+// default, with a filter). The handler sets it from the query "archived=1"; a Source reads it
+// with ArchivedShown. It is a filter, never an authority: a Source still lists only what the
+// existing authorization lists.
+func WithArchived(ctx context.Context) context.Context {
+	return context.WithValue(ctx, archivedKey{}, true)
+}
+
+// ArchivedShown reports whether the request asked for archived sessions.
+func ArchivedShown(ctx context.Context) bool {
+	v, _ := ctx.Value(archivedKey{}).(bool)
+	return v
 }

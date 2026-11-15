@@ -102,6 +102,8 @@ func (n *dashNative) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch id {
 		case "ses_a", "ses_b":
 			_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Title: "title " + id, Directory: n.root, Time: json.RawMessage(`{"updated":1700000000000}`)})
+		case "ses_life":
+			_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Title: "title " + id, Directory: filepath.Join(n.root, "life", "proj"), Time: json.RawMessage(`{"updated":1700000100000}`)})
 		case "ses_out":
 			_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Directory: n.outside})
 		default:
