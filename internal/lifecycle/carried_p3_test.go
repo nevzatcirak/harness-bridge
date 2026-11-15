@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -215,4 +216,38 @@ func TestRecheckOfAnUnchangedGrantStillPasses(t *testing.T) {
 			t.Fatalf("recheck %d: %v", i, err)
 		}
 	}
+}
+
+// #265 P3-4: CheckRoot verifies a configured root against its startup identity.
+func TestCheckRootDetectsAReplacedRoot(t *testing.T) {
+	root := t.TempDir()
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewAuthorizer(&Config{Roots: []Root{{Path: real, Modes: []string{ModeCreate}, MaxSessions: 1}}, CreatePerHour: 1, MaxTotalSessions: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CheckRoot(context.Background(), real); err != nil {
+		t.Fatalf("an unchanged root: %v", err)
+	}
+	if err := a.CheckRoot(context.Background(), "relative/path"); err == nil {
+		t.Fatal("a relative path was accepted")
+	}
+	if err := a.CheckRoot(context.Background(), filepath.Dir(real)+"/not-a-root"); err == nil {
+		t.Fatal("a path outside every root was accepted")
+	}
+	if err := os.Rename(real, real+".old"); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Rename(real+".old", real)
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var ae *AuthError
+	if err := a.CheckRoot(context.Background(), real); !errors.As(err, &ae) || ae.Code != CodeForbidden {
+		t.Fatalf("a replaced root: %v", err)
+	}
+	os.Remove(real)
 }

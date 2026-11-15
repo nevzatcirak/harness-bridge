@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"sync/atomic"
@@ -82,13 +84,18 @@ type auditMarkKey struct{}
 func (s *Server) auditMiddleware(next sdk.MethodHandler) sdk.MethodHandler {
 	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
 		call, ok := req.(*sdk.CallToolRequest)
-		if method != "tools/call" || !ok || call.Params == nil || !mutating(call.Params.Name) {
+		if method != "tools/call" || !ok || call.Params == nil || !(mutating(call.Params.Name) || call.Params.Name == "create_session") {
 			return next(ctx, method, req)
 		}
 		mark := &auditMark{}
 		res, err := next(context.WithValue(ctx, auditMarkKey{}, mark), method, req)
 		if !mark.written.Load() {
-			s.audit(ctx, &auditRecord{tool: call.Params.Name}, rawAuditArgs(call.Params.Arguments), nil, execution.Fail("INVALID_INPUT", "arguments rejected before the tool handler"))
+			rejected := execution.Fail("INVALID_INPUT", "arguments rejected before the tool handler")
+			if call.Params.Name == "create_session" {
+				s.auditCreate(ctx, nil, rawAuditArgs(call.Params.Arguments), nil, rejected)
+			} else {
+				s.audit(ctx, &auditRecord{tool: call.Params.Name}, rawAuditArgs(call.Params.Arguments), nil, rejected)
+			}
 		}
 		return res, err
 	}
@@ -164,4 +171,67 @@ func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err
 		message = "explicit interrupt"
 	}
 	slog.Info(message, attrs...)
+}
+
+// auditCreate writes the one AUDIT-01 line of a create_session call (ADR-022 4.3), on every
+// return path: event=session_create, outcome (created, replay, rejected), accepted, error_code,
+// root_id (the index of the configured root, never the path), session_id only when well formed,
+// key_hash (the first 16 hex characters of sha256(idempotency_key), the same value as the hb_key
+// metadata hint; never the raw key, and none for a key outside 8 to 128 bytes, whose hash would
+// reveal it), limit_state (counts at the end of the call: hour, root, total, "?" when not
+// established), bootstrap_may_be_outside_root and replay (only when true), principal. The title,
+// the subdirectory text, the prompt and every native response text are never logged.
+func (s *Server) auditCreate(ctx context.Context, ev *createEvidence, a args, out any, err error) {
+	if mark, ok := ctx.Value(auditMarkKey{}).(*auditMark); ok {
+		mark.written.Store(true)
+	}
+	if ev == nil {
+		ev = &createEvidence{rootIdx: -1}
+	}
+	outcome := "created"
+	switch {
+	case err != nil:
+		outcome = "rejected"
+	case ev.replay:
+		outcome = "replay"
+	}
+	attrs := []any{"event", "session_create", "tool", "create_session", "outcome", outcome, "accepted", err == nil}
+	if err != nil {
+		attrs = append(attrs, "error_code", envelope(err).Code)
+	}
+	if ev.rootIdx >= 0 {
+		attrs = append(attrs, "root_id", ev.rootIdx)
+	}
+	sessionID := ""
+	if o, ok := out.(CreateOutput); ok {
+		sessionID = auditSession(o.SessionID)
+	} else if ev.sessionID != "" {
+		sessionID = auditSession(ev.sessionID)
+	}
+	if sessionID != "" {
+		attrs = append(attrs, "session_id", sessionID)
+	}
+	if n := len(a.IdempotencyKey); n >= 8 && n <= 128 {
+		sum := sha256.Sum256([]byte(a.IdempotencyKey))
+		attrs = append(attrs, "key_hash", hex.EncodeToString(sum[:])[:16])
+	}
+	if ev.hourKnown {
+		count := func(n int, known bool) string {
+			if !known {
+				return "?"
+			}
+			return fmt.Sprint(n)
+		}
+		attrs = append(attrs, "limit_state", fmt.Sprintf("hour:%d/%d,root:%s/%d,total:%s/%d",
+			ev.hour, ev.hourMax, count(ev.rootN, ev.counted), ev.rootMax, count(ev.totalN, ev.counted), ev.totalMax))
+	}
+	var ce *createError
+	if errors.As(err, &ce) && ce.BootstrapMayBeOutsideRoot {
+		attrs = append(attrs, "bootstrap_may_be_outside_root", true)
+	}
+	if ev.replay && err != nil {
+		attrs = append(attrs, "replay", true)
+	}
+	attrs = append(attrs, "principal", s.auditPrincipal())
+	slog.Info("session create", attrs...)
 }

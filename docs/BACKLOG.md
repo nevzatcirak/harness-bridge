@@ -127,6 +127,14 @@ Open items recorded here, not fixed:
 - **`list_catalog` omits Claude Code sessions** (a deviation from ADR-022 section 6.2, which lists every harness's sessions, until a later slice adds the Claude rows with an instance-qualified `session_ref`). A `claudecode:` entry in `BRIDGE_ALLOWED_SESSIONS` no longer fails the catalog (it is skipped before the native client, like every discovery call); the Claude session is simply not a catalog row. `list_sessions` and `find_sessions` do list it when the adapter is enabled.
 - Out of scope of the wiring slice, still open: the Claude history 8 MiB response bound (#266 P3-2), `BRIDGE_CLAUDE_HISTORY_MAX_AGE` retention (#266 P3-4, belongs to the enablement gate), ACL-before-allowlist ordering of the Claude session refusals (#267 P3-5), and the required-versus-optional wording of `BRIDGE_CLAUDE_HOME` and `BRIDGE_CLAUDE_MODEL` in the ADR (a maintainer item).
 
+### ADR-022 slice S5 (session_create audit): deferred items (2026-11-15, appended)
+
+- S5 audit landed for `create_session`; **production wiring from `BRIDGE_LIFECYCLE_CONFIG` is still a separate, planner-scheduled task** (the tool stays unregistered by default).
+- Archive and close audit lines land with their tools (S6, after S8); they do not exist before.
+- #262 P3-2 (a native 5xx on the POST: `UPSTREAM_FAILURE` versus `UNKNOWN_OUTCOME`) is an ADR 4.2 behaviour change: a maintainer item, not implemented.
+- `root_id` is a configuration index; reordering the configuration changes the meaning of old journal lines. A stable root id in the lifecycle configuration would fix that (design change, not done).
+- Live behaviour (what the real native server returns for a clamped `limit`, a created session's `directory`) is UNVERIFIED; all S5 evidence is against the fake native.
+
 ### D15 attempt writer (task #274): deferred items (2026-11-14, appended)
 
 - The attempt writer is not wired: S5 adds `reply_permission`, the `mutating()` entry and the call site that makes no native write on any error from `audit.Writer.Write`.

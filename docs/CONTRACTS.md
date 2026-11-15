@@ -702,7 +702,7 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   deeper than `max_depth` or not authorized `FORBIDDEN`, a Git top level missing or above the root
   `FORBIDDEN` (`non_git`), a `gitdir:`/`commondir` leaving the root `FORBIDDEN` (`not_in_root`), a
   missing path `NOT_FOUND`; `create_per_hour` reached `SESSION_LIMIT` (new code, retryable);
-  then one bounded native read per configured root (5 s, at most 1000 entries each): `max_sessions`
+  then one bounded native read per configured root (5 s, fewer than 1000 entries each: a full window is "cap state unknown"; each root is checked against its startup identity first): `max_sessions`
   of the root or `max_total_sessions` reached `SESSION_LIMIT`; a count that is truncated, failed
   or unreadable is `SESSION_LIMIT` ("cap state unknown"), a count that timed out
   `UPSTREAM_TIMEOUT`, and neither writes anything.
@@ -717,9 +717,29 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
 - The idempotency registry and the hourly counter are memory-only (a restart resets them,
   ADR-022 3.3), the registry holds at most 10,000 records, and creates are serialized so the caps
   hold under concurrency.
-- **No audit line yet:** `event=session_create` is slice S5 and must land before any production
-  wiring. The tool is registered only when the server has a create configuration; nothing wires
-  it from `BRIDGE_LIFECYCLE_CONFIG`, so a deployed Bridge keeps its eleven tools.
+- **Audit (ADR-022 S5).** Every call writes exactly one AUDIT-01 line `event=session_create`
+  (message `session create`) on every return path (input refusal, `BRIDGE_READ_ONLY`, a replay, a
+  conflict, every path refusal, the caps, a count timeout, `UPSTREAM_FAILURE`, `UNKNOWN_OUTCOME`,
+  success, a panic, and a call the SDK rejects against the input schema, which the AUDIT-01b
+  middleware writes). It is written by the deferred step of `call`, before the result is
+  returned. Keys: `tool=create_session`; `outcome` (`created`, `replay`, `rejected`); `accepted`
+  (`true` exactly when not `rejected`); `error_code` (only when rejected; `INTERNAL` for a panic);
+  `root_id` (the index of the configured root, 0-based, only once the root is resolved; never the
+  path); `session_id` (`opencode:ses_...`, only when the native answer carried a well-formed ID:
+  on success and on the directory-mismatch `UNKNOWN_OUTCOME`); `key_hash` (the first 16 hex
+  characters of sha256 of the idempotency key, the same value as the `hb_key` hint; absent for a
+  key outside 8 to 128 bytes, whose hash would reveal it); `limit_state`
+  (`hour:N/M,root:N/M,total:N/M`, the counts at the end of the call, with the new session and this
+  POST included on success, `?` for a count that was not established **and for the root and total
+  counts after any `UNKNOWN_OUTCOME` (timeout, no valid ID, directory mismatch, a failure after the POST):
+  a session may exist that the count did not include**, absent when the call stopped before the
+  hourly counter); `bootstrap_may_be_outside_root=true` (only on that
+  `UNKNOWN_OUTCOME`); `replay=true` (only when a recorded error is returned again, never for a waiter whose own
+  wait timed out; a recorded success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
+  the raw key, the root path or any native response text. The dashboard ring keeps the event and
+  these keys. Archive and close lines land with their tools (S6).
+- The tool is registered only when the server has a create configuration; nothing wires it from
+  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge keeps its eleven tools.
 
 ### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
 
