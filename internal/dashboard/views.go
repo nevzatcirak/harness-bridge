@@ -91,6 +91,16 @@ func sessionHref(harness, id string) string {
 	return "/session/" + url.PathEscape(harness) + "/" + url.PathEscape(id)
 }
 
+// rowHref is the detail link; an archived session's link keeps the filter, or its detail page
+// would be a 404 (D17 Q7).
+func rowHref(s Session) string {
+	h := sessionHref(s.Harness, s.ID)
+	if h != "" && s.Archived {
+		h += "?archived=1"
+	}
+	return h
+}
+
 type guardRow struct {
 	Held  bool
 	State string
@@ -99,6 +109,8 @@ type guardRow struct {
 type sessionRow struct {
 	Harness, HarnessClass string
 	ID, Title, Root       string
+	LifecycleRoot         string // the ADR-022 lifecycle root label ("" when none)
+	Archived              bool
 	State                 string
 	Guard                 guardRow
 	Current               string
@@ -122,10 +134,11 @@ func toRow(s Session) sessionRow {
 	return sessionRow{
 		Harness: label, HarnessClass: class,
 		ID: truncRunes(s.ID, 128), Title: truncRunes(s.Title, maxTitleRunes), Root: truncRunes(s.Root, maxRootRunes),
+		LifecycleRoot: truncRunes(s.LifecycleRoot, maxRootRunes), Archived: s.Archived,
 		State: normSessionState(s.State), Guard: g,
 		Current:      truncRunes(s.CurrentExecution, 128),
 		LastActivity: fmtTime(s.LastActivity),
-		Href:         sessionHref(s.Harness, s.ID),
+		Href:         rowHref(s),
 	}
 }
 
@@ -147,6 +160,8 @@ type page struct {
 	BackHref   string
 	// Polling: the client script polls the JSON model of this view (data-poll).
 	Poll, PollHarness, PollID string
+	// Filter is set on the list page: it shows the archived filter link (D17 Q7).
+	Filter, ShowArchived bool
 	// Audit feed
 	AuditPage bool
 	AuditOn   bool
@@ -167,13 +182,14 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <div id="live">
 {{if .Message}}<p>{{.Message}}</p>{{end}}
 {{if .Rows}}<table class="sessions">
-<thead><tr><th>Harness</th><th>Session</th><th>Title</th><th>Root</th><th>State</th><th>Guard</th><th>Current execution</th><th>Last activity</th></tr></thead>
+<thead><tr><th>Harness</th><th>Session</th><th>Title</th><th>Root</th><th>Lifecycle root</th><th>State</th><th>Guard</th><th>Current execution</th><th>Last activity</th></tr></thead>
 <tbody>
 {{range .Rows}}<tr>
 <td><span class="badge {{.HarnessClass}}">{{.Harness}}</span></td>
-<td>{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}{{.ID}}{{end}}</td>
+<td>{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}{{.ID}}{{end}}{{if .Archived}} <span class="badge archived">archived</span>{{end}}</td>
 <td>{{.Title}}</td>
 <td><code>{{.Root}}</code></td>
+<td>{{if .LifecycleRoot}}<code>{{.LifecycleRoot}}</code>{{else}}-{{end}}</td>
 <td>{{.State}}</td>
 <td>{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</td>
 <td>{{if .Current}}{{.Current}}{{else}}-{{end}}</td>
@@ -181,6 +197,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 </tr>
 {{end}}</tbody></table>{{end}}
 {{if .Truncate}}<p class="note">{{.Truncate}}</p>{{end}}
+{{if .Filter}}<p class="note">{{if .ShowArchived}}Archived sessions are shown. <a href="/">Hide archived sessions</a>{{else}}Archived sessions are hidden. <a href="/?archived=1">Show archived sessions</a>{{end}}</p>{{end}}
 </div>
 {{with .Detail}}<section class="session">
 <p><a href="/">back to the list</a></p>
@@ -188,6 +205,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <dl>
 <dt>Title</dt><dd data-f="title">{{.Title}}</dd>
 <dt>Root</dt><dd data-f="root"><code>{{.Root}}</code></dd>
+<dt>Lifecycle root</dt><dd data-f="lifecycle">{{if .LifecycleRoot}}<code>{{.LifecycleRoot}}</code>{{else}}-{{end}}</dd>
 <dt>State</dt><dd data-f="state">{{.State}}</dd>
 <dt>Guard</dt><dd data-f="guard">{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</dd>
 <dt>Current execution</dt><dd data-f="current">{{if .Current}}{{.Current}}{{else}}-{{end}}</dd>
@@ -345,7 +363,7 @@ func (d *dash) indexHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
-		p := page{Title: "Harness Bridge dashboard", Poll: "list"}
+		p := page{Title: "Harness Bridge dashboard", Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
 		if _, none := d.src.(NullSource); none {
 			p.Message = "No data source is connected."
 			renderPage(w, http.StatusOK, p)

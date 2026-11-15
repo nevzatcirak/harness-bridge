@@ -44,15 +44,17 @@ type apiGuard struct {
 // normalized, length-bounded value the HTML shows; the client renders it with
 // textContent, never as markup.
 type apiSession struct {
-	Harness      string   `json:"harness"`
-	ID           string   `json:"id"`
-	Title        string   `json:"title"`
-	Root         string   `json:"root"`
-	State        string   `json:"state"`
-	Guard        apiGuard `json:"guard"`
-	Current      string   `json:"current_execution,omitempty"`
-	LastActivity string   `json:"last_activity"`
-	Href         string   `json:"href,omitempty"`
+	Harness       string   `json:"harness"`
+	ID            string   `json:"id"`
+	Title         string   `json:"title"`
+	Root          string   `json:"root"`
+	LifecycleRoot string   `json:"lifecycle_root,omitempty"`
+	Archived      bool     `json:"archived,omitempty"`
+	State         string   `json:"state"`
+	Guard         apiGuard `json:"guard"`
+	Current       string   `json:"current_execution,omitempty"`
+	LastActivity  string   `json:"last_activity"`
+	Href          string   `json:"href,omitempty"`
 }
 
 type apiExec struct {
@@ -85,7 +87,7 @@ func toAPISession(r sessionRow) apiSession {
 	if g.Held {
 		g.State = r.Guard.State
 	}
-	return apiSession{Harness: r.Harness, ID: r.ID, Title: r.Title, Root: r.Root, State: r.State, Guard: g, Current: r.Current, LastActivity: r.LastActivity, Href: r.Href}
+	return apiSession{Harness: r.Harness, ID: r.ID, Title: r.Title, Root: r.Root, LifecycleRoot: r.LifecycleRoot, Archived: r.Archived, State: r.State, Guard: g, Current: r.Current, LastActivity: r.LastActivity, Href: r.Href}
 }
 
 // listRows applies the list cap and the row normalization once, for the HTML and
@@ -264,9 +266,18 @@ func writeJSONError(w http.ResponseWriter, err error) {
 	_, _ = w.Write([]byte(`{"error":"data source unavailable"}`))
 }
 
+// archivedCacheKey separates the cached models of a request that asked for archived sessions from
+// the others: one model must never answer both (D17 Q7: hidden by default).
+func archivedCacheKey(ctx context.Context) string {
+	if ArchivedShown(ctx) {
+		return "\x00archived"
+	}
+	return ""
+}
+
 func (d *dash) stateListHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m, err := d.model(r.Context(), "state\x00list", d.buildList)
+		m, err := d.model(r.Context(), "state\x00list"+archivedCacheKey(r.Context()), d.buildList)
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -283,7 +294,7 @@ func (d *dash) stateDetailHandler() http.Handler {
 			return
 		}
 		harness, id := parts[0], parts[1]
-		m, err := d.model(r.Context(), "state\x00detail\x00"+harness+"\x00"+id, func(c context.Context) ([]byte, error) {
+		m, err := d.model(r.Context(), "state\x00detail\x00"+harness+"\x00"+id+archivedCacheKey(r.Context()), func(c context.Context) ([]byte, error) {
 			return d.buildDetail(c, harness, id)
 		})
 		if err != nil {

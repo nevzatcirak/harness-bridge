@@ -160,3 +160,11 @@ Open items recorded here, not fixed:
 - Latch recovery stays restart-only, the dashboard ring still drops `permission_reply`, `audit_unavailable` still uses `UPSTREAM_FAILURE` (maintainer proposals from #274).
 - A late journal write after a bounded attempt write timed out can leave an attempt line with no native write (over-reports, never hides).
 - A result line that cannot be written is logged through slog, which uses the same failed journal: the loud log may itself be lost; the latch is the durable signal.
+
+### ADR-023 slice 5b (lifecycle label, archived filter, docs): deferred items (2026-11-15, appended)
+
+- R-DASH (the operator-present live acceptance with a real native and a browser) is **NOT_EXERCISED**; the native shapes behind the diffs remain unverified against a live server.
+- Lifecycle roots are a label on ACL sessions (the `list_catalog` rule). Showing sessions that are under a lifecycle root but not in the ACL needs the O2 flag (ADR-012 amendment, D16 Q7): not done. `Server.Catalog` is not wired from `BRIDGE_LIFECYCLE_CONFIG` in `cmd/bridge`, so the production label is empty until that planner-scheduled task.
+- The archive overlay is empty in production (ADR-022 S8, then S6); the filter and the fail-closed unknown state are tested with a fake overlay only.
+- `BRIDGE_DASHBOARD_REDACT_EXTRA` is still a slice-5a proposal name; `docs/deploy/DASHBOARD.md` and `docs/CONTRACTS.md` mark it so.
+- The `newMCPServer` test pins the nil-adapter case and the pointer identity of a zero-value `Harness`; a fully opened adapter is not constructed there.

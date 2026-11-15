@@ -166,6 +166,12 @@ func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Han
 		defer release()
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
+		// D17 Q7: archived sessions are hidden by default, with a filter. The filter is exactly
+		// "archived=1", read here once for every data route; it only asks a Source to include
+		// sessions its own authorization already lists.
+		if r.URL.Query().Get("archived") == "1" {
+			ctx = WithArchived(ctx)
+		}
 		route.Handler.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

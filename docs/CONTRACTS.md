@@ -862,6 +862,49 @@ per-call approval is configured: the server cannot verify which, and says so in 
   re-check before the write refuses a replaced workspace (`FORBIDDEN`) and a filesystem timeout
   (`UPSTREAM_TIMEOUT`, retryable) with no native write and no attempt line.
 
+### ADR-023 dashboard (read-only; disabled by default)
+
+The Bridge can serve a local, read-only dashboard (ADR-023). It is **off** unless exactly one of
+`BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR` is set (setting both is a startup error). It has no
+write route, no SSE and no mutating call; every route answers only `GET` and `HEAD`. Operator setup and the
+SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
+
+| Variable | Meaning |
+|---|---|
+| `BRIDGE_DASHBOARD_SOCKET` | Path of a unix socket in a `0700` directory owned by the service user (the recommended transport, D17 Q1). |
+| `BRIDGE_DASHBOARD_ADDR` | `host:port` where host is exactly `127.0.0.1` or `::1`; any other address is a startup error. Requests need a `Host` of `localhost`, `127.0.0.1` or `[::1]`. |
+| `BRIDGE_DASHBOARD_REDACT_EXTRA` | **Slice-5a proposal name** (the ADR names none): a JSON array of at most 16 RE2 patterns of 1 to 256 bytes, additive to the shipped redaction list (always on). An invalid value is a startup error and is never logged. |
+
+- **Routes:** `/` (session list), `/session/<harness>/<id>` (detail, executions, diffs),
+  `/session/<harness>/<id>/turn/<message>` (one turn's diff), `/api/state` and
+  `/api/state/session/<harness>/<id>` (the JSON view models the page polls: 5 s list, 2 s detail),
+  `/audit` and `/api/audit` (the 1000-entry audit ring), `/dashboard.css`, `/dashboard.js`.
+- **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
+  whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
+  other than `GET`/`HEAD` is 405; four data requests and eight requests in flight at once, the rest
+  refused at once (503, never queued); a 5 s bound per request; responses carry a CSP and
+  `Cache-Control: no-store`.
+- **Rows (D17 Q6):** exactly the sessions the existing authorization lists (the ACL, the same set as
+  `list_sessions`, sorted by native ID), then one pending row per `claudecode:` ACL entry (no native
+  call, "ADR-021 pending"). When the lifecycle catalog is configured (ADR-022), each row carries
+  `lifecycle_root`, the lifecycle root that contains the session directory, **as a label only**: the
+  rule is that of `list_catalog` (ADR-022 6.1), so a session under a lifecycle root that the ACL does
+  not list is **not** shown (reading it would need the O2 flag, D16 Q7). Nothing wires the lifecycle
+  configuration in the production Bridge yet, so the label is absent there until it does.
+- **Archived (D17 Q7):** sessions the archive overlay reports archived are hidden by default; the query
+  `archived=1` (exactly that value, on any data route) shows them with an `archived` marker. The
+  overlay is empty in production (no persistence exists, ADR-022 S8), so nothing is archived yet. An
+  overlay that cannot answer fails the call (503), as `list_catalog` does: a session is never listed or
+  hidden by a guess.
+- **Redaction:** diff paths and patches and the audit ring values are redacted with the shipped list
+  (`sk-ant-`, `ghp_`, `github_pat_`, `AKIA...`, private-key blocks, bearer tokens) plus the operator
+  patterns. A convenience, not a guarantee.
+- **JSON model fields** (`/api/state*`): `harness`, `id`, `title`, `root` (the session directory),
+  `lifecycle_root` (omitted when none), `archived` (omitted unless true), `state`, `guard`,
+  `current_execution`, `last_activity`, `href`.
+- **Status:** the native response shapes behind the diffs are read from upstream source and are
+  **UNVERIFIED against a live server**; the live acceptance (R-DASH) is **NOT_EXERCISED**.
+
 ### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
 
 Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,
