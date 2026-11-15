@@ -712,6 +712,12 @@ The `session_create` AUDIT-01 line (4.3) exists for `create_session`. Facts and 
   established (`SESSION_LIMIT`, no read under it, no write). #265 P3-5: a panic after the
   idempotency reservation releases the record (a refusal before the POST: the key is free again;
   after the POST was sent: the recorded outcome is unknown and the key is never POSTed again).
+- **2026-11-15, merge and review fixes (task #284).** Main `73929a5` (PR #275) was merged into the S5 branch
+  (`docs/BACKLOG.md` only). Review #281: P3-1 a same-key waiter whose own wait timed out is not journaled
+  `replay=true` (the flag is set only once a recorded outcome is returned); P3-2 after any `UNKNOWN_OUTCOME`
+  the line's root and total counts are `?` (a session may exist that the pre-POST count did not include; this
+  covers the directory-mismatch path of the review and, for the same reason, the timeout, invalid-ID and
+  post-POST-failure paths), the hourly count still includes the POST.
 - **Maintainer item (not changed).** #262 P3-2: a native 5xx on the POST is `UPSTREAM_FAILURE` here
   (the answer is definite); ADR 4.2 could be read to make it `UNKNOWN_OUTCOME`. This is a change of
   the 4.2 behaviour and is left for the maintainer.

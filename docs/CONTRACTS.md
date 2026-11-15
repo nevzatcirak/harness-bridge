@@ -730,10 +730,12 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   characters of sha256 of the idempotency key, the same value as the `hb_key` hint; absent for a
   key outside 8 to 128 bytes, whose hash would reveal it); `limit_state`
   (`hour:N/M,root:N/M,total:N/M`, the counts at the end of the call, with the new session and this
-  POST included on success, `?` for a count that was not established, absent when the call
-  stopped before the hourly counter); `bootstrap_may_be_outside_root=true` (only on that
-  `UNKNOWN_OUTCOME`); `replay=true` (only when a recorded error is returned again; a recorded
-  success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
+  POST included on success, `?` for a count that was not established **and for the root and total
+  counts after any `UNKNOWN_OUTCOME` (timeout, no valid ID, directory mismatch, a failure after the POST):
+  a session may exist that the count did not include**, absent when the call stopped before the
+  hourly counter); `bootstrap_may_be_outside_root=true` (only on that
+  `UNKNOWN_OUTCOME`); `replay=true` (only when a recorded error is returned again, never for a waiter whose own
+  wait timed out; a recorded success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
   these keys. Archive and close lines land with their tools (S6).
 - The tool is registered only when the server has a create configuration; nothing wires it from

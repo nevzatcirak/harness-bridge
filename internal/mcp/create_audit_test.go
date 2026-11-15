@@ -259,7 +259,8 @@ func TestCreateAuditUnknownOutcomeAndReplayedError(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := oneLine(t, buf, &seen)
-	wantKV(t, line, map[string]any{"outcome": "rejected", "accepted": false, "error_code": "UNKNOWN_OUTCOME", "root_id": 0, "key_hash": keyHash16(k)})
+	wantKV(t, line, map[string]any{"outcome": "rejected", "accepted": false, "error_code": "UNKNOWN_OUTCOME", "root_id": 0, "key_hash": keyHash16(k),
+		"limit_state": "hour:1/5,root:?/3,total:?/5"}) // the POST may have created a session: the counts are not final
 	absentKeys(t, line, "bootstrap_may_be_outside_root", "replay", "session_id")
 	// the recorded outcome is returned for the same key: one more line, marked replay.
 	if _, err := e.s.call(ctx, "create_session", args{Root: e.rootA, IdempotencyKey: k}); codeOf(err) != "UNKNOWN_OUTCOME" {
@@ -279,7 +280,8 @@ func TestCreateAuditUnknownOutcomeAndReplayedError(t *testing.T) {
 		t.Fatal(err)
 	}
 	line = oneLine(t, buf, &seen)
-	wantKV(t, line, map[string]any{"error_code": "UNKNOWN_OUTCOME", "bootstrap_may_be_outside_root": true, "session_id": "opencode:ses_elsewhere"})
+	wantKV(t, line, map[string]any{"error_code": "UNKNOWN_OUTCOME", "bootstrap_may_be_outside_root": true, "session_id": "opencode:ses_elsewhere",
+		"limit_state": "hour:2/5,root:?/3,total:?/5"}) // a session exists somewhere: the pre-POST counts are not claimed
 	if strings.Contains(buf.String(), "/somewhere/else") {
 		t.Fatal("the native directory reached the journal")
 	}
@@ -411,4 +413,45 @@ func TestCreateAuditOverTheMCPTransport(t *testing.T) {
 	invoke(t, client, "create_session", map[string]any{"root": e.rootA, "title": "via mcp", "idempotency_key": "key-audit-40002"}, false)
 	line = oneLine(t, buf, &seen)
 	wantKV(t, line, map[string]any{"outcome": "created", "accepted": true, "root_id": 0})
+}
+
+// #281 P3-1: a same-key waiter whose context expires gets UPSTREAM_TIMEOUT and is NOT journaled
+// replay=true: no recorded outcome was returned to it. The owner's own line is created.
+func TestCreateAuditWaiterTimeoutIsNotAReplay(t *testing.T) {
+	buf := captureLog(t)
+	e := newCreateEnv(t, nil)
+	release := make(chan struct{})
+	e.setPostHook(func(w http.ResponseWriter, r *http.Request, dir string) bool {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		return false // then the fake answers normally
+	})
+	const k = "key-audit-50001"
+	ownerDone := make(chan error, 1)
+	go func() {
+		_, err := e.s.call(context.Background(), "create_session", args{Root: e.rootA, IdempotencyKey: k})
+		ownerDone <- err
+	}()
+	for deadline := time.Now().Add(3 * time.Second); e.count("POST") == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if e.count("POST") != 1 {
+		t.Fatal("the owner's POST was not sent")
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := e.s.call(wctx, "create_session", args{Root: e.rootA, IdempotencyKey: k}); codeOf(err) != "UPSTREAM_TIMEOUT" {
+		t.Fatalf("waiter: %v", err)
+	}
+	seen := 0
+	line := oneLine(t, buf, &seen)
+	wantKV(t, line, map[string]any{"outcome": "rejected", "accepted": false, "error_code": "UPSTREAM_TIMEOUT", "key_hash": keyHash16(k)})
+	absentKeys(t, line, "replay")
+	close(release)
+	if err := <-ownerDone; err != nil {
+		t.Fatal(err)
+	}
+	wantKV(t, oneLine(t, buf, &seen), map[string]any{"outcome": "created", "accepted": true})
 }

@@ -332,12 +332,12 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 		return nil, err
 	}
 	if !owner {
-		ev.replay = true
 		select {
 		case <-rec.done:
 		case <-ctx.Done():
 			return nil, &execution.Error{Code: "UPSTREAM_TIMEOUT", Message: "an identical request is in flight; wait and retry", Retryable: true}
 		}
+		ev.replay = true // a recorded outcome is returned from here on (a timed-out waiter is not a replay)
 		if rec.err != nil {
 			return nil, rec.err
 		}
@@ -353,6 +353,7 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 			case <-rec.done:
 			default:
 				if ev.posted {
+					ev.counted = false
 					c.reg.finish(keyHash, rec, nil, unknownOutcome("the Bridge failed after the native create was sent; the session may exist: find it through the catalog (hb_key "+keyHash[:16]+"); it is not retried", false))
 				} else {
 					c.reg.abandon(keyHash, rec, execution.Fail("INTERNAL", "panic during create_session"))
@@ -415,18 +416,21 @@ func (c *CreateConfig) run(ctx context.Context, s *Server, root *lifecycle.Root,
 		}
 		// A timeout, a lost response or an unreadable answer: the session may exist. Never
 		// retried and never replayed: the recorded outcome is returned for the same key.
+		ev.counted = false // a session may exist: the counts read before the POST are not final
 		e := unknownOutcome("the native create did not complete or its answer was lost; the session may exist: find it through the catalog (hb_key "+meta["hb_key"]+"); it is not retried", false)
 		c.reg.finish(keyHash, rec, nil, e)
 		return nil, e
 	}
 	// Verify the answer (ADR-022 4.1 step 5).
 	if !opencode.ValidID(sess.ID, "ses") {
+		ev.counted = false
 		e := unknownOutcome("the native answer carried no valid session ID; the session may exist: find it through the catalog (hb_key "+meta["hb_key"]+")", false)
 		c.reg.finish(keyHash, rec, nil, e)
 		return nil, e
 	}
 	if sess.Directory != grant.Directory || grant.Recheck(ctx) != nil {
 		ev.sessionID = "opencode:" + sess.ID // well formed (checked above); the native path is not logged
+		ev.counted = false                   // a session exists somewhere the Bridge did not place: the counts are not final
 		e := unknownOutcome("the created session's directory differs from the requested path or its identity changed; bootstrap_may_be_outside_root=true; the session is not used: find it through the catalog (hb_key "+meta["hb_key"]+")", true)
 		c.reg.finish(keyHash, rec, nil, e)
 		return nil, e
