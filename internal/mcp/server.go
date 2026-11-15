@@ -37,11 +37,14 @@ type Server struct {
 	// session ID refused as "not enabled" and every OpenCode response untouched.
 	Claude ClaudeHarness
 	// Create enables the create_session tool (ADR-022 S4). Nil leaves it unregistered.
-	Create         *CreateConfig
-	discoveryOnce  sync.Once
-	discoverySlots chan struct{}
-	once           sync.Once
-	handler        http.Handler
+	Create *CreateConfig
+	// PermissionRelay enables the reply_permission tool (ADR-024 S3). Nil (the default, and the
+	// only production value until S5) leaves it unregistered and refused if called directly.
+	PermissionRelay *PermissionRelayConfig
+	discoveryOnce   sync.Once
+	discoverySlots  chan struct{}
+	once            sync.Once
+	handler         http.Handler
 }
 type args struct {
 	SessionID       string `json:"session_id"`
@@ -64,7 +67,22 @@ type args struct {
 	// create_session (ADR-022 4.1).
 	Subdirectory string
 	Title        string
+	// reply_permission (ADR-024 4).
+	PermissionID string
+	Decision     string
+	Supersedes   string
 }
+
+// PermissionRelayConfig is the operator mode of ADR-024 section 5. Only reject_only exists in
+// S3: policy mode (S2/S4) is not started (D15 Q1). Registration of the tool in the production
+// server lands with S5, when its audit lines exist (D15 Q3); cmd/bridge never sets this field.
+type PermissionRelayConfig struct {
+	Mode string
+}
+
+const relayModeRejectOnly = "reject_only"
+
+func (c *PermissionRelayConfig) enabled() bool { return c != nil && c.Mode == relayModeRejectOnly }
 
 func native(s string) (string, error) {
 	if _, err := claudecode.ParseSessionID(s); err == nil {
@@ -133,6 +151,8 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		return s.catalogCall(ctx, a)
 	case "create_session":
 		return s.createCall(ctx, a)
+	case "reply_permission":
+		return s.replyPermissionCall(ctx, a)
 	case "list_sessions":
 		list, e := s.discover(ctx)
 		return Sessions{Sessions: nonnil(list)}, e
@@ -281,6 +301,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return args{Root: a.Root, Subdirectory: a.Subdirectory, Title: a.Title, IdempotencyKey: a.IdempotencyKey}
 			})
 		}
+		if s.PermissionRelay.enabled() {
+			register[ReplyPermissionInput, execution.ReplyResult](server, s, "reply_permission", "Answer one pending native permission request of an explicit waiting execution with reject. The decision is made by the Chat model, or by a human only if claude.ai's per-call approval is configured for this tool: the server cannot verify which (decided_by=chat_client, human_verified=false). reject only in this mode (allow_once is refused, never always); sends no message; makes one native write after an audit record and never retries it: an unknown outcome is UNKNOWN_OUTCOME with an attempt_id, and one explicit superseding reject may quote it in supersedes. Configure per-call approval for this tool. Unavailable under BRIDGE_READ_ONLY.", func(a ReplyPermissionInput) args {
+				return args{ExecutionID: a.ExecutionID, PermissionID: a.PermissionID, Decision: a.Decision, Supersedes: a.Supersedes}
+			})
+		}
 		register[SessionInput, Capabilities](server, s, "get_harness_capabilities", "Inspect native agents and API declarations for an authorized session. Prefer native subagents for large exploration/review when permitted; no Claude Chat spawning API is assumed.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
 		register[PromptInput, execution.Execution](server, s, "send_prompt", "Submit once to the explicitly selected existing session ID; discovery does not grant write access", func(a PromptInput) args {
 			return args{SessionID: a.SessionID, Prompt: a.Prompt, IdempotencyKey: a.IdempotencyKey}
@@ -331,8 +356,17 @@ func validateArgs(name string, a args) error {
 		allowed["key"] = true
 	case "get_execution_status", "get_execution_result", "interrupt_execution":
 		allowed["execution"] = true
+	case "reply_permission":
+		allowed["execution"] = true
+		if !execution.ValidPermissionID(a.PermissionID) || (a.Decision != "reject" && a.Decision != "allow_once") ||
+			(a.Supersedes != "" && !execution.ValidAttemptID(a.Supersedes)) {
+			return execution.Fail("INVALID_INPUT", "invalid reply_permission input")
+		}
 	default:
 		return execution.Fail("INVALID_INPUT", "unknown tool")
+	}
+	if name != "reply_permission" && (a.PermissionID != "" || a.Decision != "" || a.Supersedes != "") {
+		return execution.Fail("INVALID_INPUT", "missing or unexpected tool argument")
 	}
 	values := map[string]string{"session": a.SessionID, "execution": a.ExecutionID, "prompt": a.Prompt, "key": a.IdempotencyKey}
 	for field, value := range values {

@@ -134,3 +134,12 @@ Open items recorded here, not fixed:
 - The dashboard audit ring drops `permission_reply` (not in `auditEvents`), so attempts are in the journal but not in the ring until the dashboard allowlists are amended.
 - A destination that reports a short write with a nil error is not detectable; journald delivery after an accepted write is not observable.
 - Carry-overs #208/#210 P3s stay for the S3/S5 slice.
+
+### ADR-024 S3 `reply_permission` reject (task #282): deferred items (2026-11-15, appended)
+
+- Registration in the production server, the production `PermissionReplier` (the one `POST /permission/:requestID/reply` client method, routed by the session's directory/workspace like `PermissionView`), the production `PermissionSource` and the `audit.Default()` wiring land with S5; until then the tool cannot be called on a deployed Bridge.
+- S5 owns the `phase=result` and `phase=refused` lines and the matching "result write failed after the native call, later calls refused" behaviour (the S3 row's test needs the result line).
+- 401/403 from the native reply are treated as `UNKNOWN_OUTCOME` (conservative); decide whether a definite refusal exists for them.
+- Latch recovery stays restart-only; the dashboard ring still drops `permission_reply`; `audit_unavailable` still uses `UPSTREAM_FAILURE` (maintainer proposals from #274).
+- `list_catalog`/`get_session` expose no permission request detail beyond S1; a patterns exposure is policy mode only (D15 Q2 deferred).
+- A hung attempt journal blocks the call (documented in ADR-024 4.2 step 8, not bounded).

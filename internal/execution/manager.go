@@ -31,6 +31,12 @@ type Error struct {
 	Message     string `json:"message"`
 	Retryable   bool   `json:"retryable"`
 	ExecutionID string `json:"execution_id,omitempty"`
+	// ADR-024 section 4: three additive optional fields, used only by reply_permission.
+	// AttemptID and Attempt accompany UNKNOWN_OUTCOME only; Reason is a closed enum
+	// (permissionreply.go) and never replaces Code.
+	AttemptID string `json:"attempt_id,omitempty"`
+	Attempt   int    `json:"attempt,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 func (e *Error) Error() string        { return e.Code + ": " + e.Message }
@@ -140,6 +146,13 @@ type Manager struct {
 	witness rejectionWitness
 	// ADR-024 S1: optional source for the verified pending_permission object.
 	permSource permissionSourceRef
+	// ADR-024 S3: the reply_permission record map (memory-only, ADR-010), the native reply
+	// seam, the attempt writer and the Bridge process start time (audit field).
+	replyMu      sync.Mutex
+	replies      map[replyKey]*replyRecord
+	replier      replierRef
+	attempts     attemptRef
+	processStart string
 	// releaseSleep replaces the ADR-020 settle sleep in tests only.
 	releaseSleep func(context.Context, time.Duration) error
 }
@@ -147,7 +160,7 @@ type Manager struct {
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, replies: map[replyKey]*replyRecord{}, processStart: time.Now().UTC().Format("2006-01-02T15:04:05Z"), reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()

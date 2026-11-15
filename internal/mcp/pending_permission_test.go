@@ -71,3 +71,47 @@ func TestGetSessionPendingPermissionCountOnly(t *testing.T) {
 		})
 	}
 }
+
+// ADR-024 S1 P3 (#208): a guarded execution can report waiting_for_permission while the native
+// list measured zero pending requests for the session (the cached execution state lags). The
+// measured zero is reported, not omitted; the field stays absent when the state is not waiting
+// or the permission read failed (never a fabricated zero).
+func TestGetSessionReportsMeasuredZeroCountWhileWaiting(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, permissions string
+		wantState               string
+		wantCount               *int
+	}{
+		{"waiting, measured zero", "waiting_for_permission", `[]`, "waiting_for_permission", intp(0)},
+		{"running, measured zero", "running", `[]`, "running", nil},
+		{"waiting, permission read failed", "waiting_for_permission", `error`, "unknown", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			m := heldManager(t, root, tc.mode)
+			c := discoveryUpstream(t, root, `{}`, tc.permissions)
+			p, _ := security.New([]string{root}, []string{"ses_a"})
+			s := &Server{Client: c, Runs: m, Policy: p}
+			v, e := s.call(context.Background(), "get_session", args{SessionID: "opencode:ses_a"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			sess := v.(Session)
+			if sess.State != tc.wantState {
+				t.Fatalf("state = %s, want %s", sess.State, tc.wantState)
+			}
+			switch {
+			case tc.wantCount == nil && sess.PendingPermissionCount != nil:
+				t.Fatalf("count present: %d", *sess.PendingPermissionCount)
+			case tc.wantCount != nil && (sess.PendingPermissionCount == nil || *sess.PendingPermissionCount != *tc.wantCount):
+				t.Fatalf("count = %v, want %d", sess.PendingPermissionCount, *tc.wantCount)
+			}
+			if tc.wantCount != nil {
+				raw, _ := json.Marshal(v)
+				if !strings.Contains(string(raw), `"pending_permission_count":0`) {
+					t.Fatalf("a measured zero must be serialized: %s", raw)
+				}
+			}
+		})
+	}
+}

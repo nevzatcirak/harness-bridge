@@ -31,7 +31,7 @@ Common rules: tool input objects have `additionalProperties:false`; all IDs are 
     "session": {"type":"object","required":["session_id","native_id","harness","directory","state"],"properties":{"session_id":{"type":"string"},"native_id":{"type":"string"},"harness":{"const":"opencode"},"directory":{"type":"string"},"title":{"type":"string"},"state":{"enum":["idle","running","waiting_for_permission","unknown"]}},"additionalProperties":true},
     "execution": {"type":"object","required":["execution_id","session_id","state","started_at","updated_at"],"properties":{"execution_id":{"type":"string"},"session_id":{"type":"string"},"message_id":{"type":"string"},"state":{"enum":["submitting","running","waiting_for_permission","completed","failed","interrupted","unknown"]},"started_at":{"type":"string","format":"date-time"},"updated_at":{"type":"string","format":"date-time"},"error":{"type":"string"}},"additionalProperties":true},
     "message": {"type":"object","required":["message_id","role","parts"],"properties":{"message_id":{"type":"string"},"role":{"type":"string"},"parts":{"type":"array","items":{}}}},
-    "error": {"type":"object","required":["code","message","retryable"],"properties":{"code":{"enum":["UNAUTHORIZED","FORBIDDEN","NOT_FOUND","SESSION_BUSY","IDEMPOTENCY_CONFLICT","INVALID_INPUT","UPSTREAM_TIMEOUT","UNKNOWN_OUTCOME","UPSTREAM_FAILURE"]},"message":{"type":"string"},"retryable":{"type":"boolean"},"execution_id":{"type":"string"}}}
+    "error": {"type":"object","required":["code","message","retryable"],"properties":{"code":{"enum":["UNAUTHORIZED","FORBIDDEN","NOT_FOUND","SESSION_BUSY","IDEMPOTENCY_CONFLICT","INVALID_INPUT","UPSTREAM_TIMEOUT","UNKNOWN_OUTCOME","UPSTREAM_FAILURE"]},"message":{"type":"string"},"retryable":{"type":"boolean"},"execution_id":{"type":"string"},"attempt_id":{"type":"string"},"attempt":{"type":"integer"},"reason":{"type":"string"}}}
   },
   "outputs": {
     "list_sessions": {"type":"object","required":["sessions"],"properties":{"sessions":{"type":"array","items":{"$ref":"#/$defs/session"}},"next_cursor":{"type":"string"}}},
@@ -720,6 +720,75 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
 - **No audit line yet:** `event=session_create` is slice S5 and must land before any production
   wiring. The tool is registered only when the server has a create configuration; nothing wires
   it from `BRIDGE_LIFECYCLE_CONFIG`, so a deployed Bridge keeps its eleven tools.
+
+### ADR-024 S3: `reply_permission` (reject only, against a fake native; registered only when configured)
+
+`reply_permission {execution_id, permission_id, decision, supersedes?}` ->
+`{execution_id, permission_id, decision, outcome: "replied", attempt_id, attempt, decided_by:
+"chat_client", human_verified: false}`. The input schema has no other property
+(`additionalProperties: false`): `permission_id` matches `^per[A-Za-z0-9_-]{1,125}$`, `decision` is
+`reject` or `allow_once` (never `always`), `supersedes` matches `^[A-Za-z0-9_-]{22}$` and is the only
+optional field. A `message`, `reply`, `session_id` or any other field is rejected before the handler
+runs. The tool carries the annotations `readOnlyHint: false`, `destructiveHint: true` (untrusted
+hints, never authority). The decision is made by the Chat model, or by a human only if claude.ai's
+per-call approval is configured: the server cannot verify which, and says so in every result.
+
+- **The error object** gains three additive optional fields used only by this tool: `attempt_id` and
+  `attempt` (only on `UNKNOWN_OUTCOME`, so the caller always has the value to quote in `supersedes`)
+  and `reason`, a closed enum: `not_verified`, `unrecognized_kind`, `allow_once_disabled`,
+  `policy_tool`, `policy_pattern`, `policy_scope`, `policy_rate`, `attempt_in_flight`,
+  `already_replied`, `nothing_to_supersede`, `supersedes_mismatch`, `supersede_limit`,
+  `supersede_allow_once_not_offered`, `resolved_elsewhere_or_dropped`, `audit_unavailable`,
+  `native_rejected_id`. `reason` never replaces `code`; no error carries native text.
+- **Order of checks** (ADR-024 4.2; every refusal before the attempt record makes no native write):
+  `BRIDGE_READ_ONLY` `FORBIDDEN` (the tool is in `mutating()`; nothing is read natively);
+  `allow_once` `FORBIDDEN`/`allow_once_disabled` (reject_only: configuration and input only, zero
+  native calls, before the execution is even looked up); a Claude Code execution `INVALID_INPUT`;
+  the execution exists and its session is authorized (the ACL read of `GET /session/:id` is the only
+  native call so far); the execution is `waiting_for_permission` with the guard held by this
+  execution, else `NOT_FOUND`/`resolved_elsewhere_or_dropped`; the in-memory record rules below (no
+  permission read); then, under the run's own token (so it cannot interleave with a prompt, an
+  interrupt, a reconcile probe or an ADR-020 release), a **fresh** permission-observer re-read of
+  the session with its own directory routing: request absent or resolved `NOT_FOUND`/
+  `resolved_elsewhere_or_dropped`; a request of another session, `unattributed`, `conflicting`,
+  tool-less, verified for another execution, duplicated or outside the closed charsets `FORBIDDEN`/
+  `not_verified`; observer unavailable `UPSTREAM_FAILURE`, timed out `UPSTREAM_TIMEOUT`; the
+  workspace identity re-check; then the **attempt record** and only if it was written, the one native
+  write `POST /permission/:requestID/reply` with `{reply: "reject"}` and no message.
+- **Attempt record failure:** the writer (`internal/audit`, the one process-wide latch) reports
+  failure, there are zero native writes and the call returns `UPSTREAM_FAILURE`/`audit_unavailable`
+  (`retryable: true`); the record is `refused`. A failed superseding attempt record restores the
+  earlier `unknown` attempt (it never reopens a fresh first attempt).
+- **Record** (memory-only, keyed by `(execution_id, permission_id)`; empty after a restart): `replied`
+  same decision returns the recorded result and sends nothing; `replied` other decision
+  `IDEMPOTENCY_CONFLICT`; `unknown` or `in_flight` returns the recorded `UNKNOWN_OUTCOME` with its
+  `attempt_id` and `attempt` and sends nothing; `refused` is re-evaluated. A native 404 is
+  `NOT_FOUND`/`resolved_elsewhere_or_dropped` (record `refused`), a native 400 `UPSTREAM_FAILURE`/
+  `native_rejected_id` (record `refused`), anything else (timeout, lost response, 5xx) is
+  `UNKNOWN_OUTCOME` (`retryable: false`) and is never resent.
+- **`supersedes`** is honored only from state `unknown`: `in_flight` `SESSION_BUSY`/`attempt_in_flight`
+  (retryable); `replied` `IDEMPOTENCY_CONFLICT`/`already_replied`; `refused` or no record
+  `INVALID_INPUT`/`nothing_to_supersede`; a value that is not the record's `attempt_id`
+  `INVALID_INPUT`/`supersedes_mismatch`; a second supersede `FORBIDDEN`/`supersede_limit`; an
+  `allow_once` record `FORBIDDEN`/`supersede_allow_once_not_offered`; another decision
+  `INVALID_INPUT`. None makes a permission read or a native write. An accepted supersede re-reads,
+  requires the request still pending, and is attempt 2 under a new `attempt_id` with
+  `supersedes=<attempt_id>` in its attempt line (D15 Q8: one explicit superseding `reject`).
+- **Attempt line** (`event=permission_reply phase=attempt`, AUDIT-01 shape, allowlisted closed-shape
+  fields only; no new record type): `tool, attempt, attempt_id, supersedes?, decision, process_start,
+  permission_id, execution_id, session_id, native_tool, kind, scope_digest, pattern_count,
+  policy_mode=reject_only, policy_rule=reject_allowed, principal, decided_by=chat_client,
+  human_verified=false`. The `phase=result` and `phase=refused` lines are slice S5; the generic
+  AUDIT-01 writer writes no line for this tool.
+- **Not served by a deployed Bridge:** the tool is registered only when the server has a
+  `PermissionRelay` configuration (`reject_only`); nothing in `cmd/bridge` sets it (D15 Q3: the
+  registration lands with S5), and the manager has no production native reply client or attempt
+  writer installed, so a call would fail closed anyway. A deployed Bridge keeps its eleven tools.
+- **ADR-024 S1 changes in this slice:** `get_session` reports a measured `pending_permission_count`
+  of `0` while the state is `waiting_for_permission` (it stays absent when the permission read failed
+  or the state is not waiting); a `resolved_externally` tombstone of an execution no longer hides its
+  one pending request from `pending_permission` (uncertain entries still do); the permission-source
+  call has a deadline of its own.
 
 ### Discovery bootstraps native instances (H4A-F2, 2026-11-05)
 

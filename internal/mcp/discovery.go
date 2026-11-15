@@ -190,9 +190,11 @@ func (s *Server) describe(ctx context.Context, v opencode.Session, _ *opencode.C
 	}
 	runGuardWindowHook()
 	out := s.view(v, d, visible)
-	// ADR-024 S1: only while waiting for permission and only when the permission
-	// read succeeded; otherwise the field is absent (never a fabricated zero).
-	if out.State == "waiting_for_permission" && d.permissionsOK && d.permissionCounts[v.ID] > 0 {
+	// ADR-024 S1: only while waiting for permission and only when the permission read
+	// succeeded; otherwise the field is absent (never a fabricated zero). A guarded execution
+	// can report waiting while the measured count is zero (its cached state lags the read);
+	// that measured zero is reported, not omitted (review #208).
+	if out.State == "waiting_for_permission" && d.permissionsOK {
 		n := d.permissionCounts[v.ID]
 		out.PendingPermissionCount = &n
 	}

@@ -28,7 +28,12 @@ type auditRecord struct {
 
 var auditExecutionPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-func mutating(name string) bool { return name == "send_prompt" || name == "interrupt_execution" }
+// mutating names the tools that mutate a native session. The set gates BRIDGE_READ_ONLY (call)
+// and the AUDIT-01 middleware. reply_permission (ADR-024 S3) is in it: a tool missing here would
+// be neither blocked in read-only mode nor audited.
+func mutating(name string) bool {
+	return name == "send_prompt" || name == "interrupt_execution" || name == "reply_permission"
+}
 
 // auditPrincipal is the configured remote operator; loopback-token mode has none.
 func (s *Server) auditPrincipal() string {
@@ -116,6 +121,13 @@ func rawAuditArgs(raw json.RawMessage) args {
 func (s *Server) audit(ctx context.Context, r *auditRecord, a args, out any, err error) {
 	if mark, ok := ctx.Value(auditMarkKey{}).(*auditMark); ok {
 		mark.written.Store(true)
+	}
+	if r.tool == "reply_permission" {
+		// ADR-024 S5 owns the permission_reply result/refused lines (section 6). The attempt line
+		// is written before the native call by internal/audit; a line from this generic writer
+		// would carry the event of a prompt submission. The tool is not registered in the
+		// production server until S5 (see PermissionRelayConfig), so no mutation goes unaudited.
+		return
 	}
 	event, outcome := "prompt_submission", "new"
 	if r.tool == "interrupt_execution" {
