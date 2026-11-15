@@ -301,6 +301,7 @@ The invariants, each of which becomes a test in S6 (section 8):
 | T7 | The native session is deleted, or leaves the ACL or the lifecycle root | the entry is kept and ignored; no error | at most 1000 stale entries; un-archive removes one |
 | T8 | A prompt-injected Chat archives many sessions to hide them | the S6 controls of ADR-022 section 8: one session per call, `archive_per_hour` (default 10), `archive` mode per root, preconditions 7.3, an audit line per call, `BRIDGE_READ_ONLY` refuses; the overlay adds the 1000-entry bound | hiding is reversible (un-archive) and is not deletion |
 | T9 | Archive races a prompt, a guard release or reconcile | the lifecycle reservation of section 4.3 (never `x.op`, never an execution ID, so ADR-020 release cannot match it) and the pre-write re-check | a native or human writer can still race (ADR-022 5.1 residual) |
+| T13 | `create_session` runs while an archive or un-archive is in flight | none needed: `create_session` creates a **new** session ID and takes no archive reservation, so there is no shared reservation with the overlay; its caps count **native** sessions (the overlay is not in the count), so archiving or un-archiving frees or takes no create slot; neither path takes `x.op` (review #298 P3-4) | none |
 | T10 | The overlay is read as proof of "this session may be touched" | forbidden by section 5 and pinned by the dependency test | none if the test holds |
 
 ## 7. Consequences
