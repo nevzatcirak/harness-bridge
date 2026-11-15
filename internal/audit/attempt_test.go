@@ -77,7 +77,7 @@ func TestShapeIsAudit01(t *testing.T) {
 	if buf.String() != goodLine {
 		t.Fatalf("line = %q\nwant %q", buf.String(), goodLine)
 	}
-	attrs, err := good().attrs()
+	attrs, err := good().attrs(PhaseAttempt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,5 +392,210 @@ func TestCrossFieldConsistency(t *testing.T) {
 	g["policy_mode"] = "policy"
 	if err := newWriter().Write(context.Background(), g); err != nil {
 		t.Fatalf("allow_once under policy: %v", err)
+	}
+}
+
+func resultFields() Fields {
+	f := good()
+	f["outcome"], f["accepted"] = "replied", "true"
+	return f
+}
+func refusedFields() Fields {
+	return Fields{"tool": "reply_permission", "outcome": "refused", "accepted": "false", "error_code": "NOT_FOUND", "reason": "resolved_elsewhere_or_dropped",
+		"decision": "reject", "permission_id": "per_abc123", "execution_id": exID, "session_id": "opencode:ses_abc", "process_start": "2026-11-15T10:00:00Z",
+		"policy_mode": "reject_only", "principal": "local"}
+}
+
+// ADR-024 section 6: one line per phase. The three phases share the AUDIT-01 shape, the writer and
+// the latch; decided_by and human_verified are in every one of them.
+func TestPhaseLinesAreClosedAndShareTheWriter(t *testing.T) {
+	var buf bytes.Buffer
+	capture(t, &buf)
+	w := newWriter()
+	ctx := context.Background()
+	if err := w.WritePhase(ctx, PhaseResult, resultFields()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WritePhase(ctx, PhaseRefused, refusedFields()); err != nil {
+		t.Fatal(err)
+	}
+	wantResult := "INFO permission reply result event=permission_reply tool=reply_permission phase=result attempt=1 attempt_id=" + aid +
+		" outcome=replied accepted=true decision=reject permission_id=per_abc123 execution_id=" + exID + " session_id=opencode:ses_abc native_tool=bash kind=bash" +
+		" scope_digest=0123456789abcdef pattern_count=2 policy_mode=reject_only policy_rule=reject_always_allowed principal=local decided_by=chat_client human_verified=false\n"
+	wantRefused := "INFO permission reply refused event=permission_reply tool=reply_permission phase=refused outcome=refused accepted=false error_code=NOT_FOUND" +
+		" decision=reject process_start=2026-11-15T10:00:00Z permission_id=per_abc123 execution_id=" + exID + " session_id=opencode:ses_abc policy_mode=reject_only" +
+		" reason=resolved_elsewhere_or_dropped principal=local decided_by=chat_client human_verified=false\n"
+	if buf.String() != wantResult+wantRefused {
+		t.Fatalf("lines =\n%q\nwant\n%q", buf.String(), wantResult+wantRefused)
+	}
+}
+
+func TestPhaseFieldRules(t *testing.T) {
+	type tc struct {
+		name  string
+		phase string
+		f     func() Fields
+	}
+	del := func(k string) func(Fields) { return func(f Fields) { delete(f, k) } }
+	set := func(k, v string) func(Fields) { return func(f Fields) { f[k] = v } }
+	with := func(base func() Fields, m ...func(Fields)) func() Fields {
+		return func() Fields {
+			f := base()
+			for _, x := range m {
+				x(f)
+			}
+			return f
+		}
+	}
+	cases := []tc{
+		{"result without outcome", PhaseResult, with(resultFields, del("outcome"))},
+		{"result without accepted", PhaseResult, with(resultFields, del("accepted"))},
+		{"result without attempt_id", PhaseResult, with(resultFields, del("attempt_id"))},
+		{"result outcome outside the set", PhaseResult, with(resultFields, set("outcome", "weird"))},
+		{"replied but not accepted", PhaseResult, with(resultFields, set("accepted", "false"))},
+		{"replied with an error_code", PhaseResult, with(resultFields, set("error_code", "NOT_FOUND"))},
+		{"unknown_outcome accepted", PhaseResult, with(resultFields, set("outcome", "unknown_outcome"), set("error_code", "UNKNOWN_OUTCOME"))},
+		{"unknown_outcome without error_code", PhaseResult, with(resultFields, set("outcome", "unknown_outcome"), set("accepted", "false"))},
+		{"refused with an attempt number only", PhaseRefused, with(refusedFields, set("attempt", "1"))},
+		{"refused carrying a native description", PhaseRefused, with(refusedFields, set("native_tool", "bash"), set("kind", "bash"), set("scope_digest", "0123456789abcdef"), set("pattern_count", "1"))},
+		{"refused accepted", PhaseRefused, with(refusedFields, set("accepted", "true"))},
+		{"refused with another outcome", PhaseRefused, with(refusedFields, set("outcome", "replied"))},
+		{"refused without error_code", PhaseRefused, with(refusedFields, del("error_code"))},
+		{"free text in a refused reason", PhaseRefused, with(refusedFields, set("reason", "because the user said /etc/shadow"))},
+		{"unknown phase", "bogus", with(refusedFields)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			capture(t, &buf)
+			w := newWriter()
+			if err := w.WritePhase(context.Background(), c.phase, c.f()); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			}
+			if buf.Len() != 0 || w.Unavailable() {
+				t.Fatalf("wrote %q latched %v", buf.String(), w.Unavailable())
+			}
+		})
+	}
+	// good shapes: replay, a recorded UNKNOWN_OUTCOME quoted on a refused line, a failed result
+	var buf bytes.Buffer
+	capture(t, &buf)
+	w := newWriter()
+	for name, f := range map[string]struct {
+		phase string
+		f     Fields
+	}{
+		"replay":                           {PhaseResult, with(resultFields, set("outcome", "replay"))()},
+		"unknown result":                   {PhaseResult, with(resultFields, set("outcome", "unknown_outcome"), set("accepted", "false"), set("error_code", "UNKNOWN_OUTCOME"))()},
+		"not found result":                 {PhaseResult, with(resultFields, set("outcome", "not_found"), set("accepted", "false"), set("error_code", "NOT_FOUND"), set("reason", "resolved_elsewhere_or_dropped"))()},
+		"refused with a recorded envelope": {PhaseRefused, with(refusedFields, set("error_code", "UNKNOWN_OUTCOME"), set("attempt", "1"), set("attempt_id", aid))()},
+		"refused minimal":                  {PhaseRefused, Fields{"tool": "reply_permission", "outcome": "refused", "accepted": "false", "error_code": "INVALID_INPUT"}},
+	} {
+		if err := w.WritePhase(context.Background(), f.phase, f.f); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestCleanDropsEverythingOutsideTheClosedShapes(t *testing.T) {
+	in := Fields{"tool": "reply_permission", "permission_id": "../etc/passwd", "decision": "always", "execution_id": exID, "prompt": "secret", "reason": "free text here", "principal": "local"}
+	got := Clean(in)
+	if len(got) != 3 || got["tool"] != "reply_permission" || got["execution_id"] != exID || got["principal"] != "local" {
+		t.Fatalf("Clean = %v", got)
+	}
+	if _, ok := got["prompt"]; ok {
+		t.Fatal("a non-allowlisted key survived Clean")
+	}
+}
+
+// Review #277 P3-2, decided at S5: the write honours its context. A journal that hangs past the
+// deadline latches the writer and refuses the call; a caller that merely went away refuses the
+// call without latching.
+func TestWriteIsBoundedByTheContext(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	w := newWriter()
+	w.handler = func() slog.Handler { return hangHandler{release} }
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	errc := make(chan error, 1)
+	go func() { errc <- w.Write(ctx, good()) }()
+	var err error
+	select {
+	case err = <-errc:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Write did not return: the attempt write is not bounded by its context")
+	}
+	if !errors.Is(err, ErrUnavailable) || time.Since(start) > 2*time.Second {
+		t.Fatalf("err = %v after %v", err, time.Since(start))
+	}
+	if !w.Unavailable() {
+		t.Fatal("a journal that hung past the deadline did not latch the writer")
+	}
+	// the latch refuses the next call without calling the handler
+	if err := w.Write(context.Background(), good()); !errors.Is(err, ErrUnavailable) {
+		t.Fatal(err)
+	}
+	// a canceled caller: refused, not latched
+	w2 := newWriter()
+	w2.handler = func() slog.Handler { return hangHandler{release} }
+	cctx, ccancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(30 * time.Millisecond); ccancel() }()
+	if err := w2.Write(cctx, good()); !errors.Is(err, ErrUnavailable) || w2.Unavailable() {
+		t.Fatalf("canceled: err = %v latched = %v", err, w2.Unavailable())
+	}
+	// an already-done context: nothing is written, nothing latched
+	var buf bytes.Buffer
+	capture(t, &buf)
+	w3 := newWriter()
+	dctx, dcancel := context.WithCancel(context.Background())
+	dcancel()
+	if err := w3.Write(dctx, good()); !errors.Is(err, ErrUnavailable) || w3.Unavailable() || buf.Len() != 0 {
+		t.Fatalf("done ctx: err = %v latched = %v wrote %q", err, w3.Unavailable(), buf.String())
+	}
+}
+
+type hangHandler struct{ release chan struct{} }
+
+func (hangHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h hangHandler) Handle(context.Context, slog.Record) error {
+	<-h.release
+	return nil
+}
+func (h hangHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h hangHandler) WithGroup(string) slog.Handler      { return h }
+
+// Review #277 P3-2 / #285 B P3-2: the bounds of the tool, the manager and the audit field agree.
+func TestMaximumLengthIdsAreAccepted(t *testing.T) {
+	var buf bytes.Buffer
+	capture(t, &buf)
+	f := good()
+	f["permission_id"] = "per" + strings.Repeat("a", 125)
+	f["session_id"] = "opencode:ses" + strings.Repeat("b", 253)
+	if err := newWriter().Write(context.Background(), f); err != nil {
+		t.Fatalf("maximum-length ids refused: %v", err)
+	}
+	f["permission_id"] = "per" + strings.Repeat("a", 126)
+	if err := newWriter().Write(context.Background(), f); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an over-long permission id: %v", err)
+	}
+}
+
+func TestSetJournalForTestingClearsAndRestoresTheLatch(t *testing.T) {
+	w := newWriter()
+	w.unavailable.Store(true)
+	var buf bytes.Buffer
+	restore := w.SetJournalForTesting(slog.NewTextHandler(&buf, nil))
+	if w.Unavailable() {
+		t.Fatal("the latch survived the seam")
+	}
+	if err := w.Write(context.Background(), good()); err != nil || buf.Len() == 0 {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+	w.unavailable.Store(true)
+	restore()
+	if w.Unavailable() {
+		t.Fatal("restore left the latch set")
 	}
 }

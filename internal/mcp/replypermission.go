@@ -22,6 +22,11 @@ func (s *Server) replyPermissionCall(ctx context.Context, a args) (any, error) {
 	if s.Claude != nil && s.Claude.Owns(a.ExecutionID) {
 		return nil, execution.Fail("INVALID_INPUT", "reply_permission accepts only OpenCode executions")
 	}
+	// ADR-024 4.2 step 9: once the audit is unavailable every later call is refused, before any
+	// native call.
+	if s.Runs.AuditLatched() {
+		return nil, execution.AuditUnavailable()
+	}
 	// Step 3: the execution exists in this writer and its session is authorized (ADR-012 ACL
 	// and workspace), exactly as for the other execution tools.
 	x, e := s.Runs.Snapshot(ctx, a.ExecutionID)

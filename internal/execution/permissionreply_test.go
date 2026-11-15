@@ -17,8 +17,19 @@ import (
 // events is the shared, ordered log of every observable side effect, so a test can assert
 // "the attempt record was written before the native call" and "nothing was written natively".
 type events struct {
-	mu  sync.Mutex
-	log []string
+	mu   sync.Mutex
+	log  []string
+	hook func() // runs inside the call under test's permission read (marked context only)
+}
+
+func (e *events) setHook(f func()) { e.mu.Lock(); e.hook = f; e.mu.Unlock() }
+func (e *events) runHook() {
+	e.mu.Lock()
+	f := e.hook
+	e.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 func (e *events) add(s string) {
@@ -48,21 +59,27 @@ type replierFake struct {
 	mu      sync.Mutex
 	errs    []error // consumed one per call; nil entry or exhausted = success
 	args    [][3]string
+	dirs    []string
+	panicOn bool
 	entered chan struct{} // closed on the first call when set
 	hold    chan struct{} // blocks every call until closed when set
 }
 
-func (r *replierFake) ReplyPermission(ctx context.Context, session, id, reply string) error {
+func (r *replierFake) ReplyPermission(ctx context.Context, session, directory, id, reply string) error {
 	r.ev.add("native:" + reply)
 	r.mu.Lock()
 	r.args = append(r.args, [3]string{session, id, reply})
+	r.dirs = append(r.dirs, directory)
 	var err error
 	if len(r.errs) > 0 {
 		err, r.errs = r.errs[0], r.errs[1:]
 	}
-	entered, hold := r.entered, r.hold
+	entered, hold, pan := r.entered, r.hold, r.panicOn
 	r.entered = nil
 	r.mu.Unlock()
+	if pan {
+		panic("replier panic")
+	}
 	if entered != nil {
 		close(entered)
 	}
@@ -94,11 +111,57 @@ func (r *replierFake) calls() [][3]string {
 	return append([][3]string(nil), r.args...)
 }
 
+type phaseLine struct {
+	phase string
+	f     audit.Fields
+}
+
 type attemptFake struct {
-	ev    *events
-	mu    sync.Mutex
-	errs  []error
-	lines []audit.Fields
+	ev        *events
+	mu        sync.Mutex
+	errs      []error
+	lines     []audit.Fields
+	phases    []phaseLine
+	latched   bool
+	phaseErrs []error
+}
+
+func (a *attemptFake) Unavailable() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.latched }
+func (a *attemptFake) latch()            { a.mu.Lock(); a.latched = true; a.mu.Unlock() }
+
+// WritePhase records the result and refused lines apart from the attempt lines.
+func (a *attemptFake) WritePhase(_ context.Context, phase string, f audit.Fields) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ev.add("line:" + phase)
+	if len(a.phaseErrs) > 0 {
+		var err error
+		err, a.phaseErrs = a.phaseErrs[0], a.phaseErrs[1:]
+		if err != nil {
+			a.latched = true
+			return err
+		}
+	}
+	c := audit.Fields{}
+	for k, v := range f {
+		c[k] = v
+	}
+	if _, err := audit.CheckForTesting(phase, c); err != nil {
+		return err
+	}
+	a.phases = append(a.phases, phaseLine{phase, c})
+	return nil
+}
+func (a *attemptFake) phaseLines(phase string) []audit.Fields {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []audit.Fields
+	for _, l := range a.phases {
+		if l.phase == phase {
+			out = append(out, l.f)
+		}
+	}
+	return out
 }
 
 func (a *attemptFake) Write(_ context.Context, f audit.Fields) error {
@@ -115,6 +178,9 @@ func (a *attemptFake) Write(_ context.Context, f audit.Fields) error {
 	c := audit.Fields{}
 	for k, v := range f {
 		c[k] = v
+	}
+	if _, err := audit.CheckForTesting(audit.PhaseAttempt, c); err != nil {
+		return err
 	}
 	a.lines = append(a.lines, c)
 	return nil
@@ -143,6 +209,7 @@ type markedSource struct {
 func (s markedSource) PermissionView(ctx context.Context, session string) (opencode.PermissionObservationBatch, error) {
 	if ctx.Value(replyCallKey{}) != nil {
 		s.ev.add("read")
+		s.ev.runHook()
 	}
 	return s.inner.PermissionView(ctx, session)
 }
@@ -265,8 +332,11 @@ func TestReplyRejectOneNativeWriteAfterTheAttemptRecord(t *testing.T) {
 		t.Fatalf("native writes = %v", calls)
 	}
 	// Order: the fresh re-read, then the attempt record, then the native write.
-	if got := strings.Join(fx.ev.snapshot(), ","); got != "read,attempt,native:reject" {
-		t.Fatalf("event order = %s, want read,attempt,native:reject", got)
+	if got := strings.Join(fx.ev.snapshot(), ","); got != "read,attempt,native:reject,line:result" {
+		t.Fatalf("event order = %s, want read,attempt,native:reject,line:result", got)
+	}
+	if dirs := func() []string { fx.rep.mu.Lock(); defer fx.rep.mu.Unlock(); return fx.rep.dirs }(); len(dirs) != 1 || dirs[0] != "/" {
+		t.Fatalf("native write routed to %v, want the execution's directory", dirs)
 	}
 	lines := fx.aw.written()
 	if len(lines) != 1 {

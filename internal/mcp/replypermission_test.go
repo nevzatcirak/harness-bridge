@@ -62,28 +62,69 @@ func (r *relaySource) set(f func()) {
 type relayReplier struct {
 	mu    sync.Mutex
 	calls [][3]string
+	dirs  []string
 	err   error
 }
 
-func (r *relayReplier) ReplyPermission(_ context.Context, session, id, reply string) error {
+func (r *relayReplier) ReplyPermission(_ context.Context, session, directory, id, reply string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, [3]string{session, id, reply})
+	r.dirs = append(r.dirs, directory)
 	return r.err
 }
 func (r *relayReplier) n() int { r.mu.Lock(); defer r.mu.Unlock(); return len(r.calls) }
 
 type relayAttempts struct {
-	mu    sync.Mutex
-	lines []audit.Fields
-	err   error
+	mu      sync.Mutex
+	lines   []audit.Fields
+	phases  []audit.Fields
+	phaseOf []string
+	err     error
+	latched bool
+}
+
+func (a *relayAttempts) Unavailable() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.latched }
+
+// WritePhase validates with the real validator and records the result and refused lines.
+func (a *relayAttempts) WritePhase(_ context.Context, phase string, f audit.Fields) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.err != nil {
+		a.latched = true
+		return a.err
+	}
+	if _, err := audit.CheckForTesting(phase, f); err != nil {
+		return err
+	}
+	c := audit.Fields{}
+	for k, v := range f {
+		c[k] = v
+	}
+	a.phases, a.phaseOf = append(a.phases, c), append(a.phaseOf, phase)
+	return nil
+}
+func (a *relayAttempts) linesOf(phase string) []audit.Fields {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []audit.Fields
+	for i, p := range a.phaseOf {
+		if p == phase {
+			out = append(out, a.phases[i])
+		}
+	}
+	return out
 }
 
 func (a *relayAttempts) Write(_ context.Context, f audit.Fields) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.err != nil {
+		a.latched = true
 		return a.err
+	}
+	if _, err := audit.CheckForTesting(audit.PhaseAttempt, f); err != nil {
+		return err
 	}
 	c := audit.Fields{}
 	for k, v := range f {
@@ -372,6 +413,7 @@ func TestReplyPermissionErrorEnvelopeFields(t *testing.T) {
 	}
 	e.aw.mu.Lock()
 	e.aw.err = nil
+	e.aw.latched = false // test only: the latch is sticky until a restart, which this stands in for
 	e.aw.mu.Unlock()
 	// UNKNOWN_OUTCOME (a lost response): the only error that carries attempt_id and attempt.
 	e.rep.mu.Lock()

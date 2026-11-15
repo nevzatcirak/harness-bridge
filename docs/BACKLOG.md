@@ -151,3 +151,12 @@ Open items recorded here, not fixed:
 - Latch recovery stays restart-only; the dashboard ring still drops `permission_reply`; `audit_unavailable` still uses `UPSTREAM_FAILURE` (maintainer proposals from #274).
 - `list_catalog`/`get_session` expose no permission request detail beyond S1; a patterns exposure is policy mode only (D15 Q2 deferred).
 - A hung attempt journal blocks the call (documented in ADR-024 4.2 step 8, not bounded).
+
+### ADR-024 S5 `reply_permission` audit lines and registration (task #288): deferred items (2026-11-15, appended)
+
+- **Production `PermissionSource` (own slice, needed before the tool can answer anything).** The observer needs a `PermissionObservationAuthority` (principal, native version check, policy revision, a read-only submitted-run view of the manager). Until then the registered tool fails closed and `pending_permission` is count-only. S1 and S3 were built against fakes for the same reason.
+- S6 (runbook, ADR-018 section 5 status) is still open; the runbook should state `BRIDGE_PERMISSION_RELAY` and the per-call claude.ai approval recommendation (D15 Q7).
+- Workspace-bound sessions use the prompt/abort routing (directory only); a workspace-routed reply is not built.
+- Latch recovery stays restart-only, the dashboard ring still drops `permission_reply`, `audit_unavailable` still uses `UPSTREAM_FAILURE` (maintainer proposals from #274).
+- A late journal write after a bounded attempt write timed out can leave an attempt line with no native write (over-reports, never hides).
+- A result line that cannot be written is logged through slog, which uses the same failed journal: the loud log may itself be lost; the latch is the durable signal.

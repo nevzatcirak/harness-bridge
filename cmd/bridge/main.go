@@ -83,6 +83,13 @@ func main() {
 	if claude != nil {
 		mcpServer.Claude = claude // only when enabled: a nil *Harness must never reach the interface
 	}
+	// ADR-024 S5 (D15 Q3): reply_permission is registered in reject_only by default;
+	// BRIDGE_PERMISSION_RELAY=off keeps the eleven-tool surface.
+	relay, err := permissionRelayMode(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wirePermissionRelay(mcpServer, runs, client, relay)
 	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {
 		log.Fatal(err)

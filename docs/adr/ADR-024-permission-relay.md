@@ -275,12 +275,15 @@ and no native write, but are not "zero native calls".
    proposal), the in-memory record is `refused`, and nothing is sent. Only then
    `POST /permission/:requestID/reply` with `{reply}` and no `message`, under the
    5 s native bound and the run's token (so it cannot interleave with a prompt,
-   interrupt or an ADR-020 release). **Blocking behaviour (S3, review #277 P3-2):**
-   the attempt write is not bounded by the call's context. A hung journal blocks the
-   call while it holds the run token; it also blocks every other log line of the
-   process (the destination and its lock are shared), so a per-call bound would not
-   unwedge the Bridge, and bounding it with a goroutine could leave an `attempt` line
-   written after the call refused. The behaviour is recorded, not changed.
+   interrupt or an ADR-020 release). **Blocking behaviour (review #277 P3-2; S3
+   recorded it, S5 decided it):** the attempt write is bounded by the call's context.
+   A journal that hangs past the bound latches the writer and the call refuses with
+   `audit_unavailable`; a canceled caller refuses the call without latching. Reason:
+   an unbounded write would hold the run token and a reconcile slot (at most four)
+   for as long as the journal hangs, starving every execution's reconciliation, while
+   the journal's other users are no worse off. The cost is stated: the line may reach
+   the journal after the call refused, leaving an `attempt` line with no native write,
+   which over-reports an attempt and never hides one; the latch stops every later call.
 9. Write the outcome record (`phase=result`) and return. If the **result**
    record cannot be written after the native call happened, the call still
    returns the real outcome (it cannot be unsent), the in-memory record is kept,
@@ -750,6 +753,47 @@ is **not registered in the production server** and a deployed Bridge keeps its e
   pending request (an uncertain entry still does); the `PermissionSource` call has its own deadline.
   The waiting-state condition of `describe` is pinned by a test (a running guarded execution with a
   measured zero reports no count).
+
+## As built (S5), 2026-11-15
+
+Facts only (task #288). `reply_permission` (reject) is registered by default and writes its audit
+lines; the production replier exists; the S3 review hardening is in.
+
+- **Registration.** `cmd/bridge` calls `wirePermissionRelay` with the mode of `BRIDGE_PERMISSION_RELAY`
+  (unset or `reject_only`: the OpenCode client as the one `PermissionReplier`, `audit.Default()` as the
+  `AttemptWriter`, `Server.PermissionRelay = reject_only`; `off`: nothing installed, eleven tools; `policy`
+  and any other value: startup error, policy mode is not started, D15 Q1). The variable and its values are
+  ADR section 5's; that startup refuses `policy` instead of treating it as `reject_only` is an author choice.
+- **No production `PermissionSource`.** Nothing installs one: the observer needs an authority
+  (`PermissionObservationAuthority`: scope with principal, native version, policy revision; the manager's
+  submitted executions) that does not exist. So on a deployed Bridge the re-read of 4.2 step 5 fails closed
+  (`UPSTREAM_FAILURE`, before any attempt line and any native write) and `pending_permission` is count-only.
+  The registration is in place as D15 Q3 decided; the tool cannot answer a request until the source slice.
+- **Replier.** `opencode.Client.ReplyPermission(ctx, session, directory, requestID, "reject")`: one `POST
+  /permission/:requestID/reply`, body `{"reply":"reject"}`, `?directory=`; only `reject`, only well-formed
+  targets. The manager passes the run's own directory (the workspace-bound session routing is the one of
+  prompt and abort: directory only).
+- **Lines.** `internal/audit` writes the three phases (`attempt`, `result`, `refused`) through one writer, one
+  lock, one latch; the manager writes `attempt` and `result` (it holds the details), the MCP audit hook writes
+  the one line of every other return path through `Manager.AuditReply`, using a per-call `ReplyTrace` so a call
+  that the manager closed is not closed twice. `result` carries `outcome` replied / not_found /
+  native_rejected_id / unknown_outcome (or replay), `accepted`, `error_code`, `reason`. Closed-shape values only
+  (`audit.Clean` drops anything else; an unknown error code becomes `INTERNAL`). `decided_by=chat_client` and
+  `human_verified=false` in every line and in the result. The generic AUDIT-01 writer writes nothing for this tool.
+- **Step 9, decided.** After any failed audit write every later call is refused with `audit_unavailable`,
+  including a replay that would send nothing (answer to the open #197 item "whether same-key replays are still
+  served"): a call whose line cannot be written is not served. The MCP layer asks first, so a latched call makes
+  no native call. A failed result line leaves the outcome and record intact and latches. Recovery stays restart
+  only. P3-2 decided in 4.2 step 8 (bound by the context).
+- **Hardening (reviews #285 B, #286 C on #283).** Panicking replier: record `unknown`, `UNKNOWN_OUTCOME` with
+  `attempt_id`, result line, supersede works. One id bound end to end (`permission_id` 128, session id 256).
+  Slot/token wait deadline: retryable `UPSTREAM_TIMEOUT`. Manager-side `allow_once` refusal before any native read.
+  Directory identity re-check pinned (replaced workspace `FORBIDDEN`; filesystem timeout retryable; no write, no
+  attempt line). 401/403/429/5xx pinned as `UNKNOWN_OUTCOME`.
+- **Author choices.** A replay of a recorded success writes a `result` line with `outcome=replay`; a replay of a
+  recorded `UNKNOWN_OUTCOME` writes a `refused` line quoting the recorded attempt; a refused line may quote
+  `attempt`/`attempt_id` only for that replay. Not done (maintainer proposals, unchanged): latch recovery, the
+  dashboard ring allowlist for `permission_reply`, a distinct error code for `audit_unavailable`.
 
 ## 13. Limitations of this record
 

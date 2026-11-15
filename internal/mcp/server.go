@@ -166,7 +166,10 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 	case "create_session":
 		return s.createCall(ctx, a)
 	case "reply_permission":
-		return s.replyPermissionCall(ctx, a)
+		// The manager records what it wrote on this trace; the deferred audit completes the call.
+		tctx, trace := execution.WithReplyTrace(ctx)
+		record.replyTrace, record.replyCtx = trace, tctx
+		return s.replyPermissionCall(tctx, a)
 	case "list_sessions":
 		list, e := s.discover(ctx)
 		return Sessions{Sessions: nonnil(list)}, e

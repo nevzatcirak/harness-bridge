@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -255,6 +256,22 @@ func (c *Client) Abort(ctx context.Context, id string) error {
 		return errors.New("abort rejected")
 	}
 	return nil
+}
+
+// ReplyPermission sends the one native permission reply of the permission relay (ADR-024 4.2 step
+// 8): POST /permission/:requestID/reply with {"reply":"reject"}, routed to the session's directory,
+// and nothing else: no message (a reject with feedback lets the native loop continue), no session
+// route (the deprecated one has no binding). Only "reject" is accepted: no code path of the Bridge
+// sends once or always (allow_once is slice S4, not started; D15 Q1). A 4xx/5xx is an *HTTPError for
+// the caller to classify.
+func (c *Client) ReplyPermission(ctx context.Context, session, directory, requestID, reply string) error {
+	if reply != "reject" {
+		return errors.New("only reject may be sent")
+	}
+	if !ValidID(session, "ses") || !ValidID(requestID, "per") || !filepath.IsAbs(directory) {
+		return errors.New("invalid native permission reply target")
+	}
+	return c.WithDirectory(directory).do(ctx, "POST", "/permission/"+requestID+"/reply", map[string]string{"reply": reply}, nil)
 }
 
 // InstanceID identifies the configured endpoint, not a verified process lifetime.
