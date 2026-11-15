@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
 	"github.com/nevzatcirak/harness-bridge/internal/admin"
+	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/mcp"
 	"github.com/nevzatcirak/harness-bridge/internal/security"
@@ -78,16 +79,16 @@ func main() {
 	}
 	// ADR-023 read-only dashboard: disabled unless BRIDGE_DASHBOARD_SOCKET or
 	// BRIDGE_DASHBOARD_ADDR is set; local transports only.
-	dash, err := openDashboard(os.Getenv)
+	mcpServer := &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly}
+	if claude != nil {
+		mcpServer.Claude = claude // only when enabled: a nil *Harness must never reach the interface
+	}
+	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {
 		log.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	bridge := &mcp.Server{Client: client, Runs: runs, Token: token, Policy: policy, Remote: cfg.remote, ReadOnly: cfg.readOnly}
-	if claude != nil {
-		bridge.Claude = claude // only when enabled: a nil *Harness must never reach the interface
-	}
-	mux.Handle("/mcp", bridge)
+	mux.Handle("/mcp", mcpServer)
 	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -123,6 +124,13 @@ func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Han
 			http.Error(w, "bad host", http.StatusBadRequest)
 			return
 		}
+		// Origin (ADR-023 T3, T9): a request that carries an Origin must come from the
+		// dashboard's own origin. With the TCP transport that is a host on the allowlist;
+		// the unix socket has no browser origin at all, so any Origin is refused there.
+		if o := r.Header.Get("Origin"); o != "" && !originAllowed(o, hosts) {
+			http.Error(w, "bad origin", http.StatusForbidden)
+			return
+		}
 		// Read-only by construction: any method but GET/HEAD is refused before
 		// routing, whatever the path.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -160,6 +168,17 @@ func NewHandlerOptions(src Source, allowedHosts []string, opts Options) http.Han
 		defer cancel()
 		route.Handler.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func originAllowed(origin string, hosts map[string]bool) bool {
+	if len(hosts) == 0 {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return false
+	}
+	return hosts[normalizeHost(u.Host)]
 }
 
 func methodIn(methods []string, m string) bool {

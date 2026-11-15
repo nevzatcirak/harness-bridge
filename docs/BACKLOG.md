@@ -113,6 +113,15 @@ Open items recorded here, not fixed:
 - `create_session` is serialized (one at a time) so the caps hold; a slow native read delays the next create by at most its 5 s bound.
 - Equivalent mutant noted in review: dropping the `..` component check in the tool still ends in `INVALID_INPUT`, because the S2 authorizer refuses the non-canonical joined path (two layers).
 
+### ADR-023 slice 5a (production source, wiring, redaction config): deferred items (2026-11-15, appended)
+
+- R-DASH is **NOT_EXERCISED**: the source is tested against a fake native only; the recorded native shapes (`summary.diffs`, `/session/:id/diff`, `/vcs/diff`) are still unverified against a live server.
+- `BRIDGE_DASHBOARD_REDACT_EXTRA` (JSON array of patterns) is a proposal of this slice; the ADR did not name the source. The dashboard variables are still not documented in `docs/CONTRACTS.md` or the deployment docs (slice 5b/docs).
+- Lifecycle-root rows (D17 Q6) and the archive overlay (D17 Q7) are not wired: `DashboardSource(nil)`; the overlay parameter exists so ADR-022 S6/S8 can plug in without a new contract.
+- The derived discovery server has its own two discovery slots, so dashboard polling and MCP discovery do not queue behind each other; the combined native load is up to four concurrent discoveries.
+- Claude Code rows are pending placeholders (state `unknown`); real state, history and diffs wait for the ADR-021 dashboard interface (the wiring, PR #264, is merged).
+- Last activity shows native `time.updated` only; Bridge-observed activity (executions) is shown in the detail page.
+
 ### ADR-021 wiring (task #263, review fixes #268): deferred items (2026-11-14, appended)
 
 - **`list_catalog` omits Claude Code sessions** (a deviation from ADR-022 section 6.2, which lists every harness's sessions, until a later slice adds the Claude rows with an instance-qualified `session_ref`). A `claudecode:` entry in `BRIDGE_ALLOWED_SESSIONS` no longer fails the catalog (it is skipped before the native client, like every discovery call); the Claude session is simply not a catalog row. `list_sessions` and `find_sessions` do list it when the adapter is enabled.

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"errors"
 	"regexp"
 )
@@ -82,4 +83,29 @@ func (r *Redactor) Redact(s string) (string, int) {
 		s = re.ReplaceAllStringFunc(s, func(string) string { n++; return redactedText })
 	}
 	return s, n
+}
+
+// EnvRedactExtra names the operator's additional redaction patterns (D17 Q5): a JSON
+// array of RE2 patterns, for example BRIDGE_DASHBOARD_REDACT_EXTRA='["corp-[0-9a-f]{16}"]'.
+// The patterns are additive: the shipped list stays on. Unset means the shipped list only.
+const EnvRedactExtra = "BRIDGE_DASHBOARD_REDACT_EXTRA"
+
+// RedactorFromEnv builds the redactor from BRIDGE_DASHBOARD_REDACT_EXTRA. An invalid
+// value (not a JSON array of strings, too many or too long patterns, a pattern that does
+// not compile) is an error, so the Bridge fails closed at startup. No error carries the
+// value or any pattern text: the configuration is never echoed or logged.
+func RedactorFromEnv(env func(string) string) (*Redactor, error) {
+	raw := env(EnvRedactExtra)
+	if raw == "" {
+		return NewRedactor(nil)
+	}
+	var extra []string
+	if err := json.Unmarshal([]byte(raw), &extra); err != nil || extra == nil { // "null" decodes to nil without error: not an array
+		return nil, errors.New(EnvRedactExtra + " must be a JSON array of strings")
+	}
+	r, err := NewRedactor(extra)
+	if err != nil {
+		return nil, errors.New(EnvRedactExtra + " is invalid: at most 16 patterns of 1 to 256 bytes that compile as RE2")
+	}
+	return r, nil
 }

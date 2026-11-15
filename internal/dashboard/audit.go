@@ -125,9 +125,20 @@ type auditTee struct {
 	grouped bool        // WithGroup was called: later attributes are namespaced, so none is allowlisted
 }
 
-// NewAuditTee returns the tee of journal and ring.
+// NewAuditTee returns the tee of journal and ring, redacting ring values with the shipped list.
 func NewAuditTee(journal slog.Handler, ring *AuditRing) slog.Handler {
-	return &auditTee{journal: journal, ring: ring, red: DefaultRedactor()}
+	return NewAuditTeeRedacted(journal, ring, nil)
+}
+
+// NewAuditTeeRedacted is NewAuditTee with the dashboard's redactor (the shipped list plus
+// the operator's patterns), so the ring never holds a value the operator asked to redact.
+// Redaction is display-only: the journal branch receives the record untouched. A nil
+// redactor means the shipped list.
+func NewAuditTeeRedacted(journal slog.Handler, ring *AuditRing, red *Redactor) slog.Handler {
+	if red == nil {
+		red = DefaultRedactor()
+	}
+	return &auditTee{journal: journal, ring: ring, red: red}
 }
 
 // Enabled is true when the journal wants the record or the ring could (Info and up).
@@ -339,7 +350,11 @@ func isStdDefault(h slog.Handler) bool { return fmt.Sprintf("%T", h) == "*slog.d
 // it is used as the journal branch as it is. Not supported: the log flags Lshortfile and
 // Llongfile (a journal line would name the tee, not the caller; the Bridge uses neither),
 // and installing a second tee over this one. Call it once, before the first audit line.
-func InstallAuditTee(ring *AuditRing) (restore func()) {
+func InstallAuditTee(ring *AuditRing) (restore func()) { return InstallAuditTeeRedacted(ring, nil) }
+
+// InstallAuditTeeRedacted is InstallAuditTee with the dashboard's redactor (nil: the shipped
+// list); see NewAuditTeeRedacted.
+func InstallAuditTeeRedacted(ring *AuditRing, red *Redactor) (restore func()) {
 	prev := slog.Default()
 	w, flags, prefix := log.Writer(), log.Flags(), log.Prefix()
 	shared := &syncWriter{w: w}
@@ -347,7 +362,7 @@ func InstallAuditTee(ring *AuditRing) (restore func()) {
 	if isStdDefault(journal) {
 		journal = &stdJournal{enabled: journal, lg: log.New(shared, prefix, flags)}
 	}
-	slog.SetDefault(slog.New(NewAuditTee(journal, ring)))
+	slog.SetDefault(slog.New(NewAuditTeeRedacted(journal, ring, red)))
 	if teeInstallWindow != nil {
 		teeInstallWindow()
 	}
