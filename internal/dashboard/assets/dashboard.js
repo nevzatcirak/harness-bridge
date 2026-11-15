@@ -23,13 +23,14 @@
   var kind = app.getAttribute('data-poll');
   if (!kind || typeof fetch !== 'function') { return; }
   var url, visibleMs, hiddenMs;
+  var archivedQuery = /(^|[?&])archived=1(&|$)/.test(window.location.search) ? '?archived=1' : '';
   if (kind === 'list') {
-    url = '/api/state';
+    url = '/api/state' + archivedQuery;
     visibleMs = 5000; hiddenMs = 5000; // the list polls every 5 s
   } else if (kind === 'detail') {
     var h = app.getAttribute('data-harness'), id = app.getAttribute('data-session');
     if (!h || !id) { return; }
-    url = '/api/state/session/' + encodeURIComponent(h) + '/' + encodeURIComponent(id);
+    url = '/api/state/session/' + encodeURIComponent(h) + '/' + encodeURIComponent(id) + archivedQuery;
     visibleMs = 2000; hiddenMs = 10000; // 2 s while visible, 10 s when hidden
   } else {
     return;
@@ -51,7 +52,7 @@
     if (m.sessions && m.sessions.length) {
       var table = el('table', null, 'sessions');
       var head = el('tr');
-      ['Harness', 'Session', 'Title', 'Root', 'State', 'Guard', 'Current execution', 'Last activity'].forEach(function (t) { head.appendChild(el('th', t)); });
+      ['Harness', 'Session', 'Title', 'Root', 'Lifecycle root', 'State', 'Guard', 'Current execution', 'Last activity'].forEach(function (t) { head.appendChild(el('th', t)); });
       table.appendChild(el('thead')).appendChild(head);
       var body = el('tbody');
       m.sessions.forEach(function (s) {
@@ -60,8 +61,10 @@
         cell(tr).appendChild(badge);
         var idCell = cell(tr), href = safeHref(s.href);
         if (href) { var a = el('a', s.id); a.setAttribute('href', href); idCell.appendChild(a); } else { idCell.textContent = s.id; }
+        if (s.archived) { idCell.appendChild(document.createTextNode(' ')); idCell.appendChild(el('span', 'archived', 'badge archived')); }
         cell(tr, s.title);
         cell(tr).appendChild(el('code', s.root));
+        if (s.lifecycle_root) { cell(tr).appendChild(el('code', s.lifecycle_root)); } else { cell(tr, '-'); }
         cell(tr, s.state);
         cell(tr, guardText(s.guard));
         cell(tr, s.current_execution || '-');
@@ -76,10 +79,10 @@
 
   function renderDetail(m) {
     var s = m.session || {};
-    var set = {title: s.title, root: s.root, state: s.state, guard: guardText(s.guard), current: s.current_execution || '-', last: s.last_activity};
+    var set = {title: s.title, root: s.root, lifecycle: s.lifecycle_root || '', state: s.state, guard: guardText(s.guard), current: s.current_execution || '-', last: s.last_activity};
     Object.keys(set).forEach(function (k) {
       var dd = app.querySelector('dd[data-f="' + k + '"]');
-      if (dd) { if (k === 'root') { dd.textContent = ''; dd.appendChild(el('code', set[k])); } else { dd.textContent = set[k]; } }
+      if (dd) { if (k === 'root' || k === 'lifecycle') { dd.textContent = ''; if (set[k]) { dd.appendChild(el('code', set[k])); } else { dd.textContent = '-'; } } else { dd.textContent = set[k]; } }
     });
     var tbody = document.getElementById('exec-rows');
     if (!tbody) {
