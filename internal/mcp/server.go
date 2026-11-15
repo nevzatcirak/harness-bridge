@@ -128,6 +128,20 @@ func sessionView(v opencode.Session) Session {
 }
 func (s *Server) call(ctx context.Context, name string, a args) (out any, err error) {
 	var record *auditRecord
+	if name == "create_session" {
+		// ADR-022 4.3: one session_create line on every return path, written by this deferred
+		// function before call returns, so before the result reaches the transport. A panic
+		// is audited as INTERNAL and continues.
+		ev := &createEvidence{rootIdx: -1}
+		ctx = context.WithValue(ctx, createEvKey{}, ev)
+		defer func() {
+			if p := recover(); p != nil {
+				s.auditCreate(ctx, ev, a, nil, execution.Fail("INTERNAL", "panic during create_session"))
+				panic(p)
+			}
+			s.auditCreate(ctx, ev, a, out, err)
+		}()
+	}
 	if mutating(name) {
 		// One audit line per mutating call outcome, written on every return path.
 		record = &auditRecord{tool: name}
