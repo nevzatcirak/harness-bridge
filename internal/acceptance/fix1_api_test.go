@@ -137,3 +137,14 @@ func TestOSDecoyFSMkdirAndNonEmptyDir(t *testing.T) {
 		t.Fatal("a file the driver did not write was deleted (no RemoveAll)")
 	}
 }
+
+// Every directory the driver creates (control directory, decoy parents) is removed again.
+func TestCleanupRemovesTheDirectoriesItCreated(t *testing.T) {
+	for _, item := range []int{1, 4, 6, 8} {
+		d, _, fsys := newTestDriver(t, &sim{})
+		d.RunItems(context.Background(), []int{item})
+		if len(fsys.dirs) != 0 || len(fsys.content) != 0 {
+			t.Errorf("item %d left dirs %v files %v", item, fsys.dirs, fsys.content)
+		}
+	}
+}
