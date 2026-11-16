@@ -38,6 +38,9 @@ type Server struct {
 	Claude ClaudeHarness
 	// Create enables the create_session tool (ADR-022 S4). Nil leaves it unregistered.
 	Create *CreateConfig
+	// Archive enables archive_session, unarchive_session and close_session (ADR-022 S6, ADR-025).
+	// Nil leaves all three unregistered (BRIDGE_OVERLAY_DIR unset, ADR-025 Q5).
+	Archive *ArchiveConfig
 	// PermissionRelay enables the reply_permission tool (ADR-024 S3). Nil (the default, and the
 	// only production value until S5) leaves it unregistered and refused if called directly.
 	PermissionRelay *PermissionRelayConfig
@@ -142,6 +145,20 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 			s.auditCreate(ctx, ev, a, out, err)
 		}()
 	}
+	if isArchiveTool(name) {
+		// ADR-025 4.6: one session_archive / session_unarchive / session_close line on every return
+		// path, by this deferred function before call returns. A panic is audited as INTERNAL and
+		// continues (the reservation is released by archiveCall's own defer).
+		ev := &archiveEvidence{rootIdx: -1, tool: name}
+		ctx = context.WithValue(ctx, archiveEvKey{}, ev)
+		defer func() {
+			if p := recover(); p != nil {
+				s.auditArchive(ctx, ev, a, nil, execution.Fail("INTERNAL", "panic during "+name))
+				panic(p)
+			}
+			s.auditArchive(ctx, ev, a, out, err)
+		}()
+	}
 	if mutating(name) {
 		// One audit line per mutating call outcome, written on every return path.
 		record = &auditRecord{tool: name}
@@ -165,6 +182,8 @@ func (s *Server) call(ctx context.Context, name string, a args) (out any, err er
 		return s.catalogCall(ctx, a)
 	case "create_session":
 		return s.createCall(ctx, a)
+	case "archive_session", "unarchive_session", "close_session":
+		return s.archiveCall(ctx, name, a)
 	case "reply_permission":
 		// The manager records what it wrote on this trace; the deferred audit completes the call.
 		tctx, trace := execution.WithReplyTrace(ctx)
@@ -318,6 +337,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return args{Root: a.Root, Subdirectory: a.Subdirectory, Title: a.Title, IdempotencyKey: a.IdempotencyKey}
 			})
 		}
+		if s.Archive != nil {
+			register[SessionInput, ArchiveOutput](server, s, "archive_session", "Archive one session in the Bridge's own overlay: it is hidden from list_catalog (unless include_archived) and the dashboard and refuses send_prompt (FORBIDDEN, session_archived). It makes no native write and never deletes anything. Refused unless the session is idle, has no pending permission and no running child, under a lifecycle root with the archive mode. Reversible with unarchive_session. Capped by archive_per_hour. Unavailable under BRIDGE_READ_ONLY.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
+			register[SessionInput, ArchiveOutput](server, s, "unarchive_session", "Restore the visibility of an overlay-archived session (it restores nothing else). Same preconditions, cap and audit as archive_session. Unavailable under BRIDGE_READ_ONLY.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
+			register[SessionInput, ArchiveOutput](server, s, "close_session", "Interrupt the Bridge execution that holds the session's guard, wait until it settled, then archive the session in the overlay. A failed or uncertain interrupt leaves the session un-archived. Same cap and audit as archive_session. Unavailable under BRIDGE_READ_ONLY.", func(a SessionInput) args { return args{SessionID: a.SessionID} })
+		}
 		if s.PermissionRelay.enabled() {
 			register[ReplyPermissionInput, execution.ReplyResult](server, s, "reply_permission", "Answer one pending native permission request of an explicit waiting execution with reject. The decision is made by the Chat model, or by a human only if claude.ai's per-call approval is configured for this tool: the server cannot verify which (decided_by=chat_client, human_verified=false). reject only in this mode (allow_once is refused, never always); sends no message; makes one native write after an audit record and never retries it: an unknown outcome is UNKNOWN_OUTCOME with an attempt_id, and one explicit superseding reject may quote it in supersedes. Configure per-call approval for this tool. Unavailable under BRIDGE_READ_ONLY.", func(a ReplyPermissionInput) args {
 				return args{ExecutionID: a.ExecutionID, PermissionID: a.PermissionID, Decision: a.Decision, Supersedes: a.Supersedes}
@@ -365,7 +389,7 @@ func validateArgs(name string, a args) error {
 		}
 	case "create_session":
 		allowed["key"] = true
-	case "get_session", "read_session_history", "get_harness_capabilities":
+	case "get_session", "read_session_history", "get_harness_capabilities", "archive_session", "unarchive_session", "close_session":
 		allowed["session"] = true
 	case "send_prompt":
 		allowed["session"] = true

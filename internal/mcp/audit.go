@@ -92,7 +92,7 @@ type auditMarkKey struct{}
 func (s *Server) auditMiddleware(next sdk.MethodHandler) sdk.MethodHandler {
 	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
 		call, ok := req.(*sdk.CallToolRequest)
-		if method != "tools/call" || !ok || call.Params == nil || !(mutating(call.Params.Name) || call.Params.Name == "create_session") {
+		if method != "tools/call" || !ok || call.Params == nil || !(mutating(call.Params.Name) || call.Params.Name == "create_session" || isArchiveTool(call.Params.Name)) {
 			return next(ctx, method, req)
 		}
 		mark := &auditMark{}
@@ -101,6 +101,8 @@ func (s *Server) auditMiddleware(next sdk.MethodHandler) sdk.MethodHandler {
 			rejected := execution.Fail("INVALID_INPUT", "arguments rejected before the tool handler")
 			if call.Params.Name == "create_session" {
 				s.auditCreate(ctx, nil, rawAuditArgs(call.Params.Arguments), nil, rejected)
+			} else if isArchiveTool(call.Params.Name) {
+				s.auditArchive(ctx, &archiveEvidence{rootIdx: -1, tool: call.Params.Name}, rawAuditArgs(call.Params.Arguments), nil, rejected)
 			} else {
 				s.audit(ctx, &auditRecord{tool: call.Params.Name}, rawAuditArgs(call.Params.Arguments), nil, rejected)
 			}
@@ -259,4 +261,67 @@ func (s *Server) auditCreate(ctx context.Context, ev *createEvidence, a args, ou
 	}
 	attrs = append(attrs, "principal", s.auditPrincipal())
 	slog.Info("session create", attrs...)
+}
+
+// auditArchive writes the one AUDIT-01 line of an archive_session, unarchive_session or
+// close_session call (ADR-025 4.6), on every return path: event (session_archive,
+// session_unarchive, session_close), tool, outcome, accepted, error_code, session_id only when
+// well formed, root_id (the index of the configured root, never the path), the closed counters
+// overlay_generation and overlay_entries after the call, archived_in_window, interrupt
+// (close_session only), principal. No title, no path, no free text, never the file contents.
+func (s *Server) auditArchive(ctx context.Context, ev *archiveEvidence, a args, out any, err error) {
+	if mark, ok := ctx.Value(auditMarkKey{}).(*auditMark); ok {
+		mark.written.Store(true)
+	}
+	if ev == nil {
+		ev = &archiveEvidence{rootIdx: -1}
+	}
+	event := map[string]string{"archive_session": "session_archive", "unarchive_session": "session_unarchive", "close_session": "session_close"}[ev.tool]
+	outcome := "rejected"
+	if err == nil {
+		switch {
+		case ev.tool == "unarchive_session" && ev.changed:
+			outcome = "unarchived"
+		case ev.tool == "unarchive_session":
+			outcome = "not_archived"
+		case ev.tool == "close_session" && ev.changed:
+			outcome = "closed"
+		case ev.changed:
+			outcome = "archived"
+		default:
+			outcome = "already_archived"
+		}
+	}
+	attrs := []any{"event", event, "tool", ev.tool, "outcome", outcome, "accepted", err == nil}
+	if err != nil {
+		attrs = append(attrs, "error_code", envelope(err).Code)
+		if r := envelope(err).Reason; r != "" {
+			attrs = append(attrs, "reason", r)
+		}
+	}
+	sessionID := ""
+	if o, ok := out.(ArchiveOutput); ok {
+		sessionID = auditSession(o.SessionID)
+	} else if ev.sessionID != "" {
+		sessionID = auditSession(ev.sessionID)
+	} else {
+		sessionID = auditSession(a.SessionID)
+	}
+	if sessionID != "" {
+		attrs = append(attrs, "session_id", sessionID)
+	}
+	if ev.rootIdx >= 0 {
+		attrs = append(attrs, "root_id", ev.rootIdx)
+	}
+	if s.Archive != nil && s.Archive.store != nil {
+		attrs = append(attrs, "overlay_generation", s.Archive.store.Generation(), "overlay_entries", s.Archive.store.Entries())
+	}
+	if ev.window {
+		attrs = append(attrs, "archived_in_window", ev.inWindow)
+	}
+	if ev.tool == "close_session" && ev.interrupt != "" {
+		attrs = append(attrs, "interrupt", ev.interrupt)
+	}
+	attrs = append(attrs, "principal", s.auditPrincipal())
+	slog.Info("session lifecycle", attrs...)
 }
