@@ -48,6 +48,10 @@ func (m *Manager) DashboardSnapshot() DashboardView {
 	for session, id := range m.busy {
 		busy[session] = id
 	}
+	lifecycle := make([]string, 0, len(m.lifecycle))
+	for session := range m.lifecycle {
+		lifecycle = append(lifecycle, session)
+	}
 	m.mu.Unlock()
 
 	view := DashboardView{Executions: make([]Execution, 0, len(runs)), Guards: make(map[string]GuardView, len(busy))}
@@ -75,6 +79,12 @@ func (m *Manager) DashboardSnapshot() DashboardView {
 			}
 		}
 		view.Guards["opencode:"+session] = g
+	}
+	// A lifecycle reservation (ADR-022 5.1) has no run: held, "submitting", no execution ID.
+	for _, session := range lifecycle {
+		if _, held := view.Guards["opencode:"+session]; !held {
+			view.Guards["opencode:"+session] = GuardView{State: "submitting"}
+		}
 	}
 	return view
 }
