@@ -62,16 +62,30 @@ func (b *Budget) Stopped() bool {
 }
 
 // ValidateArgv is the driver's own allow-check on an argv it is about to run through the wrapper:
-// never --bare, never a flag that grants permissions, --max-turns present and at most 5.
+// never --bare, never a flag that grants permissions (any --dangerously-*, an allow-list of tools,
+// a permission mode other than default, permission prompts other than none, a permission-prompt
+// tool), --max-turns present and at most 5.
 func ValidateArgv(args []string) error {
 	turns := -1
+	val := func(i int) string {
+		if i+1 < len(args) {
+			return args[i+1]
+		}
+		return ""
+	}
 	for i, a := range args {
-		switch a {
-		case "--bare":
+		switch {
+		case a == "--bare":
 			return errors.New("acceptance: --bare is never used (it cannot use the subscription login)")
-		case "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions":
+		case strings.HasPrefix(a, "--dangerously-"), strings.HasPrefix(a, "--allow-dangerously-"):
 			return errors.New("acceptance: a permission-skipping flag is refused")
-		case "--max-turns":
+		case a == "--allowedTools", a == "--allowed-tools", a == "--permission-prompt-tool":
+			return errors.New("acceptance: a flag that grants tool permissions is refused")
+		case a == "--permission-mode" && val(i) != "default":
+			return errors.New("acceptance: only --permission-mode default is allowed")
+		case a == "--permission-prompts" && val(i) != "none":
+			return errors.New("acceptance: only --permission-prompts none is allowed")
+		case a == "--max-turns":
 			if i+1 >= len(args) {
 				return errors.New("acceptance: --max-turns has no value")
 			}
@@ -93,7 +107,7 @@ func ValidateWrapper(p string) error {
 	if p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
 		return errors.New("acceptance: the wrapper must be an absolute clean path")
 	}
-	if b := filepath.Base(p); b == "claude" || strings.HasSuffix(b, "/claude") {
+	if filepath.Base(p) == "claude" {
 		return errors.New("acceptance: the CLI is run only through the wrapper, never directly")
 	}
 	return nil

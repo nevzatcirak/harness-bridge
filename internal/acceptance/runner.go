@@ -188,8 +188,12 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 		}
 	case <-ctx.Done():
 		_ = cmd.Process.Signal(syscall.SIGTERM)
-		werr = <-waitErr
-		res.Err = "canceled"
+		select { // the same bounded fallback as the timeout path: never wait forever, never SIGKILL
+		case werr = <-waitErr:
+			res.Err = "canceled"
+		case <-time.After(5 * time.Second):
+			res.Err, waited = "abandoned", false
+		}
 	}
 	if res.Err != "abandoned" {
 		res.ExitAt = time.Since(start)

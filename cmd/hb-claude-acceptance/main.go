@@ -7,11 +7,23 @@
 // planner-scheduled task. It writes verdict lines, event types, timings and exit codes only.
 //
 //	go build -tags live -o /tmp/hb-claude-acceptance ./cmd/hb-claude-acceptance
-//	sudo -u harness-bridge /tmp/hb-claude-acceptance -run-home /home/hbclaude -root /opt/harness-bridge-test/claude-ws \
-//	    -run-uid <hbclaude uid> -service-uid <harness-bridge uid> -items 1,2,4,5,6,7,8 -out evidence.txt
+//	sudo -u harness-bridge /tmp/hb-claude-acceptance -run-home <test user HOME> -root <throwaway root> \
+//	    -run-uid <test user uid> -service-uid <Claude service user uid> -items 1,2,4,5,6,7,8 -out evidence.txt
+//
+// IDENTITY (ADR-021 form A). -run-uid and -run-home name an ISOLATED TEST USER: its UID and its HOME
+// differ from the Claude service user's (hbclaude, whose HOME holds the real ~/.claude). -service-uid
+// is that Claude service user's UID; it is required, never 0, and never equal to -run-uid. The driver
+// cannot set HOME through sudo: the OPERATOR must provision the wrapper/sudo so that the child runs as
+// -run-uid with HOME == -run-home (an operator step; this driver edits no host file). That is a
+// precondition the driver does NOT verify; the evidence says so (precondition ... operator_attested).
+// Running the child as the Claude service user in its real HOME is wrong: the canary would then test
+// the production ~/.claude and ~/.config/anthropic.
 //
 // The decoys must be owned by the run user, so the process needs the privilege to chown into the run
-// user's HOME; run it the way the task prescribes. Never pass --bare; the driver refuses it.
+// user's HOME; run it the way the task prescribes. The driver removes only files and directories it
+// created itself. Never pass --bare; the driver refuses it. The history comparison, the file-canary
+// scan and the sink observation are not made by this command: item 1 reports INCOMPLETE (exit 3),
+// never PASS, until they are observed.
 package main
 
 import (
@@ -32,10 +44,10 @@ func main() {
 	var (
 		wrapper    = flag.String("wrapper", acceptance.DefaultWrapper, "the wrapper path (the CLI is only ever run through it)")
 		model      = flag.String("model", "sonnet", "model")
-		runHome    = flag.String("run-home", "", "HOME of the run user (absolute)")
+		runHome    = flag.String("run-home", "", "HOME of the isolated test user (absolute); never the Claude service user's HOME")
 		root       = flag.String("root", "", "the throwaway root the CLI runs in (absolute)")
-		runUID     = flag.Uint("run-uid", 0, "UID of the run user")
-		serviceUID = flag.Uint("service-uid", 0, "UID of the Claude service user")
+		runUID     = flag.Uint("run-uid", 0, "UID of the isolated test user the child runs as (its HOME must be -run-home)")
+		serviceUID = flag.Uint("service-uid", 0, "UID of the Claude service user (required, never 0, never equal to -run-uid)")
 		items      = flag.String("items", "1,2,4,5,6,7,8", "comma-separated acceptance items (1-8)")
 		maxRuns    = flag.Int("max-runs", acceptance.DefaultMaxRuns, "hard run budget (at most 30)")
 		maxTurns   = flag.Int("max-turns", acceptance.MaxTurnsLimit, "--max-turns per run (at most 5)")
@@ -44,6 +56,13 @@ func main() {
 		out        = flag.String("out", "", "evidence file (default: stdout)")
 	)
 	flag.Parse()
+	cfg := acceptance.Config{Wrapper: *wrapper, Model: *model, MaxRuns: *maxRuns, MaxTurns: *maxTurns, RunHome: *runHome, Root: *root,
+		RunUID: uint32(*runUID), ServiceUID: uint32(*serviceUID), LagRuns: *lagRuns, Candidate: *candidate}
+	// Validate before anything is created: an invalid configuration leaves no -out file behind.
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "configuration refused:", err)
+		os.Exit(2)
+	}
 	var w io.Writer = os.Stdout
 	if *out != "" {
 		f, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -54,10 +73,8 @@ func main() {
 		defer f.Close()
 		w = f
 	}
-	cfg := acceptance.Config{Wrapper: *wrapper, Model: *model, MaxRuns: *maxRuns, MaxTurns: *maxTurns, RunHome: *runHome, Root: *root,
-		RunUID: uint32(*runUID), ServiceUID: uint32(*serviceUID), LagRuns: *lagRuns, Candidate: *candidate}
 	ev := acceptance.NewEvidence(w)
-	d, err := acceptance.New(cfg, acceptance.ExecRunner{Wrapper: *wrapper}, acceptance.OSDecoyFS{UID: int(*runUID), GID: int(*runUID)},
+	d, err := acceptance.New(cfg, acceptance.ExecRunner{Wrapper: *wrapper}, &acceptance.OSDecoyFS{UID: int(*runUID), GID: int(*runUID)},
 		claudecode.OSCanaryFS{}, acceptance.ProcFS{}, ev)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "configuration refused:", err)
@@ -74,9 +91,21 @@ func main() {
 	}
 	_ = ev.KV("driver", "started", time.Now().UTC().Format("2006-01-02T15:04:05Z"), "candidate_mcp", strconv.FormatBool(*candidate))
 	verdicts := d.RunItems(context.Background(), nums)
+	code := 0
 	for _, v := range verdicts {
-		if v.Result == acceptance.Fail {
-			os.Exit(1)
+		switch v.Result {
+		case acceptance.Fail:
+			code = 1
+		case acceptance.Incomplete:
+			if code == 0 {
+				code = 3
+			}
 		}
+	}
+	if code != 0 {
+		if f, ok := w.(*os.File); ok && f != os.Stdout {
+			_ = f.Close() // os.Exit skips the defers
+		}
+		os.Exit(code)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"os"
 	"path"
 	"regexp"
 	"strconv"
@@ -33,6 +34,7 @@ type fakeFS struct {
 	removed []string
 	dirGone bool
 	failOn  string
+	dirs    map[string]bool // directories created through Mkdir (the only ones RemoveDir removes)
 }
 
 func newFakeFS() *fakeFS { return &fakeFS{content: map[string][]byte{}} }
@@ -54,13 +56,50 @@ func (f *fakeFS) Remove(p string) error {
 	f.removed = append(f.removed, p)
 	return nil
 }
+func (f *fakeFS) exists(p string) bool {
+	if f.dirs[p] {
+		return true
+	}
+	for k := range f.content {
+		if strings.HasPrefix(k, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// Mkdir fails when the directory exists (created earlier or holding a pre-existing file).
+func (f *fakeFS) Mkdir(p string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.exists(p) {
+		return errors.New("exists")
+	}
+	if f.dirs == nil {
+		f.dirs = map[string]bool{}
+	}
+	f.dirs[p] = true
+	return nil
+}
+
+// RemoveDir removes only directories made by Mkdir, and never a directory that still holds files
+// (like os.Remove).
 func (f *fakeFS) RemoveDir(p string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dirGone = true
-	for k := range f.content {
-		if strings.HasPrefix(k, p+"/") {
-			delete(f.content, k)
+	for d := range f.dirs {
+		if d != p && !strings.HasPrefix(d, p+"/") {
+			continue
+		}
+		busy := false
+		for k := range f.content {
+			if strings.HasPrefix(k, d+"/") {
+				busy = true
+			}
+		}
+		if !busy {
+			delete(f.dirs, d)
 		}
 	}
 	return nil
@@ -212,6 +251,19 @@ func sentFor(inv Invocation) []string {
 	return out
 }
 
+// fakeObs is a fake Observer: the values and whether each was observed are set by the test.
+type fakeObs struct {
+	history                    []byte
+	files, sink                int
+	historyOK, filesOK, sinkOK bool
+}
+
+func (o *fakeObs) History(context.Context) ([]byte, bool)   { return o.history, o.historyOK }
+func (o *fakeObs) FileCanaries(context.Context) (int, bool) { return o.files, o.filesOK }
+func (o *fakeObs) SinkRequests(context.Context) (int, bool) { return o.sink, o.sinkOK }
+
+func allObserved() *fakeObs { return &fakeObs{historyOK: true, filesOK: true, sinkOK: true} }
+
 func newTestDriver(t *testing.T, s *sim) (*Driver, *bytes.Buffer, *fakeFS) {
 	t.Helper()
 	fsys := newFakeFS()
@@ -224,6 +276,7 @@ func newTestDriver(t *testing.T, s *sim) (*Driver, *bytes.Buffer, *fakeFS) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.Obs = allObserved() // every §8.3 extra check observed; tests of the unobserved case set d.Obs = nil
 	return d, &buf, fsys
 }
 
@@ -565,7 +618,7 @@ func (l *leaky) Run(ctx context.Context, inv Invocation) (Result, error) {
 
 // The decoy filesystem refuses the real login names (the production implementation).
 func TestOSDecoyFSRefusesRealNames(t *testing.T) {
-	o := OSDecoyFS{UID: 1, GID: 1}
+	o := &OSDecoyFS{UID: 1, GID: 1}
 	for _, p := range []string{tHome + "/.claude/.credentials.json", tHome + "/.config/anthropic/active_config", "relative", tHome + "/a/../.claude/.credentials.json"} {
 		if err := o.Write(p, []byte("x")); err == nil {
 			t.Errorf("wrote %s", p)
@@ -574,7 +627,12 @@ func TestOSDecoyFSRefusesRealNames(t *testing.T) {
 			t.Errorf("removed %s", p)
 		}
 	}
-	if err := o.RemoveDir(tHome + "/.claude"); err == nil {
-		t.Error("removed a directory that is not canary-control")
+	pre := t.TempDir() // exists, not created by o: RemoveDir must leave it alone
+	_ = o.RemoveDir(pre)
+	if _, err := os.Stat(pre); err != nil {
+		t.Error("removed a directory the driver did not create")
+	}
+	if err := o.RemoveDir("relative"); err == nil {
+		t.Error("accepted a relative path")
 	}
 }
