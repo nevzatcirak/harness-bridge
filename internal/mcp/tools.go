@@ -53,6 +53,9 @@ type Session struct {
 	Directory         string                 `json:"directory"`
 	Title             string                 `json:"title"`
 	State             string                 `json:"state"`
+	// GuardReason is "archive" only while a lifecycle reservation (ADR-022 5.1) is held: the
+	// session reads submitting/running (the existing conservative value, no new state).
+	GuardReason string `json:"guard_reason,omitempty"`
 
 	// NativeStateInferredFromAbsence is true when native_state "idle" was inferred
 	// because the session is absent from a successful native status read of its
