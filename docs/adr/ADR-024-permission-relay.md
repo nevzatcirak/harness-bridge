@@ -803,6 +803,46 @@ bound. Review #293 P3-2: the attempt line's `kind` shape now equals the Bridge's
 (`[A-Za-z0-9_.:-]{1,64}`); the other option (a typed refusal before the attempt) was not needed because
 the charset is the same closed one `native_tool` already uses.
 
+## As built (S6), 2026-11-16
+
+Facts only (task #304). The production `PermissionSource` exists and is wired; the verified path is
+tested against a fake native; no live run was made.
+
+- **Source.** `internal/execution/permissionsource.go`: `NewOpenCodePermissionSource(client, manager,
+  cfg)`; every `PermissionView` builds a fresh `opencode.PermissionObserver` for the session and takes
+  one bounded `Snapshot`. No cache (a cached view would let a reply be checked against a request the
+  user has already answered). `cmd/bridge` installs it with the replier and the attempt writer in
+  `reject_only` (mode `off` installs nothing; `wirePermissionRelay` now returns an error).
+- **Authority.** The observer's `PermissionObservationAuthority` is a read-only projection of the
+  manager's runs: the scope comes from the run holding the session guard (none: no scope, nothing
+  observed), the executions from the manager's submitted runs of the session with their
+  Bridge-chosen user message IDs. Neither touches a native payload. Locks: the manager's mutex and a
+  run's mutex are never held together; the authority is called only from the reconcile path and from
+  step 5 of the reply, where no run mutex is held.
+- **The gap that remains (decided here as fail-closed, not as a decision).** The observer needs native
+  incarnation evidence (`PermissionScope.NativeEpoch`) before it will report `attribution=verified`;
+  ADR-018 and `docs/P2_PERM_CORE_02_OBSERVATION.md` say none exists and none may be fabricated. The
+  source has an optional `NativeIncarnation` seam and production passes none, so on a deployed Bridge
+  every request is `unattributed`: `pending_permission` stays count-only and `reply_permission`
+  refuses with `FORBIDDEN`/`not_verified`, with no native write and no attempt line (S5 failed closed
+  with `UPSTREAM_FAILURE` because no source existed at all; now the source runs and the refusal says
+  why). What can supply the evidence
+  is a maintainer decision (see the BACKLOG item); the options and their trade-offs are listed there.
+- **Tests (fakes only).** A fake native server (GET `/permission`, `/session/:id`,
+  `/session/:id/message/:id`, POST `/permission/:id/reply`) behind the real client, observer and
+  manager: the verified request is exposed with the closed projection; a reply makes a fresh read, one
+  attempt line and exactly one `{"reply":"reject"}` POST; the binding refusals (absent, another
+  session, tool-less, an assistant message of another workspace, a user message the Bridge never
+  sent, a request attributed to another execution of the same session) each make no native write and
+  no attempt line; a request answered natively between a view and the reply is refused; a transient
+  native failure refuses and the next call works; a hanging read is a retryable `UPSTREAM_TIMEOUT`
+  inside its bound; a lost response is `UNKNOWN_OUTCOME` and never resent, one explicit superseding
+  reject is a second write and a third is refused (D15 Q8); `allow_once` is refused with zero native
+  calls. Mutations: reply without the fresh read (9 RED), a cached view (6 RED), accepting a
+  permission of another execution (2 and 1 RED), `allow_once` not refused (2 RED), a non-reject
+  reply forwarded by the client (1 RED), a fabricated epoch (1 RED), the wiring dropped (1 RED), mode
+  `off` installing the source (2 RED).
+
 ## 13. Limitations of this record
 
 - Static reading of one upstream commit; OpenCode was not run and no Bridge or

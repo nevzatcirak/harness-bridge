@@ -110,7 +110,20 @@ type relayStack struct {
 	mu     sync.Mutex
 	reqs   []nativeRequest
 	client *sdk.ClientSession
+	// serve, when set, answers a native request before the default handler (guarded by mu).
+	serve func(w http.ResponseWriter, r *http.Request) bool
+	url   string
 }
+
+// useSource replaces the production source by a fake and lets a background read that was already in
+// flight finish, so a later count of native calls sees only what the call under test made. (The
+// production source reads natively on the manager's own reconcile cadence while a request waits.)
+func (s *relayStack) useSource(src execution.PermissionSource) {
+	s.runs.SetPermissionSource(src)
+	time.Sleep(60 * time.Millisecond)
+}
+
+func (s *relayStack) nativeURL() string { return s.url }
 
 func (s *relayStack) native() []nativeRequest {
 	s.mu.Lock()
@@ -137,15 +150,25 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 		b, _ := io.ReadAll(r.Body)
 		st.mu.Lock()
 		st.reqs = append(st.reqs, nativeRequest{r.Method, r.URL.Path, r.URL.Query().Get("directory"), string(b)})
+		serve := st.serve
 		st.mu.Unlock()
+		if serve != nil && serve(w, r) {
+			return
+		}
 		switch {
 		case r.URL.Path == "/permission/per_0001/reply":
 			w.Write([]byte("true"))
+		case r.URL.Path == "/permission":
+			// One pending request of the session WITHOUT a tool object: it can never be attributed.
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"per_0001","sessionID":"ses_a","permission":"bash","patterns":["echo X"],"metadata":{},"always":[]}]`))
 		default:
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: root})
 		}
 	}))
 	t.Cleanup(ts.Close)
+	st.url = ts.URL
 	client, err := opencode.New(ts.URL, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +182,9 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 	}
 	st.runs = runs
 	st.srv = &mcp.Server{Client: client, Runs: runs, Token: strings.Repeat("t", 32), Policy: pol, ReadOnly: readOnly}
-	wirePermissionRelay(st.srv, runs, client, mode)
+	if err := wirePermissionRelay(st.srv, runs, client, mode); err != nil {
+		t.Fatal(err)
+	}
 	x, e := runs.Send(context.Background(), "ses_a", "prompt", "relay-key-0001")
 	if e != nil {
 		t.Fatal(e)
@@ -248,14 +273,23 @@ func TestRegistrationDefaultAndOff(t *testing.T) {
 	}
 }
 
-// With no production PermissionSource (a slice of its own) the registered tool fails closed: the
-// fresh re-read cannot happen, so nothing is written natively and no attempt line is written.
-func TestProductionWiringWithoutAPermissionSourceFailsClosed(t *testing.T) {
+// ADR-024 S6: wirePermissionRelay installs the PRODUCTION PermissionSource. With no native
+// incarnation evidence (none exists) it observes the pending request but can never verify it, so the
+// tool refuses with FORBIDDEN not_verified: nothing is written natively and no attempt line is
+// written. (Before S6 the same call failed with UPSTREAM_FAILURE because no source existed.)
+func TestProductionWiringInstallsTheSourceAndStaysUnattributed(t *testing.T) {
 	buf := journal(t)
 	st := newRelayStack(t, "reject_only", false)
 	r, m := st.call(st.args("reject"))
-	if !r.IsError || m["code"] != "UPSTREAM_FAILURE" {
+	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "not_verified" {
 		t.Fatalf("%v", m)
+	}
+	var read bool
+	for _, n := range st.native() {
+		read = read || n.method == "GET" && n.path == "/permission"
+	}
+	if !read {
+		t.Fatalf("the production source made no native permission read: %v", st.native())
 	}
 	if len(st.posts()) != 0 {
 		t.Fatalf("native writes: %v", st.posts())
@@ -265,10 +299,36 @@ func TestProductionWiringWithoutAPermissionSourceFailsClosed(t *testing.T) {
 	}
 }
 
+// Mode off installs nothing: no source, no replier, no tool.
+func TestWiringOffInstallsNothing(t *testing.T) {
+	journal(t)
+	st := newRelayStack(t, "off", false)
+	before := len(st.native())
+	time.Sleep(30 * time.Millisecond)
+	for _, n := range st.native()[before:] {
+		if n.method == "GET" && n.path == "/permission" {
+			t.Fatalf("mode off made an observer read: %v", n)
+		}
+	}
+	if st.srv.PermissionRelay != nil {
+		t.Fatal("mode off registered the relay")
+	}
+}
+
+// A wiring error is returned, not swallowed.
+func TestWirePermissionRelayReturnsTheSourceError(t *testing.T) {
+	if err := wirePermissionRelay(&mcp.Server{}, nil, nil, "reject_only"); err == nil {
+		t.Fatal("a missing client and manager were wired")
+	}
+	if err := wirePermissionRelay(&mcp.Server{}, nil, nil, "off"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProductionWiringReplyIsOneRejectPostWithAuditLines(t *testing.T) {
 	buf := journal(t)
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	r, m := st.call(st.args("reject"))
 	if r.IsError || m["outcome"] != "replied" || m["decided_by"] != "chat_client" || m["human_verified"] != false {
 		t.Fatalf("%v", m)
@@ -299,7 +359,7 @@ func TestProductionWiringReplyIsOneRejectPostWithAuditLines(t *testing.T) {
 func TestProductionWiringRefusalsMakeNoNativeCall(t *testing.T) {
 	journal(t)
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	before := len(st.native())
 	r, m := st.call(st.args("allow_once"))
 	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "allow_once_disabled" {
@@ -309,7 +369,7 @@ func TestProductionWiringRefusalsMakeNoNativeCall(t *testing.T) {
 		t.Fatalf("allow_once made native calls: %v", st.native()[before:])
 	}
 	ro := newRelayStack(t, "reject_only", true)
-	ro.runs.SetPermissionSource(relaySource{ro.execID})
+	ro.useSource(relaySource{ro.execID})
 	before = len(ro.native())
 	r, m = ro.call(ro.args("reject"))
 	if !r.IsError || m["code"] != "FORBIDDEN" || len(ro.native()) != before {
@@ -324,7 +384,7 @@ func TestProductionWiringAttemptLineFailureMeansZeroNativeWrites(t *testing.T) {
 	restore := audit.Default().SetJournalForTesting(failingJournal{})
 	defer restore()
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	r, m := st.call(st.args("reject"))
 	if !r.IsError || m["code"] != "UPSTREAM_FAILURE" || m["reason"] != "audit_unavailable" || m["retryable"] != true {
 		t.Fatalf("%v", m)
@@ -336,5 +396,85 @@ func TestProductionWiringAttemptLineFailureMeansZeroNativeWrites(t *testing.T) {
 	r, m = st.call(st.args("reject"))
 	if !r.IsError || m["reason"] != "audit_unavailable" || len(st.native()) != before {
 		t.Fatalf("a later call was served: %v", m)
+	}
+}
+
+type epochSource struct{}
+
+func (epochSource) NativeEpoch(context.Context) (string, error) { return "test-epoch", nil }
+
+// attributableNative makes the native server describe ONE pending request that the observer can
+// attribute to the stack's execution: a tool object, an assistant message whose parent is the
+// execution's own user message, and a workspace that matches.
+func (s *relayStack) attributableNative(root, userMessageID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serve = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/permission":
+			w.Write([]byte(`[{"id":"per_0001","sessionID":"ses_a","permission":"bash","patterns":["echo X"],"metadata":{},"always":[],"tool":{"messageID":"msg_assistant1","callID":"call_1"}}]`))
+		case "/session/ses_a/message/msg_assistant1":
+			json.NewEncoder(w).Encode(map[string]any{"info": map[string]any{"id": "msg_assistant1", "sessionID": "ses_a", "role": "assistant", "parentID": userMessageID,
+				"time": map[string]int{"created": 1}, "modelID": "f", "providerID": "f", "mode": "build", "agent": "build", "path": map[string]string{"cwd": root, "root": root}, "cost": 0,
+				"tokens": map[string]any{"input": 1, "output": 1, "reasoning": 0, "cache": map[string]int{"read": 0, "write": 0}}},
+				"parts": []any{map[string]any{"id": "prt_tool", "sessionID": "ses_a", "messageID": "msg_assistant1", "type": "tool", "callID": "call_1", "tool": "bash", "state": map[string]any{"status": "running", "input": map[string]string{"command": "X"}, "time": map[string]int{"start": 1}}}}})
+		case "/session/ses_a/message/" + userMessageID:
+			json.NewEncoder(w).Encode(map[string]any{"info": map[string]any{"id": userMessageID, "sessionID": "ses_a", "role": "user", "time": map[string]int{"created": 0}, "agent": "build", "model": map[string]string{"providerID": "f", "modelID": "f"}}, "parts": []any{}})
+		default:
+			return false
+		}
+		return true
+	}
+}
+
+// Review #310 P3-3: the production default "no native incarnation evidence" is pinned at the
+// wiring layer. The request here is tool-bearing and attributable (the control below proves it: the
+// SAME native state verifies once a source is given an epoch), so the only reason the wired source
+// refuses it is the absent epoch. A NativeIncarnation fabricated in wirePermissionRelay makes the
+// call succeed (a native write) and turns this test RED.
+func TestProductionWiringHasNoIncarnationEvidence(t *testing.T) {
+	buf := journal(t)
+	st := newRelayStack(t, "reject_only", false)
+	x, err := st.runs.Snapshot(context.Background(), st.execID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := ""
+	for _, n := range st.native() {
+		if n.directory != "" {
+			root = n.directory
+			break
+		}
+	}
+	if root == "" {
+		t.Fatal("no native request carried the session directory")
+	}
+	st.attributableNative(root, x.MessageID)
+
+	// Control: a source WITH an epoch verifies this very request, so the fixture is attributable.
+	cli, err := opencode.New(st.nativeURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEpoch, err := execution.NewOpenCodePermissionSource(cli, st.runs, execution.PermissionSourceConfig{Incarnation: epochSource{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := withEpoch.PermissionView(context.Background(), "ses_a")
+	if err != nil || len(batch.Permissions) != 1 || batch.Permissions[0].Attribution != "verified" {
+		t.Fatalf("control: the fixture is not attributable: %+v %v", batch, err)
+	}
+
+	// The wired production source has none: not verified, no native write, no attempt line.
+	r, m := st.call(st.args("reject"))
+	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "not_verified" {
+		t.Fatalf("wired source verified a request: %v", m)
+	}
+	if len(st.posts()) != 0 {
+		t.Fatalf("native writes: %v", st.posts())
+	}
+	if strings.Contains(buf.String(), "phase=attempt") {
+		t.Fatalf("journal:\n%s", buf.String())
 	}
 }
