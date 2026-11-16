@@ -729,9 +729,14 @@ The `session_create` AUDIT-01 line (4.3) exists for `create_session`. Facts and 
 `archive_session`, `unarchive_session` and `close_session` exist over the persisted overlay of
 [ADR-025](ADR-025-archive-overlay-persistence.md) (accepted, D18). Facts and choices:
 
-- **No native write.** None of the three tools issues a native `PATCH`, `DELETE` or `POST`; the
-  7.3 preconditions are native reads (status, permissions, history of the session, the tree of
-  its directory). The `PATCH` text of 7.1/7.2/7.3 stays the record of the options considered.
+- **No archive native write.** The archive and un-archive steps make no native write: no `PATCH`,
+  `DELETE` or `POST` (the overlay is Bridge state), and the 7.3 preconditions are native reads
+  (status, permissions, history of the session, the tree of its directory). `close_session` is the one
+  tool that reaches the native server with a write, and only through the **existing native
+  interrupt** (`Manager.Interrupt`: one `POST /session/:id/abort` for the execution that holds the
+  guard, none when nothing holds it); its archive step then makes no native write either. The `PATCH`
+  text of 7.1/7.2/7.3 stays the record of the options considered. (Corrected in task #311, review #308 P3-3:
+  the first text said that none of the three tools issues a native `POST`.)
 - **Reservation.** `Manager.ReserveLifecycle` keeps a separate table (never `busy`, never `x.op`,
   never an execution ID). While held, `Send` returns `SESSION_BUSY`, `SessionGuard` reports the
   session held and `submitting`, `get_session` adds `guard_reason: "archive"` (the state value is
@@ -753,6 +758,16 @@ The `session_create` AUDIT-01 line (4.3) exists for `create_session`. Facts and 
 - **Audit.** `session_archive`, `session_unarchive`, `session_close`: one line per call on every
   return path (AUDIT-01 and AUDIT-01b), closed fields only (CONTRACTS). They are journal-only: the
   dashboard ring allowlist is not amended.
+- **Review follow-ups (2026-11-16, task #311, review #308).** P3-1: a writer-role `Open` that loses the
+  `flock` is a reader (it stat-polls at most once a second, ADR-025 Q8). P3-2: `Store.Close` latches: a
+  change after it is `KindUnavailable`, never a panic; `Close` takes the overlay mutex, so it **waits for a
+  write worker that is still running** (a hung write blocks `Close` until the worker returns; that write's
+  caller was answered at its deadline). P3-4: the branch of `close_session` that refuses on a failed
+  interrupt is pinned for an interrupt that fails **while the guard is free** (the execution finished
+  natively between the guard read and the interrupt: `INVALID_INPUT`, "already terminal"; the session is
+  not archived and the caller may repeat the call, which then interrupts nothing); for a failure while
+  the guard is still held, the branch is **defence in depth** with `ReserveLifecycle` (`SESSION_BUSY`), so
+  ignoring the error would still not archive there.
 - **Not here.** Production startup wiring from `BRIDGE_OVERLAY_DIR` and `BRIDGE_LIFECYCLE_CONFIG`
   (a separate, planner-scheduled task: nothing constructs `ArchiveConfig` outside tests, so a
   deployed Bridge is unchanged), the first prompt (S9), a CONTRACTS entry beyond the audit fields.

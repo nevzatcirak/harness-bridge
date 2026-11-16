@@ -770,3 +770,98 @@ func TestNoJournalSource(t *testing.T) {
 		}
 	}
 }
+
+// #308 P3-1: a writer-role process that loses the flock is a reader (ADR-025 Q8, 4.4): it re-reads a
+// changed file at most once a second, so an entry archived by the lock holder AFTER it opened becomes
+// visible within the poll window.
+func TestLockLosingWriterBehavesAsAReader(t *testing.T) {
+	dir := newDir(t)
+	a := open(t, dir, true)
+	now := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	b, err := Open(dir, Options{Writer: true, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	if b.CanWrite() {
+		t.Fatal("the second writer holds the lock")
+	}
+	if _, _, err := a.Archive(bg, sid(1), "op"); err != nil { // after b opened
+		t.Fatal(err)
+	}
+	if ok, _ := b.Archived(bg, sid(1)); ok {
+		t.Fatal("re-read within the same second (the poll is at most once a second)")
+	}
+	now = now.Add(1100 * time.Millisecond)
+	if ok, err := b.Archived(bg, sid(1)); !ok || err != nil {
+		t.Fatalf("a lock-losing writer never reloaded the file: %v %v", ok, err)
+	}
+	// still unable to write
+	if _, _, err := b.Archive(bg, sid(2), "op"); KindOf(err) != KindReadOnly {
+		t.Fatalf("lock-losing writer archive: %v", err)
+	}
+}
+
+// #308 P3-2: Close latches. A change after Close is a clean KindUnavailable, never a panic in the
+// worker goroutine; Close twice is harmless; a reader reload after Close does nothing.
+func TestCloseLatchesTheStore(t *testing.T) {
+	s := open(t, newDir(t), true)
+	if _, _, err := s.Archive(bg, sid(1), "op"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s.Close()
+	if _, _, err := s.Archive(bg, sid(2), "op"); KindOf(err) != KindUnavailable {
+		t.Fatalf("Archive after Close: %v, want KindUnavailable", err)
+	}
+	if _, err := s.Unarchive(bg, sid(1)); KindOf(err) != KindUnavailable {
+		t.Fatalf("Unarchive after Close: %v, want KindUnavailable", err)
+	}
+	if ok, err := s.Archived(bg, sid(1)); !ok || err != nil {
+		t.Fatalf("the published snapshot must stay readable after Close: %v %v", ok, err)
+	}
+	dir := newDir(t)
+	now := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	r, err := Open(dir, Options{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	now = now.Add(5 * time.Second)
+	if _, err := r.Archived(bg, sid(1)); err != nil { // no reload on a closed store, no unknown state
+		t.Fatalf("reader Archived after Close: %v", err)
+	}
+}
+
+// #308 P3-2: Close waits for a hung write (it takes overlayMu); it returns when the worker does.
+func TestCloseWaitsForAHungWrite(t *testing.T) {
+	shortBound(t, 80*time.Millisecond)
+	dir := newDir(t)
+	s := open(t, dir, true)
+	gate := make(chan struct{})
+	s.Hook = func(step string) error {
+		if step == "write" {
+			<-gate
+		}
+		return nil
+	}
+	if _, _, err := s.Archive(bg, sid(1), "op"); KindOf(err) != KindUnavailable {
+		t.Fatalf("hung write: %v", err)
+	}
+	closed := make(chan struct{})
+	go func() { s.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the write worker still held overlayMu")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close never returned after the worker finished")
+	}
+	if _, err := os.Stat(filepath.Join(dir, FileName)); err == nil {
+		t.Fatal("an abandoned write committed")
+	}
+}

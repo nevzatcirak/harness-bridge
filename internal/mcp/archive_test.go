@@ -831,3 +831,38 @@ func TestCatalogWithTheRealOverlayAcrossARestart(t *testing.T) {
 		t.Fatalf("catalog over an unknown overlay: %v, want INTERNAL", err)
 	}
 }
+
+// #308 P3-4: an interrupt that fails while the guard is free. The execution finished natively
+// between the guard read and the interrupt, so Interrupt answers "already terminal": that is a failed
+// interrupt and the overlay stays unchanged (the branch is pinned without the reservation's help,
+// which would not refuse a free guard).
+func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
+	e := newArchEnv(t, nil)
+	x, err := e.s.call(context.Background(), "send_prompt", args{SessionID: "opencode:ses_arch1", Prompt: "work", IdempotencyKey: "key-close-0003"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRunning(t, e, x.(execution.Execution).ID)
+	e.nat.set("ses_arch1", func(s *archSession) {
+		s.busy = false
+		a := &s.msgs[len(s.msgs)-1]
+		a.Info.Time.Completed, a.Info.Finish = 1, "stop"
+	})
+	_, err = e.call("close_session", "opencode:ses_arch1")
+	if err == nil {
+		t.Fatal("close succeeded although the interrupt failed")
+	}
+	if codeOf(err) != "INVALID_INPUT" {
+		t.Fatalf("close error = %v, want INVALID_INPUT (execution already terminal)", err)
+	}
+	if e.archived("ses_arch1") || e.store.Entries() != 0 {
+		t.Fatal("archived after a failed interrupt")
+	}
+	if held, _ := e.s.Runs.SessionGuard("ses_arch1"); held {
+		t.Fatalf("the test premise failed: the guard is still held (%v)", err)
+	}
+	lines := archLines(t, e.logs, "session_close")
+	if len(lines) != 1 || lines[0]["interrupt"] != "failed" || lines[0]["accepted"] != false {
+		t.Fatalf("audit = %v", lines)
+	}
+}

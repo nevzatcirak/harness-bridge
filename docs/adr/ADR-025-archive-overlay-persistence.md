@@ -426,3 +426,9 @@ The maintainer accepted every recommendation:
 - **Where S6 differs from the text above.** The "uncertain" marker of 4.3 is recorded **before** the rename is issued (a
   rename that hangs is already uncertain). The audit line carries `reason` for the closed overlay reasons.
 - **Manager.** `ReserveLifecycle`, `LifecycleGuard` and `SetArchiveCheck` in `internal/execution/lifecycle.go`.
+- **Review follow-ups (2026-11-16, task #311, review #308).** A writer-role process that loses `overlay.lock` is a
+  reader: it stat-polls at most once a second and re-reads a changed file (4.4, Q8). `Store.Close` latches the store
+  and waits for a running write worker (section 4.3's worker holds `overlayMu` until it returns). **Limitation:** the
+  poll is triggered by `Archived` (the catalog and dashboard lists); `ArchivedKnown`, the memory-only lookup of the
+  `send_prompt` refusal (4.5, Q1), does no I/O, so in a reader process it sees a change only after the next list call
+  has re-read the file. Installing the refusal in a reader process is a wiring decision for the startup task.

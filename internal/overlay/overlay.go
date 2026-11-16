@@ -135,6 +135,7 @@ type Store struct {
 	mu       sync.Mutex
 	lockFile *os.File
 	canWrite bool
+	closed   atomic.Bool // set by Close: a change or a reload after it is a clean refusal (#308 P3-2)
 
 	stateMu       sync.Mutex // guards the uncertain record below; never held across I/O
 	uncertain     bool
@@ -184,6 +185,9 @@ func Open(dir string, opts Options) (*Store, error) {
 		} else {
 			f.Close() // a second process runs without the archive tools (ADR-025 4.3)
 		}
+		// A writer-role process that lost the lock is a reader (Q8, 4.4): it re-reads a changed file
+		// at most once a second (#308 P3-1).
+		s.reader = !s.canWrite
 	}
 	s.lastStatCheck = s.now() // the file was just read: the first poll is a second away (Q8)
 	snap, err := s.readFile()
@@ -241,16 +245,23 @@ func nlink(fi os.FileInfo) uint64 {
 }
 
 // Close releases the lock and the directory handle.
+//
+// Close latches the store (#308 P3-2): a change or a reload after it is refused (KindUnavailable)
+// instead of reaching a closed directory handle. Close takes overlayMu, so it waits for a write
+// worker that is still running (a hung write blocks Close until the worker returns; the caller of
+// that write was already answered at its deadline). It is safe to call twice. The directory handle
+// is closed but the pointer is kept, so a late reader never dereferences nil and no field is written
+// without a lock.
 func (s *Store) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed.Store(true)
 	if s.lockFile != nil {
 		s.lockFile.Close()
 		s.lockFile = nil
 	}
 	if s.root != nil {
-		s.root.Close()
-		s.root = nil
+		s.root.Close() // idempotent; later operations on it fail cleanly
 	}
 }
 
@@ -461,6 +472,9 @@ func (sn *snapshot) body() canonBody {
 // refresh is the read-only process reload (Q8): stat the file at most once a second and re-read it
 // when (inode, size, mtime) changed. A failed reload keeps the last good snapshot and reports unknown.
 func (s *Store) refresh() {
+	if s.closed.Load() {
+		return
+	}
 	s.stateMu.Lock()
 	if s.now().Sub(s.lastStatCheck) < time.Second && !s.lastStatCheck.IsZero() {
 		s.stateMu.Unlock()
@@ -596,6 +610,9 @@ func (s *Store) change(ctx context.Context, build func(cur *snapshot) (*snapshot
 	if !s.canWrite {
 		return nil, fail(KindReadOnly, "this process holds no overlay write role", nil)
 	}
+	if s.closed.Load() {
+		return nil, fail(KindUnavailable, "the overlay store is closed", nil)
+	}
 	timer := time.NewTimer(WriteBound)
 	defer timer.Stop()
 	locked := make(chan struct{})
@@ -637,6 +654,9 @@ func (s *Store) change(ctx context.Context, build func(cur *snapshot) (*snapshot
 
 // commit is the worker body: adopt after an uncertain write, build, write, rename, fsync, publish.
 func (s *Store) commit(state *atomic.Int32, build func(cur *snapshot) (*snapshot, any, error)) (any, error) {
+	if s.closed.Load() { // a change that was queued behind Close
+		return nil, fail(KindUnavailable, "the overlay store is closed", nil)
+	}
 	if err := s.adoptIfUncertain(); err != nil {
 		return nil, err
 	}
