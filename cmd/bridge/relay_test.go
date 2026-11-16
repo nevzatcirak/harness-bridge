@@ -110,6 +110,9 @@ type relayStack struct {
 	mu     sync.Mutex
 	reqs   []nativeRequest
 	client *sdk.ClientSession
+	// serve, when set, answers a native request before the default handler (guarded by mu).
+	serve func(w http.ResponseWriter, r *http.Request) bool
+	url   string
 }
 
 // useSource replaces the production source by a fake and lets a background read that was already in
@@ -119,6 +122,8 @@ func (s *relayStack) useSource(src execution.PermissionSource) {
 	s.runs.SetPermissionSource(src)
 	time.Sleep(60 * time.Millisecond)
 }
+
+func (s *relayStack) nativeURL() string { return s.url }
 
 func (s *relayStack) native() []nativeRequest {
 	s.mu.Lock()
@@ -145,7 +150,11 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 		b, _ := io.ReadAll(r.Body)
 		st.mu.Lock()
 		st.reqs = append(st.reqs, nativeRequest{r.Method, r.URL.Path, r.URL.Query().Get("directory"), string(b)})
+		serve := st.serve
 		st.mu.Unlock()
+		if serve != nil && serve(w, r) {
+			return
+		}
 		switch {
 		case r.URL.Path == "/permission/per_0001/reply":
 			w.Write([]byte("true"))
@@ -159,6 +168,7 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 		}
 	}))
 	t.Cleanup(ts.Close)
+	st.url = ts.URL
 	client, err := opencode.New(ts.URL, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -386,5 +396,85 @@ func TestProductionWiringAttemptLineFailureMeansZeroNativeWrites(t *testing.T) {
 	r, m = st.call(st.args("reject"))
 	if !r.IsError || m["reason"] != "audit_unavailable" || len(st.native()) != before {
 		t.Fatalf("a later call was served: %v", m)
+	}
+}
+
+type epochSource struct{}
+
+func (epochSource) NativeEpoch(context.Context) (string, error) { return "test-epoch", nil }
+
+// attributableNative makes the native server describe ONE pending request that the observer can
+// attribute to the stack's execution: a tool object, an assistant message whose parent is the
+// execution's own user message, and a workspace that matches.
+func (s *relayStack) attributableNative(root, userMessageID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serve = func(w http.ResponseWriter, r *http.Request) bool {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/permission":
+			w.Write([]byte(`[{"id":"per_0001","sessionID":"ses_a","permission":"bash","patterns":["echo X"],"metadata":{},"always":[],"tool":{"messageID":"msg_assistant1","callID":"call_1"}}]`))
+		case "/session/ses_a/message/msg_assistant1":
+			json.NewEncoder(w).Encode(map[string]any{"info": map[string]any{"id": "msg_assistant1", "sessionID": "ses_a", "role": "assistant", "parentID": userMessageID,
+				"time": map[string]int{"created": 1}, "modelID": "f", "providerID": "f", "mode": "build", "agent": "build", "path": map[string]string{"cwd": root, "root": root}, "cost": 0,
+				"tokens": map[string]any{"input": 1, "output": 1, "reasoning": 0, "cache": map[string]int{"read": 0, "write": 0}}},
+				"parts": []any{map[string]any{"id": "prt_tool", "sessionID": "ses_a", "messageID": "msg_assistant1", "type": "tool", "callID": "call_1", "tool": "bash", "state": map[string]any{"status": "running", "input": map[string]string{"command": "X"}, "time": map[string]int{"start": 1}}}}})
+		case "/session/ses_a/message/" + userMessageID:
+			json.NewEncoder(w).Encode(map[string]any{"info": map[string]any{"id": userMessageID, "sessionID": "ses_a", "role": "user", "time": map[string]int{"created": 0}, "agent": "build", "model": map[string]string{"providerID": "f", "modelID": "f"}}, "parts": []any{}})
+		default:
+			return false
+		}
+		return true
+	}
+}
+
+// Review #310 P3-3: the production default "no native incarnation evidence" is pinned at the
+// wiring layer. The request here is tool-bearing and attributable (the control below proves it: the
+// SAME native state verifies once a source is given an epoch), so the only reason the wired source
+// refuses it is the absent epoch. A NativeIncarnation fabricated in wirePermissionRelay makes the
+// call succeed (a native write) and turns this test RED.
+func TestProductionWiringHasNoIncarnationEvidence(t *testing.T) {
+	buf := journal(t)
+	st := newRelayStack(t, "reject_only", false)
+	x, err := st.runs.Snapshot(context.Background(), st.execID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := ""
+	for _, n := range st.native() {
+		if n.directory != "" {
+			root = n.directory
+			break
+		}
+	}
+	if root == "" {
+		t.Fatal("no native request carried the session directory")
+	}
+	st.attributableNative(root, x.MessageID)
+
+	// Control: a source WITH an epoch verifies this very request, so the fixture is attributable.
+	cli, err := opencode.New(st.nativeURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEpoch, err := execution.NewOpenCodePermissionSource(cli, st.runs, execution.PermissionSourceConfig{Incarnation: epochSource{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := withEpoch.PermissionView(context.Background(), "ses_a")
+	if err != nil || len(batch.Permissions) != 1 || batch.Permissions[0].Attribution != "verified" {
+		t.Fatalf("control: the fixture is not attributable: %+v %v", batch, err)
+	}
+
+	// The wired production source has none: not verified, no native write, no attempt line.
+	r, m := st.call(st.args("reject"))
+	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "not_verified" {
+		t.Fatalf("wired source verified a request: %v", m)
+	}
+	if len(st.posts()) != 0 {
+		t.Fatalf("native writes: %v", st.posts())
+	}
+	if strings.Contains(buf.String(), "phase=attempt") {
+		t.Fatalf("journal:\n%s", buf.String())
 	}
 }
