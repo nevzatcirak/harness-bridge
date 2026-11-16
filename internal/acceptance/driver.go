@@ -29,7 +29,7 @@ type Config struct {
 	// RunHome is the HOME of the ISOLATED TEST USER whose UID is RunUID: the canary tree lives under
 	// it. It must NOT be the Claude service user's HOME. The driver cannot set HOME through sudo; the
 	// operator must provision the wrapper/sudo so that the child really runs as RunUID with HOME ==
-	// RunHome (precondition, printed in the evidence as operator_attested; it is not verified).
+	// RunHome (an operator precondition, printed in the evidence as operator_precondition_not_verified; the driver does not verify it).
 	RunHome    string
 	Root       string // the throwaway root the CLI runs in (names the CLAUDE.md exclusions)
 	RunUID     uint32
@@ -370,7 +370,7 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 		return v
 	}
 	d.Out.Forbid(cp.plan.Marker, cp.plan.ControlMarker) // from here on neither marker can reach the evidence
-	_ = d.Out.KV("precondition", "child_home", "operator_attested_not_verified", "run_home_is", "the_isolated_test_users_home")
+	_ = d.Out.KV("precondition", "child_home", "operator_precondition_not_verified", "run_home_is", "the_isolated_test_users_home")
 	// The control directory must not exist: it is created here (and only then removed here).
 	if err := d.FS.Mkdir(cp.controlDir); err != nil {
 		v.Why = "control_dir_exists_or_not_creatable"
@@ -747,6 +747,15 @@ type OSDecoyFS struct {
 
 	mu      sync.Mutex
 	created []string // directories this value created, in creation order
+
+	chown func(name string, uid, gid int) error // test seam; nil means os.Chown
+}
+
+func (o *OSDecoyFS) doChown(p string) error {
+	if o.chown != nil {
+		return o.chown(p, o.UID, o.GID)
+	}
+	return os.Chown(p, o.UID, o.GID)
 }
 
 var realNames = map[string]bool{".credentials.json": true, "active_config": true}
@@ -757,10 +766,14 @@ func (o *OSDecoyFS) mkdir(p string) error {
 	if err := os.Mkdir(p, 0o700); err != nil {
 		return err
 	}
+	if err := o.doChown(p); err != nil {
+		_ = os.Remove(p) // never leave a directory the run user cannot use, and never record it
+		return err
+	}
 	o.mu.Lock()
 	o.created = append(o.created, p)
 	o.mu.Unlock()
-	return os.Chown(p, o.UID, o.GID)
+	return nil
 }
 
 // Mkdir implements DecoyFS: it fails when the directory exists.
@@ -812,7 +825,11 @@ func (o *OSDecoyFS) Write(p string, content []byte) error {
 	if werr != nil || cerr != nil {
 		return errors.New("acceptance: decoy write failed")
 	}
-	return os.Chown(p, o.UID, o.GID)
+	if err := o.doChown(p); err != nil {
+		_ = os.Remove(p) // the file was created here (O_EXCL): do not leave it with the wrong owner
+		return err
+	}
+	return nil
 }
 
 // Remove implements DecoyFS (a decoy file only).

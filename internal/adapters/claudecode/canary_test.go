@@ -427,7 +427,7 @@ func TestDeniedRunLeaksNothing(t *testing.T) {
 // Committed evidence is verdict lines only.
 func TestVerdictLinesNeverCarryStreamContentOrTheMarker(t *testing.T) {
 	rep := evaluate(CanaryFormA, streamOpts{leak: true}, nil) // even a failing, leaking run
-	text := strings.Join(rep.Lines(), "\n")
+	text := strings.Join(rep.linesAllObserved(), "\n")
 	if strings.Contains(text, cMarker) || strings.Contains(text, "hbcanary-0123") {
 		t.Fatalf("the verdict lines carry the marker:\n%s", text)
 	}
@@ -437,7 +437,7 @@ func TestVerdictLinesNeverCarryStreamContentOrTheMarker(t *testing.T) {
 	if !strings.Contains(text, "verdict=fail") {
 		t.Fatalf("no verdict line:\n%s", text)
 	}
-	ok := strings.Join(evaluate(CanaryFormB, streamOpts{}, nil).Lines(), "\n")
+	ok := strings.Join(evaluate(CanaryFormB, streamOpts{}, nil).linesAllObserved(), "\n")
 	if !strings.Contains(ok, "verdict=pass") || !strings.Contains(ok, "probe=grep-content") || !strings.Contains(ok, "probe=glob-profile-dir") {
 		t.Fatalf("pass lines:\n%s", ok)
 	}

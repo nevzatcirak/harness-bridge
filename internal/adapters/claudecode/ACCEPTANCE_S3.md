@@ -42,8 +42,13 @@ verdict lines and event types only.
    `claudecode.Preflight`; it must pass before anything starts. Run each probe of
    `claudecode.Probes` with its `claudecode.Prompt`, plus the positive control without the deny
    rule, then `claudecode.EvaluateCanary` over the recorded streams; commit
-   `CanaryReport.Lines()` only. Pass needs every probe, the control, no decoy content, no file
-   canary, no sink request, `mcp_servers` empty, `apiKeySource` `none`.
+   the lines of `CanaryReport.LinesWith(observations)` only, normally through the acceptance driver
+   (`cmd/hb-claude-acceptance`, build tag `live`), which writes them. The three checks that are not
+   in the NDJSON stream (the history comparison, the file-canary scan, the sink observation) must
+   each be **explicitly observed** and passed in `CanaryObservations`; a check that was not made
+   prints `unknown` and the verdict is `incomplete`, never `pass`. There is no public entry that
+   assumes them. Pass needs every probe, the control, no decoy content, no file canary, no sink
+   request, all three of those checks observed, `mcp_servers` empty, `apiKeySource` `none`.
    **NOT_EXERCISED: no allowed authenticated run exists (D14 Q10).**
 2. **Result-to-exit lag** of the pinned CLI over several runs: validates or replaces the 10 s
    exit-grace default. NOT_EXERCISED.

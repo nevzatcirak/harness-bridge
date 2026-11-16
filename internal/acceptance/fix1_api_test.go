@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func TestItem1ObservationsDecideTheVerdict(t *testing.T) {
 func TestPreconditionAndNoMarkerInEvidence(t *testing.T) {
 	d, buf, _ := newTestDriver(t, &sim{})
 	d.RunItems(context.Background(), []int{1})
-	if !strings.Contains(buf.String(), "child_home=operator_attested_not_verified") {
+	if !strings.Contains(buf.String(), "child_home=operator_precondition_not_verified") {
 		t.Errorf("no precondition line:\n%s", buf.String())
 	}
 }
@@ -146,5 +147,33 @@ func TestCleanupRemovesTheDirectoriesItCreated(t *testing.T) {
 		if len(fsys.dirs) != 0 || len(fsys.content) != 0 {
 			t.Errorf("item %d left dirs %v files %v", item, fsys.dirs, fsys.content)
 		}
+	}
+}
+
+// R317-FIX-2 P3-3: when the chown of a directory the driver just created fails, the directory is
+// removed and not left recorded, so the next run does not fail with "exists".
+func TestMkdirChownFailureLeavesNothingBehind(t *testing.T) {
+	root := t.TempDir()
+	o := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(string, int, int) error { return errors.New("operation not permitted") }}
+	dir := filepath.Join(root, "canary-control")
+	if err := o.Mkdir(dir); err == nil {
+		t.Fatal("Mkdir succeeded although the chown failed")
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("the directory was left behind after a failed chown")
+	}
+	o.chown = nil // a later run (privileged) must be able to create it again
+	if err := o.Mkdir(dir); err != nil {
+		t.Fatalf("second Mkdir: %v", err)
+	}
+	_ = o.RemoveDir(dir)
+	// the same through Write's ancestor walk, and the file itself
+	o2 := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(string, int, int) error { return errors.New("operation not permitted") }}
+	f := filepath.Join(root, "a", "b", "decoy-profile.json")
+	if err := o2.Write(f, []byte("x")); err == nil {
+		t.Fatal("Write succeeded although the chown failed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "a")); err == nil {
+		t.Fatal("a created ancestor was left behind after a failed chown")
 	}
 }

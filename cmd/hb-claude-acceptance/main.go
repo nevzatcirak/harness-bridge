@@ -7,15 +7,21 @@
 // planner-scheduled task. It writes verdict lines, event types, timings and exit codes only.
 //
 //	go build -tags live -o /tmp/hb-claude-acceptance ./cmd/hb-claude-acceptance
-//	sudo -u harness-bridge /tmp/hb-claude-acceptance -run-home <test user HOME> -root <throwaway root> \
+//	sudo /tmp/hb-claude-acceptance -run-home <test user HOME> -root <throwaway root> \
 //	    -run-uid <test user uid> -service-uid <Claude service user uid> -items 1,2,4,5,6,7,8 -out evidence.txt
+//
+// PRIVILEGE. The driver chowns the decoy files and the directories it creates to -run-uid, so it must
+// run as root or with CAP_CHOWN (for example `setcap cap_chown+ep` on the built binary); an
+// unprivileged service user cannot chown to another user and the first decoy write fails closed. The
+// sudo rule that lets this process start the wrapper is the operator's to provision. This comment
+// does not change the privilege model.
 //
 // IDENTITY (ADR-021 form A). -run-uid and -run-home name an ISOLATED TEST USER: its UID and its HOME
 // differ from the Claude service user's (hbclaude, whose HOME holds the real ~/.claude). -service-uid
 // is that Claude service user's UID; it is required, never 0, and never equal to -run-uid. The driver
 // cannot set HOME through sudo: the OPERATOR must provision the wrapper/sudo so that the child runs as
 // -run-uid with HOME == -run-home (an operator step; this driver edits no host file). That is a
-// precondition the driver does NOT verify; the evidence says so (precondition ... operator_attested).
+// precondition the driver does NOT verify; the evidence says so (precondition ... operator_precondition_not_verified).
 // Running the child as the Claude service user in its real HOME is wrong: the canary would then test
 // the production ~/.claude and ~/.config/anthropic.
 //

@@ -460,12 +460,14 @@ var AllObserved = CanaryObservations{History: true, FileCanaries: true, Sink: tr
 // Complete reports whether every extra check was made.
 func (o CanaryObservations) Complete() bool { return o.History && o.FileCanaries && o.Sink }
 
-// Lines is the committed evidence: verdict lines only. They carry the tool, the target the
-// denial named and pass/fail; no stream content and never the marker. It assumes every extra
-// check was made; a caller that did not make them uses LinesWith.
-func (r CanaryReport) Lines() []string { return r.LinesWith(AllObserved) }
+// linesAllObserved is LinesWith with every extra check assumed made. It is unexported on purpose: a
+// public entry that assumed the history, file-canary and sink checks would print `true`/`pass` for
+// checks nobody made (#323 P2-1, #329 P2-1). Tests use it; every real caller passes its observations
+// to LinesWith.
+func (r CanaryReport) linesAllObserved() []string { return r.LinesWith(AllObserved) }
 
-// LinesWith is Lines with the observation set: a check that was not made prints `unknown` (a
+// LinesWith is the committed evidence: verdict lines only. They carry the tool, the target the
+// denial named and pass/fail; no stream content and never the marker. A check that was not made prints `unknown` (a
 // `false` stays `false`), and the verdict is `pass` only when the report passed AND every check
 // was made, otherwise `fail` or `incomplete`.
 func (r CanaryReport) LinesWith(o CanaryObservations) []string {

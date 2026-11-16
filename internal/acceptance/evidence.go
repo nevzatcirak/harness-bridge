@@ -60,7 +60,7 @@ func (e *Evidence) refuse(why string) error {
 	return ErrEvidence
 }
 
-// Raw writes one preformatted verdict line (for example CanaryReport.Lines()).
+// Raw writes one preformatted verdict line (for example the lines of CanaryReport.LinesWith).
 func (e *Evidence) Raw(line string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
