@@ -106,7 +106,9 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 	}
 	wr.Close() // the child holds the only write end
 	var mu sync.Mutex
-	addSent := func(n string) { mu.Lock(); res.Sent = append(res.Sent, n); mu.Unlock() }
+	var sent []string
+	var timers []*time.Timer
+	addSent := func(n string) { mu.Lock(); sent = append(sent, n); mu.Unlock() }
 	fired := make([]bool, len(inv.Signals))
 	var out bytes.Buffer
 	readDone := make(chan struct{})
@@ -140,11 +142,14 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 						if k == st.OnEvent || (st.OnEvent == "init" && k == "system" && e.Subtype == "init") {
 							fired[i] = true
 							st := st
-							time.AfterFunc(st.Delay, func() {
+							tm := time.AfterFunc(st.Delay, func() {
 								if cmd.Process != nil && cmd.Process.Signal(st.Signal) == nil {
 									addSent(st.Signal.String())
 								}
 							})
+							mu.Lock()
+							timers = append(timers, tm)
+							mu.Unlock()
 							break
 						}
 					}
@@ -170,6 +175,7 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	var werr error
+	waited := true // false when Wait has not returned: cmd.ProcessState is then not ours to read
 	select {
 	case werr = <-waitErr:
 	case <-timer.C:
@@ -178,7 +184,7 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 		select {
 		case werr = <-waitErr:
 		case <-time.After(5 * time.Second):
-			res.Err = "abandoned"
+			res.Err, waited = "abandoned", false
 		}
 	case <-ctx.Done():
 		_ = cmd.Process.Signal(syscall.SIGTERM)
@@ -197,9 +203,13 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 	rd.Close()
 	<-readDone
 	mu.Lock()
+	for _, tm := range timers {
+		tm.Stop() // a step that has not fired by now never will
+	}
 	res.Stdout = append([]byte(nil), out.Bytes()...)
+	res.Sent = append([]string(nil), sent...)
 	mu.Unlock()
-	if cmd.ProcessState != nil {
+	if waited && cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()
 		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 			res.ExitSig = ws.Signal().String()
