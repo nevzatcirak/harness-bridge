@@ -724,6 +724,39 @@ The `session_create` AUDIT-01 line (4.3) exists for `create_session`. Facts and 
 - **Not here.** Archive and close lines (their tools do not exist until S6, after S8), startup
   wiring from `BRIDGE_LIFECYCLE_CONFIG` (a separate, planner-scheduled task), the first prompt (S9).
 
+### As built (slice S6, dated 2026-11-16, task #303)
+
+`archive_session`, `unarchive_session` and `close_session` exist over the persisted overlay of
+[ADR-025](ADR-025-archive-overlay-persistence.md) (accepted, D18). Facts and choices:
+
+- **No native write.** None of the three tools issues a native `PATCH`, `DELETE` or `POST`; the
+  7.3 preconditions are native reads (status, permissions, history of the session, the tree of
+  its directory). The `PATCH` text of 7.1/7.2/7.3 stays the record of the options considered.
+- **Reservation.** `Manager.ReserveLifecycle` keeps a separate table (never `busy`, never `x.op`,
+  never an execution ID). While held, `Send` returns `SESSION_BUSY`, `SessionGuard` reports the
+  session held and `submitting`, `get_session` adds `guard_reason: "archive"` (the state value is
+  the existing conservative one), the dashboard shows a held guard with no execution, and
+  `ReleaseGuard`, promotion and reconcile never match it. It is released by a deferred function on
+  every exit path including a panic.
+- **send_prompt (Q1).** `FORBIDDEN` with `reason: "session_archived"`, decided inside the same
+  `m.mu` critical section as the busy check, after the replay and pending-key branches, from the
+  published in-memory snapshot (`ArchivedKnown`: the last good snapshot even when the file state is
+  unknown, so an unknown overlay never blocks an unrelated prompt).
+- **Cap.** `archive_per_hour` (default 10) is one memory-only window shared by the three tools; a
+  call is charged when it reaches the overlay write, so a failing write spends budget. A restart
+  resets it (as for `create_per_hour`).
+- **close_session.** The manager's own `Interrupt` (no tool-layer audit inside) for the execution
+  that holds the guard, then a bounded wait until it settled and the guard is free, then the normal
+  archive path. A failed, refused or unsettled interrupt returns the error and leaves the overlay
+  unchanged; exactly one `session_close` line is written (`interrupt` = `interrupted`, `none`,
+  `failed`), no `interrupt` line.
+- **Audit.** `session_archive`, `session_unarchive`, `session_close`: one line per call on every
+  return path (AUDIT-01 and AUDIT-01b), closed fields only (CONTRACTS). They are journal-only: the
+  dashboard ring allowlist is not amended.
+- **Not here.** Production startup wiring from `BRIDGE_OVERLAY_DIR` and `BRIDGE_LIFECYCLE_CONFIG`
+  (a separate, planner-scheduled task: nothing constructs `ArchiveConfig` outside tests, so a
+  deployed Bridge is unchanged), the first prompt (S9), a CONTRACTS entry beyond the audit fields.
+
 ## 7. Close and archive
 
 ### 7.1 Tools
@@ -872,7 +905,7 @@ practical. Mutations are the ones a reviewer should re-run.
 | S5 | Audit lines for create, archive and close | one line per call on every return path, no free text | skip an audit on a refusal path |
 | S6 (after S8) | The **reversible Bridge archive overlay** (D16 Q1 option B) for Chat: `archive_session` and `close_session` (interrupt a running execution, then overlay archive), under a lifecycle reservation kind in the manager (never `x.op`, never an execution ID). **No native write**: native archive (`PATCH time.archived`) is operator-only and is not an MCP tool | preconditions 7.3 each refuse with no overlay change; **a spy native records no write of any kind (no `PATCH`, no `DELETE`, no `POST`) for `archive_session` and for the archive step of `close_session`**; `close_session` calls the existing interrupt path first and archives only after it is settled, and a failed or uncertain interrupt leaves the session un-archived; a concurrent `send_prompt` gets `SESSION_BUSY` while the overlay change is in flight; re-check before the overlay write; rate cap; `FORBIDDEN` under `BRIDGE_READ_ONLY`; while the reservation is held `get_session` shows `submitting` with `guard_reason: archive`, `releaseHolder`/the admin release/reconcile never act on it, and it is released on every exit path including panic; any session under a lifecycle root with the `archive` mode may be overlay-archived (D16 Q6) | drop the pre-write re-check; archive while a guard is held; skip the reservation; **issue a native `PATCH` from either tool**; **archive after a failed interrupt in `close_session`**; store the reservation as a fake execution ID that ADR-020 release could match |
 | S7 | CONTRACTS and runbook | doc review | n/a |
-| S8 (mandatory, **before S6**) | Overlay persistence design, its own ADR: where the overlay lives, how it survives a restart without becoming an authority (no grant restoration from journal history alone, ADR-010 memory-only records), how `include_archived` and un-archive use it. **Design: [ADR-025](ADR-025-archive-overlay-persistence.md) (PROPOSED).** | design review | n/a |
+| S8 (mandatory, **before S6**) | Overlay persistence design, its own ADR: where the overlay lives, how it survives a restart without becoming an authority (no grant restoration from journal history alone, ADR-010 memory-only records), how `include_archived` and un-archive use it. **Design: [ADR-025](ADR-025-archive-overlay-persistence.md) (ACCEPTED, D18, 2026-11-16). DONE (task #296 design, #303 acceptance text).** | design review | n/a |
 | S9 | ADR-012 amendment (docs, maintainer-visible) for the wide existing-tool grant O2 behind the per-root operator flag `existing_tools` (D16 Q7), then the existing-tool check that honors the flag. No code may rely on O2 before the amendment is accepted | amendment review; with the flag unset the existing-tool check is unchanged (`policy.go` conjunction); with it set, only sessions whose live directory is under that root; other roots unaffected | honor the flag for a root that has it unset; treat the flag as global |
 
 Delete is not exposed (D16 Q2); a deleting command (7.4 b or c) would be a

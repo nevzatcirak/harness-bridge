@@ -712,3 +712,51 @@ func TestReaderReloadsAtMostOncePerSecond(t *testing.T) {
 		t.Fatal("the last good snapshot must be kept for the prompt path")
 	}
 }
+
+// Test 1 (mutation: skip the fsync calls): a write syncs the temporary file and the directory.
+func TestWriteSyncsTheFileAndTheDirectory(t *testing.T) {
+	var mu sync.Mutex
+	var kinds []string
+	old := syncFile
+	syncFile = func(f *os.File) error {
+		if fi, err := f.Stat(); err == nil && fi.IsDir() {
+			mu.Lock()
+			kinds = append(kinds, "dir")
+			mu.Unlock()
+		} else {
+			mu.Lock()
+			kinds = append(kinds, "file")
+			mu.Unlock()
+		}
+		return old(f)
+	}
+	t.Cleanup(func() { syncFile = old })
+	s := open(t, newDir(t), true)
+	if _, _, err := s.Archive(bg, sid(1), "op"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(kinds, ",") != "file,dir" {
+		t.Fatalf("fsync calls = %v, want the file then the directory", kinds)
+	}
+}
+
+// ADR-025 section 5.4: the overlay is never rebuilt, repaired or extended from audit lines: the
+// package imports neither the logger nor the audit packages.
+func TestNoJournalSource(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, parser.ImportsOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pkgs {
+		for name, f := range p.Files {
+			for _, imp := range f.Imports {
+				if v := imp.Path.Value; strings.Contains(v, "log/slog") || strings.Contains(v, "internal/audit") || strings.Contains(v, "journal") {
+					t.Fatalf("%s imports %s", name, v)
+				}
+			}
+		}
+	}
+}

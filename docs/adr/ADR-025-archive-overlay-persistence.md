@@ -1,19 +1,21 @@
 # ADR-025: Archive overlay persistence (design for ADR-022 slice S8)
 
-Date: 2026-11-15. Status: **PROPOSED** (design only; no code, no deployment). Written for
-planner task #296 (ADR-022 section 10, slice S8: "mandatory, **before S6**").
+Date: 2026-11-15. Status: **ACCEPTED (D18, 2026-11-16)**. Written for planner task #296 (ADR-022
+section 10, slice S8: "mandatory, **before S6**"); implemented by slice S6 (task #303).
 
-**Acceptance.** This ADR is **not accepted**. Decision D12 (issue #117) delegates acceptance of the
-ADRs it names (ADR-021 to ADR-024) to the Planning Desk; it does not name ADR-025, so acceptance stays with
-the maintainer unless D12 is extended. Nothing here changes a D-item, ADR-010, ADR-012, ADR-020, ADR-021, ADR-022,
-ADR-023 or ADR-024. Every point that would touch one of them is written as an **open question for the
-maintainer** (section 9), each with a recommended answer that is a recommendation only.
+**Acceptance.** Accepted by maintainer decision **D18 (2026-11-16)** with every recommendation of section 9
+(recorded there as "Decided (D18)"). Nothing here changes a D-item, ADR-010, ADR-012, ADR-020, ADR-021,
+ADR-022, ADR-023 or ADR-024; the point that touches an existing tool (Q1) is decided by D18.
 
 **Revision (2026-11-15, task #301).** Revised after the reviews #298 (B, six P3) and #299 (A, one P2 and eight
 P3): the overlay now has an overlay-wide write mutex (section 4.3), an explicit uncertain-write procedure,
 the exact error codes of the unknown state, the placement of the `send_prompt` check, a fixed checksum
 serialization, reconciled bounds and fd-relative file operations; every review finding is either fixed in the
-text or recorded as a residual or an open question (table in the task report). Still **PROPOSED**.
+text or recorded as a residual or an open question (table in the task report).
+
+**Revision (2026-11-16, task #303).** Accepted (D18); section 9 is decided; the five P3s of review #302 are
+folded in as text (section 4.3 abandon flag and late worker, section 4.3/T4/test 8 generation rule, test 12
+delays, T6/T7/T10 wording); section 11 records what S6 built.
 
 **Evidence base.** Every claim about the code is a citation to `main` at `e09ddd6` (checked on
 2026-11-15) and is marked as design where it is not implemented. Nothing was run against a live
@@ -176,6 +178,12 @@ A change (add or remove one entry) is, in this order:
 - *Failure up to and including the file `fsync`, or the deadline before the rename was issued*: the old file and
   the old memory state remain; the tmp file is removed with `unlinkat`; `overlayMu` and the reservation are
   released; the call is refused with `UPSTREAM_FAILURE` and the closed reason `overlay_unavailable`.
+  **One atomic outcome state per change** (review #302 P3-1): `pending`, `abandoned`, `committing`, `committed`,
+  `uncertain-returned`. The caller moves `pending` to `abandoned` at the deadline **only if the worker has not
+  already moved `pending` to `committing`**; the worker moves `pending` to `committing` **immediately before the
+  rename** and, if that move fails (the caller abandoned the change), removes its tmp file and issues no rename.
+  So a call that was answered "nothing changed" can never commit later. At the deadline with the worker in
+  `committing` the caller moves it to `uncertain-returned` and answers the uncertain result below.
 - *The rename returned but the directory `fsync` failed, or the deadline expired while the rename or the
   directory `fsync` was in flight (the outcome on disk is **uncertain**)*: the call returns the typed
   `UNKNOWN_OUTCOME` (question 13), the in-memory snapshot is **not** replaced, and the overlay is marked
@@ -188,10 +196,12 @@ A change (add or remove one entry) is, in this order:
   `overlayMu` until it returns, so **no second write can race the hung one**; later changes wait on their own 5 s
   deadline and are refused with `UPSTREAM_TIMEOUT` (retryable). The calling goroutine does not wait for the
   worker past the deadline: it returns the uncertain result above and **releases the session reservation**,
-  which guards the native-state preconditions, not the file. **Accepted residual:** an archive that was
-  uncertain may still commit after its call returned, so a prompt admitted in that window reaches a session
-  that is archived a moment later; the check of section 4.5 sees the committed entry from then on, the effect
-  is a narrowing and one prompt the caller was already authorized to send.
+  which guards the native-state preconditions, not the file. **A worker whose caller already returned the uncertain
+  answer does not publish** (review #302 P3-2): the entry it committed stays **unpublished** until the next change
+  adopts it (or a restart loads it), as the paragraph above says and as test 13 asserts; readers keep the last good
+  snapshot, so `Archived` and the section 4.5 check do not see it before then. **Accepted residual:** a prompt
+  admitted in that window reaches a session that is archived a moment later; the effect is a narrowing and one
+  prompt the caller was already authorized to send.
 
 A crash between the rename and the acknowledgement leaves the **new** state on disk: the caller finds out
 through `list_catalog` (`include_archived`) or the dashboard (`get_session` is unchanged and does not report
@@ -293,16 +303,16 @@ The invariants, each of which becomes a test in S6 (section 8):
 | T1 | The file is edited by the service user (or root) | not an authority (section 5): the worst result is a different set of **hidden** sessions or, if question 1 is yes, refused prompts to sessions that were listed; the checksum and strict decoding make an accidental or partial edit an **unknown** state (fail closed) | a deliberate, internally consistent edit by the service user is not detectable (the checksum has no secret). Same-UID/root is outside the boundary, as in ADR-020 and ADR-022 section 8 |
 | T2 | Another user or an agent user edits the file | `0700` directory and `0600` file owned by the service user, no symlink, single link, open-by-fd checks at start; agent users cannot read or write it | operator duty: the parent chain is not writable by agent users (as ADR-021 section 5) |
 | T3 | **Rollback**: an old snapshot is put back (backup restore, filesystem snapshot) | only visibility changes: sessions archived since are listed again, sessions un-archived since are hidden again; nothing is authorized or lost; `generation` is in the file but there is no external monotonic counter | accepted residual (question 7); the S6 audit lines let an operator see that `overlay_generation` went down |
-| T4 | Two Bridge **processes** write | `overlay.lock` (`flock`, non-blocking, never unlinked) taken at startup; a second process runs without the archive tools; each write also re-reads the generation under the lock and refuses on a mismatch | the lock is advisory like ADR-010's (an unrelated process ignoring flock is the same-UID case) |
+| T4 | Two Bridge **processes** write | `overlay.lock` (`flock`, non-blocking, never unlinked) taken at startup; a second process runs without the archive tools and so never writes; the lock holder re-reads the file **only after an uncertain write** (section 4.3), where a generation that is neither the pending nor the previous one latches unknown (review #302 P3-4: one rule, not "every write re-reads") | the lock is advisory like ADR-010's (an unrelated process ignoring flock is the same-UID case) |
 | T11 | Two archives of **different sessions inside one process** lose an update (the `flock` does not order goroutines) | `overlayMu` held across build, write, rename, fsync and publish (section 4.3); the build reads the snapshot after taking it | none: test 12 and the mutation "drop the overlay mutex" pin it |
 | T12 | A write whose outcome is uncertain (directory `fsync` error, a hung rename) leaves memory and disk different | the uncertain procedure of section 4.3: no second write races it, the next change re-reads and adopts or latches unknown | one prompt may reach a session archived a moment later (narrowing only) |
 | T5 | A crash during a write | tmp file + `fsync` + `rename` + directory `fsync`: the file is the complete old or the complete new snapshot; a leftover `overlay.json.tmp-*` is ignored and removed at the next start by the lock holder | a filesystem that ignores `fsync` loses the **last** change at power loss (visibility only) |
-| T6 | Corrupt or oversize file | unknown state: catalog and dashboard lists fail (503), archive tools refuse; the writer start policy is question 3 | an operator must move the file aside to recover (no admin command, question 9) |
-| T7 | The native session is deleted, or leaves the ACL or the lifecycle root | the entry is kept and ignored; no error | at most 1000 stale entries; un-archive removes one |
+| T6 | Corrupt or oversize file | unknown state: the catalog fails with `INTERNAL` and the dashboard answers 503, archive tools refuse; the writer start policy is question 3 | an operator must move the file aside to recover (no admin command, question 9) |
+| T7 | The native session is deleted, or leaves the ACL or the lifecycle root | the entry is kept and ignored; no error | at most 1000 stale entries; a stale entry is removable only by the operator's file edit (section 4.2, accepted residual) |
 | T8 | A prompt-injected Chat archives many sessions to hide them | the S6 controls of ADR-022 section 8: one session per call, `archive_per_hour` (default 10), `archive` mode per root, preconditions 7.3, an audit line per call, `BRIDGE_READ_ONLY` refuses; the overlay adds the 1000-entry bound | hiding is reversible (un-archive) and is not deletion |
 | T9 | Archive races a prompt, a guard release or reconcile | the lifecycle reservation of section 4.3 (never `x.op`, never an execution ID, so ADR-020 release cannot match it) and the pre-write re-check | a native or human writer can still race (ADR-022 5.1 residual) |
 | T13 | `create_session` runs while an archive or un-archive is in flight | none needed: `create_session` creates a **new** session ID and takes no archive reservation, so there is no shared reservation with the overlay; its caps count **native** sessions (the overlay is not in the count), so archiving or un-archiving frees or takes no create slot; neither path takes `x.op` (review #298 P3-4) | none |
-| T10 | The overlay is read as proof of "this session may be touched" | forbidden by section 5 and pinned by the dependency test | none if the test holds |
+| T10 | The overlay is read as proof of "this session may be touched" | forbidden by section 5 and pinned by the dependency test (security, lifecycle) and the AST test over `internal/mcp` (5.1(b)) | none if the test holds |
 
 ## 7. Consequences
 
@@ -344,8 +354,8 @@ Tests (RED before GREEN; each failure mode must be reachable through the real ca
    reservation is released on every exit path including a panic; ADR-020 release and reconcile never act on it.
 7. **Idempotence and bounds**: archiving twice is a no-op; at 1000 entries, **and separately** at the 512 KiB file
    bound, a new archive is `SESSION_LIMIT` and nothing is dropped; un-archive frees one.
-8. **Two processes**: the second `flock` fails; that process has no archive tools; its read path works; a stale
-   generation at write time is refused.
+8. **Two processes**: the second `flock` fails; that process has no archive tools and cannot write; its read path
+   works. (The stale-generation refusal of the previous revision is the uncertain-write rule of 4.3, test 13.)
 9. **Restart**: write, reopen, the same labels; no grant, execution, key or guard appears; `include_archived`
    and `archived=1` show the same sessions before and after.
 10. **Audit**: one line per call on every return path, with the counters and nothing from the file.
@@ -353,7 +363,8 @@ Tests (RED before GREEN; each failure mode must be reachable through the real ca
     interrupt leaves the overlay unchanged (the S6 row of ADR-022 section 10); exactly one `session_close` line
     and no `interrupt` line for the call.
 12. **Concurrent changes**: N concurrent archives and un-archives of **distinct** sessions (each under its own
-    reservation, with a fault-injection delay between build and rename to widen the window): **all N are in the
+    reservation, with a fault-injection delay between build and rename, and again with a delay after the directory `fsync`
+    and before the publish, to widen both windows): **all N are in the
     file and in the published snapshot**, `overlay_entries` and `overlay_generation` are consistent with it, and
     every call that returned success is represented. This is what catches the lost update of section 4.3.
 13. **Uncertain and hung writes**: a directory `fsync` error after a successful rename and a hung rename each
@@ -375,56 +386,43 @@ the package of `ArchiveOverlay`); take `x.op` instead of the lifecycle reservati
 that ADR-020 release could match; drop the pre-write re-check; issue any native write from either tool; archive after
 a failed interrupt in `close_session`; drop an entry silently at the bound; rebuild the overlay from an audit line.
 
-## 9. Open questions for the maintainer
+## 9. Decided (D18, 2026-11-16)
 
-Each has a **recommended** answer. None is decided by this ADR; none is a D-item change unless noted.
+The maintainer accepted every recommendation:
 
-1. **Does an overlay-archived session refuse `send_prompt`?** ADR-022 7.2 (B) says the Bridge "refuses prompts to
-   it", and D16 Q1 chose (B), but the refusal changes an existing tool's behaviour. *Recommended: yes, `FORBIDDEN`
-   with reason `session_archived`, answered from the in-memory snapshot (no I/O), so a corrupt file after startup
-   cannot affect prompts.*
-2. **Do `list_sessions`, `find_sessions`, `get_session` and `get_repository` show or hide archived sessions?**
-   D16 Q5 only names the catalog. *Recommended: no change: the existing tools stay byte-identical; only the catalog
-   and the dashboard hide.*
-3. **What does the writer do at start if the configured overlay file is invalid?** *Recommended: refuse to start the
-   writer role with a clear message (the precedent of an invalid lifecycle configuration, ADR-022 section 3.1);
-   read-only processes start and report the unknown state.* The alternative is to start and refuse only the
-   archive tools and the lists.
-4. **Is un-archive a Chat tool, an operator action, or both?** ADR-022 7.1 says `unarchive_session` is "not offered"
-   because the native API has none; with (B) it is possible. *Recommended: offer `unarchive_session` to Chat in S6
-   with the same cap, preconditions and audit as archive (it only restores visibility of an ACL-authorized
-   session); an operator command on the ADR-020 admin socket would be an ADR-020 amendment and is not proposed.*
-5. **If `BRIDGE_OVERLAY_DIR` is unset, is memory-only an acceptable mode?** *Recommended: no: unset means the
-   archive tools are not registered (default off), so a restart can never silently un-archive.*
-6. **The name and the directory.** *Recommended: `BRIDGE_OVERLAY_DIR` (a proposal), separate from the lock and
-   history directories.*
-7. **Rollback detection.** *Recommended: accept the residual (T3); an external monotonic counter or a signed
-   file would need a secret store this Bridge does not have, and the effect is visibility only.*
-8. **Do read-only processes reload the file while running?** *Recommended: yes, stat-poll at most once a second;
-   the alternative is "restart to see changes".*
-9. **Operator recovery from a corrupt file.** *Recommended: file-level only (move the file aside, restart); no admin
-   command (it would be an ADR-020 amendment).*
-10. **The bounds** (1000 entries, 512 KiB, the entry count binding first) and the stale-entry policy (keep and
-    ignore; a stale entry is removable only by the operator's file edit, accepted residual of section 4.2).
-    *Recommended as written.* The alternative is a removal-only prune at start of the entries whose session is
-    not in the ACL (the ACL is immutable at runtime, so this needs no native read); not recommended, because the
-    label would be lost if the session returned to the ACL.
-11. **Provenance of an entry.** *Recommended: `principal` and `archived_at` only; no operator/chat distinction until
-    an operator archive path exists.*
-12. **Acceptance.** D12 does not name ADR-025 (it names ADR-021 to ADR-024). *Recommended: the maintainer accepts or extends D12; until then S6
-    is not started.*
-
-13. **The answer of an uncertain overlay write** (section 4.3). *Recommended: `UNKNOWN_OUTCOME` (the project's
-    code for "the write may have happened; the Bridge does not retry"), with the closed reason
-    `overlay_uncertain`; the caller reads the catalog and may repeat the idempotent call. The alternative is
-    `UPSTREAM_FAILURE` with that reason.*
+1. **Q1:** an overlay-archived session refuses `send_prompt`: `FORBIDDEN`, reason `session_archived`, from the
+   in-memory snapshot, no I/O.
+2. **Q2:** `list_sessions`, `find_sessions`, `get_session`, `get_repository` stay byte-identical; only the catalog
+   and the dashboard hide.
+3. **Q3:** an invalid overlay file: the writer refuses to start; read-only processes start and report unknown.
+4. **Q4:** `unarchive_session` is offered to Chat with the same cap, preconditions and audit.
+5. **Q5:** `BRIDGE_OVERLAY_DIR` unset: the archive tools are not registered; no memory-only mode.
+6. **Q6:** `BRIDGE_OVERLAY_DIR`, separate from the lock and history directories.
+7. **Q7:** rollback residual accepted (T3).
+8. **Q8:** read-only processes stat-poll at most once a second.
+9. **Q9:** file-level operator recovery only (move the file aside, restart).
+10. **Q10:** bounds 1000 entries / 512 KiB; stale entries are kept and ignored.
+11. **Q11:** provenance is `principal` and `archived_at` only.
+12. **Q12:** acceptance: this decision (D18).
+13. **Q13:** an uncertain overlay write is `UNKNOWN_OUTCOME` with the closed reason `overlay_uncertain`.
 
 ## 10. Limitations
 
-- Design only: no code, no test, no live run. The file rules are copied from existing, tested checks (cited), but
+- Written as a design; implemented by slice S6 (section 11). No live run: every test uses a fake native. The file rules are copied from existing, tested checks (cited), but
   their reuse for a mutable file (`rename`, `flock`) is a design claim.
 - `fsync` semantics depend on the filesystem; the design states what survives a power loss and what does not
   (T5) but nothing here was measured.
 - How S6's reservation kind is stored in the manager (ADR-022 5.1) is that ADR's design; this ADR only requires
   that it is neither `x.op` nor an execution ID.
 - The variable name, the file name and the numbers are proposals.
+
+## 11. As built (slice S6, dated 2026-11-16, task #303)
+
+- **Package.** `internal/overlay` holds the store (`Open`, `Archive`, `Unarchive`, `Archived`, `ArchivedKnown`), every file
+  operation fd-relative through an `os.Root` on the validated directory (an AST test forbids the path-based `os`
+  functions there). The write worker keeps `overlayMu` until it returns; the caller waits only its own 5 s.
+- **Not wired in production.** Nothing constructs `ArchiveConfig` or `overlay.Open` outside tests: the startup wiring from
+  `BRIDGE_OVERLAY_DIR` (with `BRIDGE_LIFECYCLE_CONFIG`) is a separate task, so a deployed Bridge is unchanged.
+- **Where S6 differs from the text above.** The "uncertain" marker of 4.3 is recorded **before** the rename is issued (a
+  rename that hangs is already uncertain). The audit line carries `reason` for the closed overlay reasons.
+- **Manager.** `ReserveLifecycle`, `LifecycleGuard` and `SetArchiveCheck` in `internal/execution/lifecycle.go`.

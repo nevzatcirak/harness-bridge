@@ -48,6 +48,10 @@ const (
 // fileBound is MaxFileBytes; a variable only so a test can reach the size bound.
 var fileBound int64 = MaxFileBytes
 
+// syncFile is the fsync seam: production calls File.Sync; a test counts the calls to observe that
+// the file and the directory are both synced (ADR-025 test 1, mutation "skip the fsync calls").
+var syncFile = func(f *os.File) error { return f.Sync() }
+
 // WriteBound is the one deadline of a change (ADR-025 4.3). A variable only so a test can shorten it.
 var WriteBound = 5 * time.Second
 
@@ -724,7 +728,7 @@ func (s *Store) writeTmp(data []byte) (string, error) {
 		cleanup()
 		return "", fail(KindUnavailable, "fsync", err)
 	}
-	if err := f.Sync(); err != nil {
+	if err := syncFile(f); err != nil {
 		cleanup()
 		return "", fail(KindUnavailable, "fsync", err)
 	}
@@ -741,7 +745,7 @@ func (s *Store) syncDir() error {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	return syncFile(d)
 }
 
 func (s *Store) markUncertain(prev, pending uint64) {
