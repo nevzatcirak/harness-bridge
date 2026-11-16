@@ -820,16 +820,21 @@ func TestCloseLatchesTheStore(t *testing.T) {
 	if ok, err := s.Archived(bg, sid(1)); !ok || err != nil {
 		t.Fatalf("the published snapshot must stay readable after Close: %v %v", ok, err)
 	}
+	// a reader closed before the file changes does not reload it (and does not turn unknown)
 	dir := newDir(t)
+	w := open(t, dir, true)
 	now := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
 	r, err := Open(dir, Options{Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Close()
+	if _, _, err := w.Archive(bg, sid(1), "op"); err != nil { // the file changes after r closed
+		t.Fatal(err)
+	}
 	now = now.Add(5 * time.Second)
-	if _, err := r.Archived(bg, sid(1)); err != nil { // no reload on a closed store, no unknown state
-		t.Fatalf("reader Archived after Close: %v", err)
+	if ok, err := r.Archived(bg, sid(1)); err != nil || ok {
+		t.Fatalf("reader Archived after Close = (%v, %v), want (false, nil): no reload on a closed store", ok, err)
 	}
 }
 
