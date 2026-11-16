@@ -86,7 +86,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	wirePermissionRelay(mcpServer, runs, client, relay)
+	if err := wirePermissionRelay(mcpServer, runs, client, relay); err != nil {
+		log.Fatal(err)
+	}
+	if relay == "reject_only" {
+		log.Print("permission relay: reject_only; no native incarnation source exists, so permission requests stay unattributed and reply_permission refuses with not_verified (docs/CONTRACTS.md, ADR-024 S6)")
+	}
 	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {
 		log.Fatal(err)

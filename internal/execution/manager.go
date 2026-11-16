@@ -120,10 +120,14 @@ type run struct {
 	observationValid              bool
 }
 type Manager struct {
-	mu                sync.Mutex
-	r                 Runner
-	runs              map[string]*run
-	busy              map[string]string
+	mu   sync.Mutex
+	r    Runner
+	runs map[string]*run
+	busy map[string]string
+	// ADR-022 5.1 / ADR-025 4.3: the lifecycle reservation kind. A separate table so no
+	// execution ID, x.op or ADR-020 release can ever match it.
+	lifecycle         map[string]string
+	archiveCheck      atomic.Pointer[func(string) bool]
 	keys              map[string]string
 	fingerprints      map[string][32]byte
 	pending           map[string]chan struct{}
@@ -160,7 +164,7 @@ type Manager struct {
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, replies: map[replyKey]*replyRecord{}, processStart: time.Now().UTC().Format("2006-01-02T15:04:05Z"), reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, lifecycle: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, replies: map[replyKey]*replyRecord{}, processStart: time.Now().UTC().Format("2006-01-02T15:04:05Z"), reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -269,7 +273,15 @@ retry:
 			return Execution{}, false, ctx.Err()
 		}
 	}
-	if m.busy[session] != "" {
+	// ADR-025 4.5: the archive check shares this critical section with the busy check and the
+	// reservation, after the replay and pending-key branches above (a replay returns an earlier
+	// execution and submits nothing). An archive that committed is seen here; one in flight holds
+	// the lifecycle reservation and is seen as SESSION_BUSY. Memory only, no I/O.
+	if m.archivedLocked(session) {
+		m.mu.Unlock()
+		return Execution{}, false, &Error{Code: "FORBIDDEN", Message: "session is archived", Reason: "session_archived"}
+	}
+	if m.busy[session] != "" || m.lifecycle[session] != "" {
 		m.mu.Unlock()
 		return Execution{}, false, Fail("SESSION_BUSY", "session has an active or uncertain execution")
 	}
@@ -553,8 +565,13 @@ func (m *Manager) SessionGuard(session string) (held bool, state string) {
 		m.mu.Lock()
 		id := m.busy[session]
 		x := m.runs[id]
+		lifecycle := m.lifecycle[session] != ""
 		m.mu.Unlock()
 		if id == "" {
+			if lifecycle {
+				// ADR-022 5.1: a lifecycle reservation has no run; the conservative value.
+				return true, "submitting"
+			}
 			return false, ""
 		}
 		if x == nil {

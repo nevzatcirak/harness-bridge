@@ -807,6 +807,46 @@ bound. Review #293 P3-2: the attempt line's `kind` shape now equals the Bridge's
 (`[A-Za-z0-9_.:-]{1,64}`); the other option (a typed refusal before the attempt) was not needed because
 the charset is the same closed one `native_tool` already uses.
 
+## As built (S6), 2026-11-16
+
+Facts only (task #304). The production `PermissionSource` exists and is wired; the verified path is
+tested against a fake native; no live run was made.
+
+- **Source.** `internal/execution/permissionsource.go`: `NewOpenCodePermissionSource(client, manager,
+  cfg)`; every `PermissionView` builds a fresh `opencode.PermissionObserver` for the session and takes
+  one bounded `Snapshot`. No cache (a cached view would let a reply be checked against a request the
+  user has already answered). `cmd/bridge` installs it with the replier and the attempt writer in
+  `reject_only` (mode `off` installs nothing; `wirePermissionRelay` now returns an error).
+- **Authority.** The observer's `PermissionObservationAuthority` is a read-only projection of the
+  manager's runs: the scope comes from the run holding the session guard (none: no scope, nothing
+  observed), the executions from the manager's submitted runs of the session with their
+  Bridge-chosen user message IDs. Neither touches a native payload. Locks: the manager's mutex and a
+  run's mutex are never held together; the authority is called only from the reconcile path and from
+  step 5 of the reply, where no run mutex is held.
+- **The gap that remains (decided here as fail-closed, not as a decision).** The observer needs native
+  incarnation evidence (`PermissionScope.NativeEpoch`) before it will report `attribution=verified`;
+  ADR-018 and `docs/P2_PERM_CORE_02_OBSERVATION.md` say none exists and none may be fabricated. The
+  source has an optional `NativeIncarnation` seam and production passes none, so on a deployed Bridge
+  every request is `unattributed`: `pending_permission` stays count-only and `reply_permission`
+  refuses with `FORBIDDEN`/`not_verified`, with no native write and no attempt line (S5 failed closed
+  with `UPSTREAM_FAILURE` because no source existed at all; now the source runs and the refusal says
+  why). What can supply the evidence
+  is a maintainer decision (see the BACKLOG item); the options and their trade-offs are listed there.
+- **Tests (fakes only).** A fake native server (GET `/permission`, `/session/:id`,
+  `/session/:id/message/:id`, POST `/permission/:id/reply`) behind the real client, observer and
+  manager: the verified request is exposed with the closed projection; a reply makes a fresh read, one
+  attempt line and exactly one `{"reply":"reject"}` POST; the binding refusals (absent, another
+  session, tool-less, an assistant message of another workspace, a user message the Bridge never
+  sent, a request attributed to another execution of the same session) each make no native write and
+  no attempt line; a request answered natively between a view and the reply is refused; a transient
+  native failure refuses and the next call works; a hanging read is a retryable `UPSTREAM_TIMEOUT`
+  inside its bound; a lost response is `UNKNOWN_OUTCOME` and never resent, one explicit superseding
+  reject is a second write and a third is refused (D15 Q8); `allow_once` is refused with zero native
+  calls. Mutations: reply without the fresh read (9 RED), a cached view (6 RED), accepting a
+  permission of another execution (2 and 1 RED), `allow_once` not refused (2 RED), a non-reject
+  reply forwarded by the client (1 RED), a fabricated epoch (1 RED), the wiring dropped (1 RED), mode
+  `off` installing the source (2 RED).
+
 ## Amendment A1: Incarnation source (PROPOSED, task #315, 2026-11-16)
 
 **Status: PROPOSED.** Design and research only: no code, no test, no live run. Acceptance is the
@@ -814,14 +854,19 @@ maintainer's (D19); nothing here changes D12, D15 (reject-only, policy OFF), an 
 ADR, ADR-018 or ADR-010. Upstream facts are static source reading of OpenCode v1.19.4 `148842ef` (a
 fresh sparse checkout of `packages/opencode/src` and `packages/schema/src`, read only; OpenCode was not
 run and no Bridge or OpenCode call was made). Paths below are under `packages/opencode/src/` and
-anything not settled by that reading is marked **UNVERIFIED**.
+anything not settled by that reading is marked **UNVERIFIED**. Bridge-side citations were re-checked
+against `main` `b98c004` (after #306 and #307), where the section "As built (S6)" above describes the
+production source; revision 2 of this amendment (task #328) is the review-fix pass of #324.
 
 ### A1.1 The finding and what "incarnation" has to mean
 
-The production `PermissionSource` (S6, PR #306) has no incarnation source: the scope it supplies has an
-empty `NativeEpoch`, `correlate` (`internal/adapters/opencode/permission_observation.go:290`) answers
-`unattributed/identity_unverified` for every request, `pending_permission` is count-only and
-`reply_permission` refuses `FORBIDDEN`/`not_verified`. `docs/P2_PERM_CORE_02_OBSERVATION.md` and ADR-018
+The production `PermissionSource` (S6, PR #306, merged; see "As built (S6)") has no incarnation source:
+`PermissionSourceConfig.Incarnation` is nil in production (`internal/execution/permissionsource.go:48`),
+so `runAuthority.PermissionScope` supplies an empty `NativeEpoch` (`:121-134`), the check in `correlate`
+(`permission_observation.go:290-291`, function at `:281`) answers `unattributed/identity_unverified` for
+every request, `pending_permission` is count-only and `reply_permission` refuses
+`FORBIDDEN`/`not_verified`. The seam is `NativeIncarnation.NativeEpoch(ctx) (string, error)`
+(`permissionsource.go:33-40`). `docs/P2_PERM_CORE_02_OBSERVATION.md` and ADR-018
 section 5 forbid fabricating the value.
 
 The pending requests do **not** live for the lifetime of the OS process. They live in the per-directory
@@ -854,9 +899,9 @@ epoch must exclude.
 | # | Candidate (file:line) | Stable across restarts? | Changes on restart? | Spoofable by a client? | Verdict |
 |---|---|---|---|---|---|
 | 1 | `GET /global/health` `{healthy, version}` (`routes/instance/httpapi/groups/global.ts:12-15,79-87`, `handlers/global.ts:66-68`) | yes (the version) | no | a client cannot change the answer, but it is not unique | **no identity** |
-| 2 | SSE `server.connected` and `server.heartbeat` (`handlers/event.ts:63-71`, `handlers/global.ts:25-52`) | each event has a fresh `EventV2.ID.create()` and empty properties | a new ID per event, not per boot | no | **no identity** (the `EventV2.ID` scheme is in `packages/core`, not read: **UNVERIFIED**) |
+| 2 | SSE `server.connected` and `server.heartbeat` (`handlers/event.ts:63-71`, `handlers/global.ts:25-52`) | each event has a fresh `EventV2.ID.create()` and empty properties | a new ID per event, not per boot: `EventV2.ID` is `Event.ID` (`packages/core/src/event.ts:14`), defined in `packages/schema/src/event.ts:9-11` as `"evt_" + ascending()`, i.e. a 6-byte time-and-counter prefix plus 14 random base62 characters (`packages/schema/src/identifier.ts:6-30`) | no | **no identity** (source-verified) |
 | 3 | `GET /path` `{home, state, config, worktree, directory}` (`handlers/instance.ts:29-36`) | yes | no | no | **no identity** |
-| 4 | `server.instance.disposed` and global disposed events (`project/instance-store.ts:79-97,126-144`, `server/global-lifecycle.ts:6-14`) | not an identifier: an **event** | emitted on dispose, reload, config change and graceful shutdown; **not** on a crash, kill or power loss | a client can trigger a dispose (more refusals only); an emitted event cannot be hidden from an open stream | **usable as a signal**, not as a value |
+| 4 | `server.instance.disposed` (`server/event.ts:8`; per-directory `project/instance-store.ts:79-97,126-144`; the global emission is the **same payload type** `Event.Disposed.type` with envelope `directory: "global"` and empty properties, `server/global-lifecycle.ts:6-14`) | not an identifier: an **event** | emitted on dispose, reload, config change and graceful shutdown; **not** on a crash, kill or power loss | a client can trigger a dispose (more refusals only); an emitted event cannot be hidden from an open stream | **usable as a signal**, not as a value |
 | 5 | `OPENCODE_PID` (`index.ts:77`) | a value of the process | yes | n/a | **not exposed**: no route reads it (searched `packages/`); in-process environment only |
 | 6 | Permission and event IDs (`id/id.ts:22-24,51-69`) | no (time prefix plus random) | new IDs | the values come from the native process clock | **forbidden as evidence** (native-writable), and not an identifier of the process |
 | 7 | Listener host and port, mDNS (`server/server.ts`) | yes (configuration) | no | n/a | **no identity** |
@@ -893,10 +938,18 @@ connection for all directories; `handlers/global.ts:25-52`). The Bridge keeps an
 generates itself** (a random 128-bit token, never derived from an event ID, message text or any native
 value) and replaces it whenever continuity of observation may have been lost:
   1. on every (re)connection of the stream, including the first;
-  2. on `server.instance.disposed` (any directory, the simplest rule) and on the global disposed event;
+  2. on **any** `server.instance.disposed` payload, whatever its envelope `directory` (a concrete
+     directory or `"global"`): there is one event type, and the global emission is the same type with
+     `directory: "global"` (`server/global-lifecycle.ts:6-14`), so a matcher on the run's own directory
+     would miss it;
   3. on stream end or error, and when no event (heartbeats arrive every 10 s,
      `handlers/global.ts:35-37`) has been seen for 25 s (a gap rule; the value is a proposal).
-The epoch is **armed** only after the first heartbeat of a connection. Every run records the epoch that
+The epoch is **armed** only after the first heartbeat of a connection. The heartbeat is
+`Stream.tick("10 seconds")` with `Stream.drop(1)` (`handlers/global.ts:35-37`), so the expected arming
+delay after every (re)connection, including Bridge start, is **at least one heartbeat interval (about 10
+s)**; the exact first-heartbeat time is not observed (UNVERIFIED). During that delay every new run is
+unverifiable (it records an unarmed `submitEpoch`, below), and so is any run already waiting; the
+operator sees `not_verified`/count-only, never a wrong attribution. Every run records the epoch that
 was armed when its prompt was submitted (`run.submitEpoch`, Bridge memory only, ADR-010). The authority
 supplies `NativeEpoch` = the current epoch **only if** it is armed and equal to the run's `submitEpoch`;
 otherwise the epoch stays empty and the request is unattributed. `PermissionView` reads the epoch before
@@ -908,16 +961,23 @@ and after its `Snapshot` and refuses attribution when they differ.
 - *Races and limits (stated, not hidden):* (i) event latency: a dispose happens natively before its event
   reaches the Bridge, so for a few milliseconds an observation of the new instance can still carry the old
   epoch (reject-only, and the full binding of ADR-018 section 5 still has to hold; residual). (ii) Lost
-  events at connect: the hello is written before the `GlobalBus` listener is registered when the stream
-  body is consumed (`handlers/global.ts:35-52` merges `events` after the hello), unlike the per-instance
-  `/event` handler that registers first (`handlers/event.ts:29-33`); hence arming after the first heartbeat
-  and the rule that older executions are unverifiable. Exact registration timing: **UNVERIFIED**. (iii) A
+  events at connect: the hello is written before the `GlobalBus` listener is registered. By construction
+  of the response, `Stream.make(hello)` is concatenated with `events` (`handlers/global.ts:41-42`), and
+  `GlobalBus.on` runs inside `Stream.callback`'s acquire step (`:28-33`), which only starts when `events`
+  is consumed after the hello; the per-instance `/event` handler instead registers eagerly
+  (`handlers/event.ts:29-33`). Hence arming after the first heartbeat and the rule that older executions
+  are unverifiable. This is source reading of the stream construction; its runtime behaviour behind a
+  running server or a buffering proxy was not observed (**UNVERIFIED**). (iii) A
   Bridge restart resets everything (executions are memory-only anyway). (iv) A silent middlebox drop is
   caught only by the 25 s gap rule. (v) A compromised native server could hide events: out of the boundary,
   as in ADR-020. (vi) It costs one authenticated long-lived connection.
 - *What it is:* **evidence of continuity of observation**, not a native identity. It meets the purpose of
   the epoch (T-I), but not the literal wording "independent native incarnation evidence"; whether that is
-  acceptable is question Q1.
+  acceptable is question Q1. **If Q1 is accepted**, the as-built wording must be reworded to "continuity
+  of observation" in two places, which this amendment deliberately does **not** change now: the doc
+  comment of `NativeIncarnation` (`permissionsource.go:33-37`, "changes when the native process that
+  holds the pending requests is replaced") and `docs/P2_PERM_CORE_02_OBSERVATION.md` (about `:60-68`,
+  "native incarnation" and "process incarnation"). It would also need ADR-018 section 5 to be read the same way.
 - *Fail closed:* no stream, 401, parse failure, not yet armed, a gap: empty epoch, `not_verified`.
 - *Tests:* a fake SSE server (A1.5).
 
@@ -930,6 +990,24 @@ assistant messages correlated with its execution during reconciliation; recordin
 a request's `tool.messageID` to be one of them excludes the retry-style turn of T-I without any epoch
 (a new turn has a new assistant message). It narrows (c)'s residual (i) but depends on the Bridge having
 observed the message before the request, so it cannot replace (c).
+
+*Pin rule (decided here as a proposal, #324 P2-3).* **A request whose assistant message is not yet pinned
+is refused, not attributed on the epoch alone.** Precisely:
+- A message ID is pinned only by a reconciliation read made while the execution's run holds the session
+  guard and the epoch is armed and equal to the run's `submitEpoch`; the pinned set is Bridge memory only
+  (ADR-010) and is per execution.
+- The request's `tool.messageID` must be in the pinned set of the execution it correlates to. If it is
+  not (a permission asked mid-turn before the next reconciliation has seen its assistant message), the
+  request is `unattributed` (proposed reason `message_unpinned`): `pending_permission` stays count-only,
+  `reply_permission` answers `FORBIDDEN`/`not_verified`, zero native writes, no attempt line. The next
+  `PermissionView` may pin it (one bounded reconciliation read per view, inside the observer's bound) and
+  then verify it; the human can answer natively in the meantime.
+- Attributing on the epoch alone would be a fallback that reopens exactly (c)'s residual (i) for the first
+  request after a dispose, which is the request (e) exists to protect, so it is rejected. Cost: the relay
+  can refuse the first request of a turn for up to one view; that is fail-closed and inside D15.
+- Residual, stated: a message that appears and is read within window (i) (the few milliseconds between a
+  native dispose and its event) with the old epoch could be pinned wrongly; (e) narrows (c), it does not
+  remove (i). Pinned IDs are Bridge-observed values, not trusted native assertions.
 
 ### A1.4 Recommendation
 
@@ -963,12 +1041,22 @@ different tokens); an execution submitted before a replacement is unverifiable (
 native writes, no attempt line); one submitted while not armed is unverifiable; an epoch that changes
 between the two reads of one `PermissionView` refuses attribution; oversized or malformed events are
 bounded and ignored; a request attributed after a replacement is refused; `allow_once` stays refused with
-zero native calls; `BRIDGE_PERMISSION_RELAY=off` starts no tracker.
+zero native calls; `BRIDGE_PERMISSION_RELAY=off` starts no tracker. A disposed event with envelope
+`directory: "global"` replaces the epoch, and so does one for a directory other than the run's. The (e)
+pin rule: a request whose assistant message is not yet pinned is `unattributed` (`message_unpinned`),
+`reply_permission` answers `FORBIDDEN`/`not_verified` with zero native writes and no attempt line, and
+the same request is verified after the reconciliation pins its message; a message pinned for another
+execution, or pinned while the epoch was unarmed or different, never verifies; an unarmed tracker
+returns `("", nil)` and not an error (an error from the seam fails the scope read,
+`permissionsource.go:123-125`, instead of yielding an unattributed request).
 
 Mutations (each alone must go RED): arm at the hello; ignore the dispose event; ignore the global disposed
 event; ignore stream end; drop the heartbeat-gap rule; derive the epoch from an event ID; read the epoch
 once instead of before and after; skip the `submitEpoch` equality; supply an epoch when the tracker is
-nil; keep the epoch across a reconnect; let `Stop` leave the goroutine; start the tracker in mode `off`.
+nil; keep the epoch across a reconnect; let `Stop` leave the goroutine; start the tracker in mode `off`; match
+the disposed event on the run's directory only (the `"global"` case goes unnoticed); attribute an unpinned
+message on the epoch alone; pin a message without the armed-and-equal epoch; keep pins across an epoch
+replacement.
 
 ### A1.6 Live acceptance outline (R5b style, reject-only)
 
@@ -976,7 +1064,8 @@ Operator present, disposable root, a session the Bridge may use, no provider or 
 read, evidence captured as in the runbook; anything not run is **NOT_EXERCISED**, never PASS. Steps marked
 M need the maintainer.
 1. Start the Bridge with `BRIDGE_PERMISSION_RELAY` unset and the incarnation mode on (M). The startup log
-   states that the tracker is armed.
+   states that the tracker is armed; wait at least one heartbeat interval (about 10 s, UNVERIFIED) before
+   step 2, because a run submitted before arming is unverifiable by design.
 2. Send a prompt that makes the native session ask for a permission; `get_execution_status` shows
    `waiting_for_permission` and a `pending_permission` object with `attribution: "verified"` (no pattern).
 3. `reply_permission(reject)`: exactly one native `POST /permission/:id/reply` with `{"reply":"reject"}`,
@@ -1002,18 +1091,23 @@ M need the maintainer.
   later hardening?
 - **Q4.** One global subscription (recommended) or one `/event` per active directory?
 - **Q5.** The heartbeat-gap threshold (25 s proposed, 2.5 heartbeats) and the backoff bounds.
-- **Q6.** Include the assistant-message pin (e) in S7 (recommended) or defer it?
+- **Q6.** Include the assistant-message pin (e) in S7 (recommended) or defer it? The proposed rule is
+  refuse-until-pinned (A1.3(e)), not attribute-on-epoch-alone.
 - **Q7.** Until S7 is accepted and exercised, should the operator be told to run with
   `BRIDGE_PERMISSION_RELAY=off` (the runbook currently says the tool is registered by default)?
 
 ### A1.8 Limitations of this amendment
 
-Source reading of one upstream commit; no OpenCode, Bridge or host service was contacted. **UNVERIFIED:**
-the `EventV2.ID` scheme (`packages/core` was not read), the exact registration time of the `GlobalBus`
-listener relative to the hello, which native actions create an assistant message whose `parentID` is an
-existing user message (T-I is a hypothesis about such an action), the behaviour behind proxies that buffer
-SSE, other OpenCode versions, and the cost of one extra long-lived connection. The recommendation is a
+Source reading of one upstream commit; no OpenCode, Bridge or host service was contacted. The
+`EventV2.ID` scheme and the hello-before-listener ordering are settled by source reading (A1.2 row 2,
+A1.3(c)(ii)); their runtime behaviour is not. **UNVERIFIED:** the time of the first heartbeat (expected at
+least one 10 s interval, not observed), which native actions create an assistant message whose `parentID`
+is an existing user message (T-I is a hypothesis about such an action; upstream `session/prompt.ts`
+creates assistant messages with `parentID: lastUser.id` inside its run loop, but which public endpoint
+starts that loop without a new prompt was not determined), the behaviour behind proxies that buffer SSE,
+other OpenCode versions, and the cost of one extra long-lived connection. The recommendation is a
 proposal; every name, threshold and default above is a proposal.
+
 
 ## 13. Limitations of this record
 

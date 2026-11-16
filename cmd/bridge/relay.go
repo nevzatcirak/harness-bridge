@@ -28,19 +28,25 @@ func permissionRelayMode(env func(string) string) (string, error) {
 }
 
 // wirePermissionRelay installs the production parts of reply_permission for mode reject_only: the
-// OpenCode client as the one native replier (reject only, routed to the session's directory) and
-// the process-wide failure-reporting audit writer. Mode off installs nothing. It adds no allow_once
-// path: the manager and the client both refuse anything but reject.
+// OpenCode client as the one native replier (reject only, routed to the session's directory), the
+// process-wide failure-reporting audit writer and the production PermissionSource (ADR-024 S6: a
+// fresh observer per read, with the authority taken from the manager's own runs). Mode off installs
+// nothing. It adds no allow_once path: the manager and the client both refuse anything but reject.
 //
-// There is deliberately no PermissionSource here: the observer needs an authority built from the
-// manager's submitted-run view (opencode.PermissionObservationAuthority), a slice of its own. Until
-// then the tool is registered but the fresh re-read of ADR-024 4.2 step 5 fails closed
-// (UPSTREAM_FAILURE, nothing sent) and pending_permission stays count-only.
-func wirePermissionRelay(srv *mcp.Server, runs *execution.Manager, client *opencode.Client, mode string) {
+// The source has no native incarnation evidence (docs/P2_PERM_CORE_02_OBSERVATION.md: none is
+// fabricated), so on a deployed Bridge every request stays "unattributed": pending_permission is
+// count-only and reply_permission refuses with FORBIDDEN not_verified until such a source exists.
+func wirePermissionRelay(srv *mcp.Server, runs *execution.Manager, client *opencode.Client, mode string) error {
 	if mode != "reject_only" {
-		return
+		return nil
 	}
+	source, err := execution.NewOpenCodePermissionSource(client, runs, execution.PermissionSourceConfig{})
+	if err != nil {
+		return err
+	}
+	runs.SetPermissionSource(source)
 	runs.SetPermissionReplier(client)
 	runs.SetAttemptWriter(audit.Default())
 	srv.PermissionRelay = &mcp.PermissionRelayConfig{Mode: "reject_only"}
+	return nil
 }
