@@ -218,6 +218,16 @@ func TestFileKindsAreRefused(t *testing.T) {
 			t.Fatal("symlinked file accepted")
 		}
 	})
+	t.Run("symlink to a file inside the directory", func(t *testing.T) {
+		dir := newDir(t)
+		if err := os.WriteFile(filepath.Join(dir, "real.json"), good, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Symlink("real.json", filepath.Join(dir, FileName))
+		if _, err := Open(dir, Options{Writer: true}); err == nil {
+			t.Fatal("an in-directory symlink was accepted")
+		}
+	})
 	t.Run("hard link", func(t *testing.T) {
 		dir := newDir(t)
 		putFile(t, dir, good, 0o600)
