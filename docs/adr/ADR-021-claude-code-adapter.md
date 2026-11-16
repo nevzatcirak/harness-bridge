@@ -809,10 +809,17 @@ tool and a matching `permission_denials` entry**; a probe without both is
 The decoy content is a **random marker string that is not credential-shaped**
 (generated per run), so a content-mode `Grep` match is unambiguous evidence of
 decoy exposure and cannot match any other content. A
-**positive control run without the deny rule** (same isolated user, a prompt that
-names **only the decoy**, throwaway root only) must show that the same prompt does read the decoy; if it
-does not, the denial evidence is meaningless and the test is inconclusive (slice
-fails). After the denied run: no canary file exists, the sink received no request,
+**positive control run** (same isolated user, the same prompt shape, throwaway root only) must show
+that the same probe does read a decoy; if it does not, the denial evidence is meaningless and the test
+is inconclusive (slice fails). **Amendment 2026-11-16 (planner decision after #305, tightens only):
+the deny rule is never lifted.** The control runs against an identical decoy at a path **no deny rule
+covers** (for example `HOME/canary-control/.credentials.decoy.json` and
+`HOME/canary-control/profile/decoy-profile.json`: outside `HOME/.claude`, `HOME/.config/anthropic` and
+`CLAUDE_CONFIG_DIR`, and not a parent of a denied directory), with its own fresh marker and the same
+prompt shape. A control that shows its marker proves the probe can read files; the same probe against
+the denied path that does not show its marker proves the deny. The pre-flight checks the control files
+like the decoys (regular, 0600, one link, owned by the run user, resolved inside the tree) plus their
+placement and a marker different from the decoy's. The managed file is therefore never edited or moved. After the denied run: no canary file exists, the sink received no request,
 `init.mcp_servers` is empty, `init.apiKeySource` is `none`, and **the decoy
 content appears nowhere in the stream, the history record or the result**
 (appearing only in the positive control run, which uses decoy content only).
@@ -1343,6 +1350,38 @@ number below and are answered by it; no other design text was changed.
 | Inline `--settings` permission rules survive `allowManagedPermissionRulesOnly` | UNVERIFIED | deny rule is placed in the managed file (§8.3 item 6); slice 3 decides |
 | `Read` deny rules also stop `Grep`/`Glob` | UNVERIFIED (docs say best-effort) | explicit canary probes (§8.3) |
 | Stdin as piped data with a 10 MB cap | DOCUMENTED | headless page, section "Pipe data through Claude" (the earlier verbatim sentence was dropped) |
+
+### Finding: account-synced MCP servers in `init` (task #314, 2026-11-16)
+
+Observed by the maintainer in #305: a `-p` run **without** the hardening argv listed **31** entries in
+`init.mcp_servers`, even with `allowManagedMcpServersOnly: true` in the managed settings. The likely cause
+is claude.ai account connectors synced into the CLI by the subscription login (UNVERIFIED: the entries
+were not inspected). §8.3 item 4 requires `mcp_servers` empty, so **the driver fails item 1 unless
+`init.mcp_servers` is empty with the pinned argv**, and the pinned argv has never been run against such a
+login (the live run is a separate task).
+
+Official documentation read on 2026-11-16 (https://code.claude.com/docs/en/mcp, `/settings`, `/env-vars`,
+`/cli-reference`, `/managed-mcp`; the env-var row and the MCP page's connector section were read through
+the fetch tool's summary, so their wording is a summary, marked below):
+
+| Option | Documented | Managed file? |
+| --- | --- | --- |
+| `disableClaudeAiConnectors: true` (settings key) | settings page, exceptions table (verbatim): "`disableClaudeAiConnectors` \| `true` from any scope \| Honored even when a managed source sets `false`"; MCP page [summary]: "any-source-true semantics" | yes (any file, managed included) |
+| `ENABLE_CLAUDEAI_MCP_SERVERS=false` (environment variable) | env-vars page [summary]: "Set to `false` to stop Claude Code from fetching claude.ai MCP servers" | no: documented only as a process environment variable |
+| `/etc/claude-code/managed-mcp.json` with an empty `mcpServers` map | managed-mcp page (verbatim): "The file also suppresses the claude.ai connectors Claude Code fetches itself unless you allow them alongside the managed set." | a separate managed file (blocks every other MCP server too) |
+| `deniedMcpServers` | managed-mcp page: per connector, by name or URL | yes (no single "all connectors" entry) |
+
+Not documented as covering connectors: `--strict-mcp-config`, `allowManagedMcpServersOnly` (a filter, not a
+switch) and `--disallowedTools "mcp__*"` (removes the tools from the model's context; the docs do not say
+the servers stop loading or stop appearing in `init`). No CLI flag exists for connectors.
+
+**Proposed minimal addition (a tightening; D19 permits it if it only tightens), to be decided after the
+live run:** (1) add `"disableClaudeAiConnectors": true` to the pinned inline `--settings` document and to
+`/etc/claude-code/managed-settings.json`; (2) set `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the child
+environment (a Bridge change to `env.go`, adding one fixed variable). The driver's `-candidate-mcp` flag
+runs exactly these two additions so the live run can compare "pinned argv" against "pinned argv plus
+candidate" with the same probes. Neither is applied to the pinned argv by this change: the pinned shape,
+`CheckArgv` and their tests are unchanged until the live evidence exists.
 
 Documentation URLs (all https://code.claude.com/docs/en/, accessed 2026-11-11):
 `cli-reference`, `headless`, `permissions`, `authentication`, `settings`,

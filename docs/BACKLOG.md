@@ -175,3 +175,10 @@ Open items recorded here, not fixed:
 - The proposed `BRIDGE_OVERLAY_DIR`, the file name, the 1000-entry and 512 KiB bounds and the `session_archived` refusal reason are proposals, not decisions.
 - Whether an overlay-archived session refuses `send_prompt` (ADR-022 7.2 (B)) changes an existing tool and is open question 1; rollback detection (an external counter) is accepted as a residual in the proposal (T3) and is open question 7.
 
+### ADR-021 slice 3 live driver (task #314): deferred items (2026-11-16, appended)
+
+- **No live run was made.** The driver is tested against fake wrappers (shell scripts) and a simulated CLI; nothing about a real CLI, `sudo`, `setsid -w` or the managed file is verified. The live run is a separate task and the items of `ACCEPTANCE_S3.md` stay NOT_EXERCISED.
+- The MCP finding (31 account-synced servers) is a hypothesis from #305: the entries were not inspected. The proposed tightening (`disableClaudeAiConnectors` in the inline and managed settings, `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the child env) is documented in ADR-021 §8.3 but **not applied**; the pinned argv and `CheckArgv` are unchanged. Whether a managed `env` block honors the variable is not documented.
+- The driver's decoy files must be chowned to the run user, so it needs a privilege the planner's task must provide; the driver cannot `cd` into a 0700 root of another user (the wrapper's own working directory decides). Item 6 does not run the pre-flight. Sink requests and file canaries are not observed (`sink_observed=false`): the canary report assumes none, which the evidence states.
+- `ProcFS.Alive` scans `/proc/*/cmdline` for the run's session UUID; a process that hides or rewrites its command line would be reported gone.
+

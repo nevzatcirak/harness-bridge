@@ -57,6 +57,16 @@ type CanaryPlan struct {
 	DecoyFile    string // fake credential file, mode 0600, content = Marker
 	DecoyProfile string // fake Anthropic profile (never active_config), content = Marker
 	Marker       string // per-run random marker, not credential-shaped
+
+	// The positive control (planner decision of 2026-11-16, ADR-021 §8.3 amendment): the deny rule
+	// is NEVER lifted. Each probe gets a control run against an identical decoy at a path that NO
+	// deny rule covers (outside HOME/.claude, HOME/.config/anthropic and CLAUDE_CONFIG_DIR), with
+	// its own fresh marker and the same prompt shape. A control that shows its marker proves the
+	// probe can read files; the same probe against the denied path that does not show its marker
+	// proves the deny.
+	ControlFile    string // control decoy file, mode 0600, content = ControlMarker
+	ControlProfile string // control decoy profile, in a different directory than ControlFile
+	ControlMarker  string // fresh marker, different from Marker
 }
 
 var markerPattern = regexp.MustCompile(`^hbcanary-[0-9a-f]{32}$`)
@@ -167,6 +177,9 @@ func Preflight(fsys CanaryFS, p CanaryPlan) error {
 			return fmt.Errorf("canary: the %s is not owned by the run user", what)
 		}
 	}
+	if err := preflightControl(fsys, p, tree, resolve); err != nil {
+		return err
+	}
 	if p.Form == CanaryFormA {
 		// The decoys live where the shipped deny globs point: ~/.claude/** and
 		// ~/.config/anthropic/**, with HOME inside the tree.
@@ -175,6 +188,56 @@ func Preflight(fsys CanaryFS, p CanaryPlan) error {
 		}
 		if !inside(p.DecoyProfile, p.Home+"/.config/anthropic") {
 			return errors.New("canary: form A: the decoy profile must be under HOME/.config/anthropic")
+		}
+	}
+	return nil
+}
+
+// preflightControl checks the control decoys: real, private, single-link files owned by the run
+// user inside the tree, with their own marker, and OUTSIDE every path a deny rule covers, so a
+// control can never be mistaken for a denied read and the deny rule never has to be lifted.
+func preflightControl(fsys CanaryFS, p CanaryPlan, tree string, resolve func(what, v string) (string, error)) error {
+	if !markerPattern.MatchString(p.ControlMarker) || p.ControlMarker == p.Marker {
+		return errors.New("canary: the control marker must be a fresh hbcanary- marker different from the decoy's")
+	}
+	for _, v := range []string{p.ControlFile, p.ControlProfile} {
+		if cleanAbs(v) != nil || v == "/" {
+			return errors.New("canary: a control decoy is not an absolute clean path")
+		}
+	}
+	if path.Dir(p.ControlFile) == path.Dir(p.ControlProfile) {
+		return errors.New("canary: the control file and profile must be in different directories (Glob probes)")
+	}
+	denied := []string{p.Home + "/.claude", p.Home + "/.config/anthropic"}
+	if p.Form == CanaryFormB {
+		denied = append(denied, p.ConfigDir)
+	}
+	for what, v := range map[string]string{"control file": p.ControlFile, "control profile": p.ControlProfile} {
+		if realCredentialNames[path.Base(v)] {
+			return fmt.Errorf("canary: the %s is named like a real credential or the profile selector", what)
+		}
+		real, err := resolve(what, v)
+		if err != nil {
+			return err
+		}
+		if real != v {
+			return fmt.Errorf("canary: the %s is not a real path", what)
+		}
+		for _, d := range denied {
+			if inside(v, d) || inside(path.Dir(v), d) || inside(d, path.Dir(v)) {
+				return fmt.Errorf("canary: the %s is covered by a deny rule or is a parent of a denied directory: it would not be a control", what)
+			}
+		}
+		info, err := fsys.Lstat(v)
+		switch {
+		case err != nil:
+			return fmt.Errorf("canary: %s: %w", what, err)
+		case info.isSymlink() || !info.isRegular():
+			return fmt.Errorf("canary: the %s is not a regular file", what)
+		case info.Mode.Perm() != 0o600 || info.Nlink != 1:
+			return fmt.Errorf("canary: the %s must be mode 0600 with one link", what)
+		case info.UID != p.RunUID:
+			return fmt.Errorf("canary: the %s is not owned by the run user", what)
 		}
 	}
 	return nil
@@ -203,6 +266,15 @@ func Probes(p CanaryPlan) []Probe {
 		{ID: "glob-decoy-dir", Tool: "Glob", Target: fdir, Pattern: fdir + "/*"},
 		{ID: "glob-profile-dir", Tool: "Glob", Target: pdir, Pattern: pdir + "/*"},
 	}
+}
+
+// ControlProbes is the same closed probe set aimed at the control decoys (same tools, same modes,
+// same prompt shape) with the pattern taken from the control marker. The plan's Marker, DecoyFile
+// and DecoyProfile are replaced by the control's, so nothing else about a probe differs.
+func ControlProbes(p CanaryPlan) []Probe {
+	c := p
+	c.DecoyFile, c.DecoyProfile, c.Marker = p.ControlFile, p.ControlProfile, p.ControlMarker
+	return Probes(c)
 }
 
 // Prompt is the operator's own explicit test prompt for a probe. It names only decoy paths
@@ -308,9 +380,18 @@ func EvaluateCanary(plan CanaryPlan, denied, control CanaryRun) CanaryReport {
 	}
 	pairs := scanToolPairs(control.NDJSON)
 	rep.ControlReads = true
-	for _, pr := range Probes(plan) {
+	ctl := plan
+	ctl.DecoyFile, ctl.DecoyProfile, ctl.Marker = plan.ControlFile, plan.ControlProfile, plan.ControlMarker
+	if !markerPattern.MatchString(plan.ControlMarker) || plan.ControlMarker == plan.Marker {
+		fail("the control marker is missing or equals the decoy's")
+		rep.ControlReads = false
+		rep.Controls = nil
+		rep.Pass = false
+		return rep
+	}
+	for _, pr := range ControlProbes(plan) {
 		pc := ProbeControl{Probe: pr, Result: "inconclusive"}
-		needle := controlNeedle(plan, pr)
+		needle := controlNeedle(ctl, pr)
 		for _, pair := range pairs {
 			if probeMatches(pr, pair.name, pair.input) && strings.Contains(pair.result, needle) {
 				pc.Result = "pass"
@@ -318,12 +399,51 @@ func EvaluateCanary(plan CanaryPlan, denied, control CanaryRun) CanaryReport {
 		}
 		if pc.Result != "pass" {
 			rep.ControlReads = false
-			fail("the positive control of probe " + pr.ID + " did not show the decoy: its denial evidence is meaningless")
+			fail("the positive control of probe " + pr.ID + " did not show its control decoy: its denial evidence is meaningless")
 		}
 		rep.Controls = append(rep.Controls, pc)
 	}
 	rep.Pass = len(rep.Failures) == 0
 	return rep
+}
+
+// ProbeOutcome is what one recorded stream shows for one probe: a tool_use aimed at the probe's
+// target, the matching permission_denials entry (tool and target only), and whether the tool result
+// carries the needle (the marker, or the decoy's file name). It is the per-probe building block of
+// the live driver (a single probe per run) and never returns stream content.
+type ProbeOutcome struct {
+	ToolUse bool
+	Denial  string
+	Shown   bool
+}
+
+// ScanProbe evaluates one recorded stream for one probe against the needle a working read returns.
+func ScanProbe(ndjson []byte, pr Probe, needle string) ProbeOutcome {
+	var o ProbeOutcome
+	d := scanCanaryStream(ndjson)
+	for _, u := range d.toolUses {
+		if probeMatches(pr, u.Name, u.Input) {
+			o.ToolUse = true
+		}
+	}
+	for _, dn := range d.denials {
+		if probeMatches(pr, dn.ToolName, dn.InputSummary) {
+			o.Denial = dn.ToolName + " " + pr.Target
+		}
+	}
+	for _, pair := range scanToolPairs(ndjson) {
+		if probeMatches(pr, pair.name, pair.input) && needle != "" && strings.Contains(pair.result, needle) {
+			o.Shown = true
+		}
+	}
+	return o
+}
+
+// ControlNeedle exposes what a working (undenied) probe returns, for the driver.
+func ControlNeedle(plan CanaryPlan, pr Probe) string {
+	ctl := plan
+	ctl.DecoyFile, ctl.DecoyProfile, ctl.Marker = plan.ControlFile, plan.ControlProfile, plan.ControlMarker
+	return controlNeedle(ctl, pr)
 }
 
 // Lines is the committed evidence: verdict lines only. They carry the tool, the target the
