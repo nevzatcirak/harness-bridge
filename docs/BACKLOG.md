@@ -175,3 +175,11 @@ Open items recorded here, not fixed:
 - The proposed `BRIDGE_OVERLAY_DIR`, the file name, the 1000-entry and 512 KiB bounds and the `session_archived` refusal reason are proposals, not decisions.
 - Whether an overlay-archived session refuses `send_prompt` (ADR-022 7.2 (B)) changes an existing tool and is open question 1; rollback detection (an external counter) is accepted as a residual in the proposal (T3) and is open question 7.
 
+### ADR-024 S6 production `PermissionSource` (task #304): deferred items (2026-11-16, appended)
+
+- **Native incarnation evidence is missing, so a deployed Bridge still cannot verify or answer a request.** The source is wired and tested against a fake native with an injected epoch, but production supplies none (`execution.NativeIncarnation`, nil): every request is `unattributed`, `pending_permission` is count-only and `reply_permission` refuses `FORBIDDEN`/`not_verified` (no native write, no attempt line). Maintainer decision needed: what counts as independent native incarnation evidence for OpenCode 1.19.4 (a native boot or instance identifier read from the server, if one exists; or an operator-supplied value that the operator rotates on a native restart, which is weaker). Not fabricated from event IDs (P2_PERM_CORE_02_OBSERVATION). Not run live: no native identifier was looked for on a real server.
+- The R5b-style live acceptance of `reply_permission` (runbook, `docs/deploy/PERMISSION_RELAY_RUNBOOK.md`) is **NOT_EXERCISED**; its expected result today is the `not_verified` refusal.
+- The authority's refs (`root-`/`workspace-`) are opaque hashes of the run's canonical directory; a finer project-root reference (ADR-022 lifecycle roots) is not wired.
+- A fresh observer per call costs the observer's reads (session, permission list, and per request the assistant and user messages) on each reply and on each reconcile pass that sees a pending request; not measured against a live server.
+- Workspace-bound sessions still route the reply by directory only (S5 note); the policy mode (S2/S4) and `allow_once` stay not started (D15 Q1, D12 (b)).
+

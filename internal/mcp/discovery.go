@@ -151,6 +151,9 @@ func (s *Server) view(v opencode.Session, d directoryEvidence, parentVisible boo
 	if s.Runs != nil {
 		if held, executionState := s.Runs.SessionGuard(v.ID); held {
 			out.State = guardedState(executionState, d.permissionsOK, d.permissions[v.ID])
+			if s.Runs.LifecycleGuard(v.ID) {
+				out.GuardReason = "archive"
+			}
 		}
 	}
 	out.Repository = d.repository
