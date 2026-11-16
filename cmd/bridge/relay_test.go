@@ -112,6 +112,14 @@ type relayStack struct {
 	client *sdk.ClientSession
 }
 
+// useSource replaces the production source by a fake and lets a background read that was already in
+// flight finish, so a later count of native calls sees only what the call under test made. (The
+// production source reads natively on the manager's own reconcile cadence while a request waits.)
+func (s *relayStack) useSource(src execution.PermissionSource) {
+	s.runs.SetPermissionSource(src)
+	time.Sleep(60 * time.Millisecond)
+}
+
 func (s *relayStack) native() []nativeRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -141,7 +149,12 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 		switch {
 		case r.URL.Path == "/permission/per_0001/reply":
 			w.Write([]byte("true"))
+		case r.URL.Path == "/permission":
+			// One pending request of the session WITHOUT a tool object: it can never be attributed.
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"per_0001","sessionID":"ses_a","permission":"bash","patterns":["echo X"],"metadata":{},"always":[]}]`))
 		default:
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(opencode.Session{ID: "ses_a", Directory: root})
 		}
 	}))
@@ -159,7 +172,9 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 	}
 	st.runs = runs
 	st.srv = &mcp.Server{Client: client, Runs: runs, Token: strings.Repeat("t", 32), Policy: pol, ReadOnly: readOnly}
-	wirePermissionRelay(st.srv, runs, client, mode)
+	if err := wirePermissionRelay(st.srv, runs, client, mode); err != nil {
+		t.Fatal(err)
+	}
 	x, e := runs.Send(context.Background(), "ses_a", "prompt", "relay-key-0001")
 	if e != nil {
 		t.Fatal(e)
@@ -248,14 +263,23 @@ func TestRegistrationDefaultAndOff(t *testing.T) {
 	}
 }
 
-// With no production PermissionSource (a slice of its own) the registered tool fails closed: the
-// fresh re-read cannot happen, so nothing is written natively and no attempt line is written.
-func TestProductionWiringWithoutAPermissionSourceFailsClosed(t *testing.T) {
+// ADR-024 S6: wirePermissionRelay installs the PRODUCTION PermissionSource. With no native
+// incarnation evidence (none exists) it observes the pending request but can never verify it, so the
+// tool refuses with FORBIDDEN not_verified: nothing is written natively and no attempt line is
+// written. (Before S6 the same call failed with UPSTREAM_FAILURE because no source existed.)
+func TestProductionWiringInstallsTheSourceAndStaysUnattributed(t *testing.T) {
 	buf := journal(t)
 	st := newRelayStack(t, "reject_only", false)
 	r, m := st.call(st.args("reject"))
-	if !r.IsError || m["code"] != "UPSTREAM_FAILURE" {
+	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "not_verified" {
 		t.Fatalf("%v", m)
+	}
+	var read bool
+	for _, n := range st.native() {
+		read = read || n.method == "GET" && n.path == "/permission"
+	}
+	if !read {
+		t.Fatalf("the production source made no native permission read: %v", st.native())
 	}
 	if len(st.posts()) != 0 {
 		t.Fatalf("native writes: %v", st.posts())
@@ -265,10 +289,36 @@ func TestProductionWiringWithoutAPermissionSourceFailsClosed(t *testing.T) {
 	}
 }
 
+// Mode off installs nothing: no source, no replier, no tool.
+func TestWiringOffInstallsNothing(t *testing.T) {
+	journal(t)
+	st := newRelayStack(t, "off", false)
+	before := len(st.native())
+	time.Sleep(30 * time.Millisecond)
+	for _, n := range st.native()[before:] {
+		if n.method == "GET" && n.path == "/permission" {
+			t.Fatalf("mode off made an observer read: %v", n)
+		}
+	}
+	if st.srv.PermissionRelay != nil {
+		t.Fatal("mode off registered the relay")
+	}
+}
+
+// A wiring error is returned, not swallowed.
+func TestWirePermissionRelayReturnsTheSourceError(t *testing.T) {
+	if err := wirePermissionRelay(&mcp.Server{}, nil, nil, "reject_only"); err == nil {
+		t.Fatal("a missing client and manager were wired")
+	}
+	if err := wirePermissionRelay(&mcp.Server{}, nil, nil, "off"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProductionWiringReplyIsOneRejectPostWithAuditLines(t *testing.T) {
 	buf := journal(t)
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	r, m := st.call(st.args("reject"))
 	if r.IsError || m["outcome"] != "replied" || m["decided_by"] != "chat_client" || m["human_verified"] != false {
 		t.Fatalf("%v", m)
@@ -299,7 +349,7 @@ func TestProductionWiringReplyIsOneRejectPostWithAuditLines(t *testing.T) {
 func TestProductionWiringRefusalsMakeNoNativeCall(t *testing.T) {
 	journal(t)
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	before := len(st.native())
 	r, m := st.call(st.args("allow_once"))
 	if !r.IsError || m["code"] != "FORBIDDEN" || m["reason"] != "allow_once_disabled" {
@@ -309,7 +359,7 @@ func TestProductionWiringRefusalsMakeNoNativeCall(t *testing.T) {
 		t.Fatalf("allow_once made native calls: %v", st.native()[before:])
 	}
 	ro := newRelayStack(t, "reject_only", true)
-	ro.runs.SetPermissionSource(relaySource{ro.execID})
+	ro.useSource(relaySource{ro.execID})
 	before = len(ro.native())
 	r, m = ro.call(ro.args("reject"))
 	if !r.IsError || m["code"] != "FORBIDDEN" || len(ro.native()) != before {
@@ -324,7 +374,7 @@ func TestProductionWiringAttemptLineFailureMeansZeroNativeWrites(t *testing.T) {
 	restore := audit.Default().SetJournalForTesting(failingJournal{})
 	defer restore()
 	st := newRelayStack(t, "reject_only", false)
-	st.runs.SetPermissionSource(relaySource{st.execID})
+	st.useSource(relaySource{st.execID})
 	r, m := st.call(st.args("reject"))
 	if !r.IsError || m["code"] != "UPSTREAM_FAILURE" || m["reason"] != "audit_unavailable" || m["retryable"] != true {
 		t.Fatalf("%v", m)
