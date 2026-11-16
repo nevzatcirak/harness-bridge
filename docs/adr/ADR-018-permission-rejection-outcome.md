@@ -316,6 +316,16 @@ correlation in item 4, and a negative run with `continue_loop_on_deny: true`.
 
 **Status: PROPOSED, not decided (2026-11-06). Not implemented.**
 
+**Status update (2026-11-16, ADR-024 slice S6; text only, the decision of this ADR is unchanged).** This
+proposal is now **implemented as the ADR-024 S1 exposure**: ADR-024 section 3 (accepted by D12/D15)
+shipped the additive `pending_permission` object and the count, and S6 wired the production
+`PermissionSource` that fills it (`internal/execution/permissionsource.go`). It is wider than the
+list below in one way (`call_id` and `message_id`, closed charsets) and narrower in none: still no
+pattern, no metadata, no native text. The section's own status line is kept as the record of the
+original proposal. Limitation that still holds: the observer cannot attribute a request while the
+trusted scope has no native incarnation epoch, which the Bridge does not have; until it does, a
+deployed Bridge reports the count only (see CONTRACTS, ADR-024 S6).
+
 Today `waiting_for_permission` does not say what is pending. Proposal: when
 the state is `waiting_for_permission`, expose the `ObservedPermission` safe
 projection for the session. That means:

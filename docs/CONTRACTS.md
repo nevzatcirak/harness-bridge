@@ -822,7 +822,7 @@ per-call approval is configured: the server cannot verify which, and says so in 
   a refused call makes no request. The result of the HTTP call is classified by the manager: 404
   `NOT_FOUND`/`resolved_elsewhere_or_dropped`, 400 `UPSTREAM_FAILURE`/`native_rejected_id`, every
   other status (401, 403, 429 and 5xx included), a timeout or a lost response `UNKNOWN_OUTCOME`.
-- **No production permission source yet.** The fresh re-read of ADR-024 4.2 step 5 needs a
+- **No production permission source yet (superseded by S6, below).** The fresh re-read of ADR-024 4.2 step 5 needs a
   `PermissionSource`, which needs a `PermissionObservationAuthority` built from the manager's
   submitted-run view; that is a slice of its own. Until it exists a deployed Bridge registers the
   tool but every call fails closed with `UPSTREAM_FAILURE` before any attempt line and any native
@@ -865,6 +865,53 @@ per-call approval is configured: the server cannot verify which, and says so in 
   `UPSTREAM_TIMEOUT`; the manager refuses `allow_once` before any native read; the workspace identity
   re-check before the write refuses a replaced workspace (`FORBIDDEN`) and a filesystem timeout
   (`UPSTREAM_TIMEOUT`, retryable) with no native write and no attempt line.
+
+### ADR-024 S6: production `PermissionSource`, `pending_permission`, runbook
+
+`cmd/bridge` now installs the production `PermissionSource` together with the replier and the attempt
+writer when `BRIDGE_PERMISSION_RELAY` is unset or `reject_only` (mode `off` installs nothing).
+`allow_once` stays unregistered and refused (`FORBIDDEN`/`allow_once_disabled`, zero native calls):
+the decision is D12 exception (b), the policy mode is D15 Q1 (off).
+
+- **The source** (`internal/execution/permissionsource.go`): for every call a **fresh**
+  `PermissionObserver` of the session and one bounded `Snapshot` (the observer's own 5 s bound for the
+  whole call, inside the manager's read deadline); nothing is cached, so the view behind a reply and
+  the view behind `pending_permission` are each a new native read through the session's own directory.
+  Attribution is only the observer's. The observer's trusted authority is taken from the manager's own
+  runs: the scope (session, the directory the run was accepted in, endpoint, native version `1.19.4`,
+  principal `bridge`, policy revision `1`, opaque directory references) from the run that holds the
+  session guard (a session nobody runs has no scope), and the executions (execution ID, the
+  Bridge-chosen user message ID, submission attempted) from the manager's submitted runs of that
+  session. No value comes from a native payload or from model text.
+- **Native incarnation evidence is the one input that does not exist yet.** The observer verifies a
+  request only when the scope carries a native epoch, and `docs/P2_PERM_CORE_02_OBSERVATION.md` forbids
+  fabricating one. The production source therefore has none: on a deployed Bridge every request stays
+  `unattributed`, `pending_permission` is count-only (`pending_permission_count`) and
+  `reply_permission` refuses with `FORBIDDEN`/`not_verified`, with no native write and no attempt
+  line. The seam for such evidence is `execution.NativeIncarnation`
+  (`PermissionSourceConfig.Incarnation`); it is nil in production. Tests supply an epoch to exercise
+  the verified path against a fake native.
+- **`pending_permission`** (on `get_execution_status` and `get_execution_result`, only while the state
+  is `waiting_for_permission`, only for the one request verified for **this** execution):
+  `{permission_id, call_id, message_id, tool, kind, pattern_count, scope_digest, attribution:
+  "verified"}`. No pattern, no metadata and no native text; every field has a closed charset and an
+  entry outside it is not exposed. `pending_permission_count` (an integer, on `get_session` and the
+  two execution tools) counts this session's pending requests, attributed or not.
+- **Error codes of `reply_permission`** (the closed set; `reason` is the enum of S3): `INVALID_INPUT`
+  (input, `nothing_to_supersede`, `supersedes_mismatch`), `FORBIDDEN` (`BRIDGE_READ_ONLY`,
+  `allow_once_disabled`, `not_verified`, `supersede_limit`, `supersede_allow_once_not_offered`,
+  `unrecognized_kind`), `NOT_FOUND` (`resolved_elsewhere_or_dropped`), `SESSION_BUSY`
+  (`attempt_in_flight`), `IDEMPOTENCY_CONFLICT` (`already_replied`, another decision),
+  `UPSTREAM_FAILURE` (observer unavailable, `native_rejected_id`, `audit_unavailable`),
+  `UPSTREAM_TIMEOUT` (the read or a wait exceeded its bound; retryable), `UNKNOWN_OUTCOME` (the native
+  write may or may not have happened; never resent; carries `attempt_id` and `attempt`).
+  A view made uncertain by a conflicting entry (for example an assistant message of another
+  workspace) is `UPSTREAM_FAILURE` without a reason: the whole view fails closed.
+- **Audit fields.** Every `event=permission_reply` line (`phase=attempt`, `result`, `refused`) carries
+  `decided_by=chat_client` and `human_verified=false`; the same two values are in the tool result.
+  They say that the decision was made through the Chat client and that the server cannot tell whether
+  a human approved the call; they are never an authorization input. Operator procedure and the live
+  check: `docs/deploy/PERMISSION_RELAY_RUNBOOK.md`.
 
 ### ADR-023 dashboard (read-only; disabled by default)
 

@@ -182,3 +182,11 @@ Open items recorded here, not fixed:
 - The driver's decoy files must be chowned to the run user, so it needs a privilege the planner's task must provide; the driver cannot `cd` into a 0700 root of another user (the wrapper's own working directory decides). Item 6 does not run the pre-flight. Sink requests and file canaries are not observed (`sink_observed=false`): the canary report assumes none, which the evidence states.
 - `ProcFS.Alive` scans `/proc/*/cmdline` for the run's session UUID; a process that hides or rewrites its command line would be reported gone.
 
+### ADR-024 S6 production `PermissionSource` (task #304): deferred items (2026-11-16, appended)
+
+- **Native incarnation evidence is missing, so a deployed Bridge still cannot verify or answer a request.** The source is wired and tested against a fake native with an injected epoch, but production supplies none (`execution.NativeIncarnation`, nil): every request is `unattributed`, `pending_permission` is count-only and `reply_permission` refuses `FORBIDDEN`/`not_verified` (no native write, no attempt line). Maintainer decision needed: what counts as independent native incarnation evidence for OpenCode 1.19.4 (a native boot or instance identifier read from the server, if one exists; or an operator-supplied value that the operator rotates on a native restart, which is weaker). Not fabricated from event IDs (P2_PERM_CORE_02_OBSERVATION). Not run live: no native identifier was looked for on a real server.
+- The R5b-style live acceptance of `reply_permission` (runbook, `docs/deploy/PERMISSION_RELAY_RUNBOOK.md`) is **NOT_EXERCISED**; its expected result today is the `not_verified` refusal.
+- The authority's refs (`root-`/`workspace-`) are opaque hashes of the run's canonical directory; a finer project-root reference (ADR-022 lifecycle roots) is not wired.
+- A fresh observer per call costs the observer's reads (session, permission list, and per request the assistant and user messages) on each reply and on each reconcile pass that sees a pending request; not measured against a live server.
+- Workspace-bound sessions still route the reply by directory only (S5 note); the policy mode (S2/S4) and `allow_once` stay not started (D15 Q1, D12 (b)).
+
