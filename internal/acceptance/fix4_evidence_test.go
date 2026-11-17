@@ -59,3 +59,20 @@ func TestEvidenceFileIsCreatedWithoutFollowingSymlinks(t *testing.T) {
 		t.Fatal("a relative path was accepted")
 	}
 }
+
+// R350-CLEANUP (#354 P3-2): a missing parent directory is an error and nothing is created (the
+// walk never creates a directory for the evidence file).
+func TestEvidenceFileNeverCreatesAMissingParent(t *testing.T) {
+	root := realDir(t)
+	missing := filepath.Join(root, "missing", "deeper")
+	if f, err := CreateEvidenceFile(filepath.Join(missing, "evidence.txt")); err == nil {
+		_ = f.Close()
+		t.Fatal("the evidence file was created below a missing directory")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "missing")); err == nil {
+		t.Fatal("a missing parent directory was created for the evidence file")
+	}
+	if es, _ := os.ReadDir(root); len(es) != 0 {
+		t.Fatalf("something was created: %v", es)
+	}
+}
