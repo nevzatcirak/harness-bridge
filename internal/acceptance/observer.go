@@ -57,6 +57,9 @@ func (o *ProdObserver) Close() error {
 	if o.Sink != nil {
 		errs = append(errs, o.Sink.Close())
 	}
+	if o.Scan != nil {
+		errs = append(errs, o.Scan.Close())
+	}
 	return errors.Join(errs...)
 }
 

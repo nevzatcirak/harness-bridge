@@ -117,7 +117,10 @@ flag that is left out leaves its check `unknown` and item 1 `INCOMPLETE`, exit c
    driver and mode exactly 0700 (the store refuses anything else, and a symlink anywhere in the path).
 3. An **empty** canary directory writable by the **test user** (the hostile root's hook runs as that user):
    `install -d -m 0700 -o <test user> <dir>`. The driver refuses a non-empty directory (the baseline must be
-   zero).
+   zero). Its **parent must be root-owned and not writable by the test user** (for example a 0755 root-owned
+   directory): a test user who can write the parent could rename the canary directory and create another one
+   at the same path. The driver keeps the baseline directory open and reports the check unobserved if the
+   path is no longer that directory, but a parent the hostile root controls is outside what it can see.
 4. The hostile root (a **throwaway** root, never a real repository), prepared by the operator as ADR-021 §8.3
    describes (proposal; UNVERIFIED that each trigger fires under `-p`): `.claude/settings.json` with a hook,
    an `apiKeyHelper` and an `env` block whose `ANTHROPIC_BASE_URL` is `http://127.0.0.1:<port>`, where the
@@ -151,9 +154,14 @@ verdict item=1 name=canary result=PASS why=all_probes_denied_controls_read
 
 A hook or helper that ran shows `no_file_canary=false` and `FAIL`; a request to the sink shows
 `no_sink_request=false`; the marker in the history record or the stream shows `no_decoy_leak=false`. If a
-component was not configured or failed (a listener that died, a history that missed a run, a canary
-directory that vanished or was swapped for a symlink) its line shows `unknown` and `verdict=incomplete`,
+component was not configured or failed (a listener that died, a history record that failed for a denied
+run it was given, a recorded session that reads back empty, corrupt or partial, a canary directory that
+vanished or was replaced by a symlink or by another directory) its line shows `unknown` and `verdict=incomplete`,
 `result=INCOMPLETE`, exit code 3.
+
+**When the counts are read.** The sink and canary counts are read once, after the runs: a detached process
+that writes a canary file or sends a request later is missed. The history only contains the denied runs the
+driver started itself; a run it did not start is not seen.
 
 **UNVERIFIED (needs the host and the real CLI):** that the hook, `apiKeyHelper`, `.mcp.json` server and the
 `env` base URL fire (or are blocked) under `-p` on the pinned version; that the driver, run as root, can

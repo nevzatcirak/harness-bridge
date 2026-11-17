@@ -129,8 +129,8 @@ func (h *HistoryTap) record(stdout []byte) error {
 			end.Denials = len(ev.Result.Denials)
 		}
 	}
-	if err := h.store.EndTurn(uuid, exec, end); err != nil && !errors.Is(err, claudecode.ErrInvalidTurnEnd) {
-		return err
+	if err := h.store.EndTurn(uuid, exec, end); err != nil {
+		return err // any refusal (an invalid turn end included) leaves the run unrecorded: unobserved
 	}
 	seen := false
 	for _, s := range h.sessions {
@@ -155,8 +155,8 @@ func (h *HistoryTap) Read() ([]byte, bool) {
 	var out bytes.Buffer
 	for _, uuid := range h.sessions {
 		res, err := h.store.Read(uuid)
-		if err != nil || res.Corrupt || res.Partial {
-			return nil, false
+		if err != nil || res.Corrupt || res.Partial || len(res.Records) == 0 {
+			return nil, false // a recorded session that reads back empty (segments removed) is no observation
 		}
 		for _, r := range res.Records {
 			b, err := json.Marshal(r)
@@ -166,6 +166,9 @@ func (h *HistoryTap) Read() ([]byte, bool) {
 			out.Write(b)
 			out.WriteByte('\n')
 		}
+	}
+	if out.Len() == 0 {
+		return nil, false
 	}
 	return out.Bytes(), true
 }

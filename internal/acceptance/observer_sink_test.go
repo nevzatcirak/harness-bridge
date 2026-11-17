@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,4 +151,23 @@ func TestSinkCountsARequestWhoseBodyNeverArrives(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("a request with a truncated body was not counted")
+}
+
+// The address check alone (before any bind) refuses a non-loopback address: the refusal is the
+// loopback message, not a bind error, even when the bind would have failed anyway or succeeded.
+func TestSinkAddressCheckRefusesBeforeAnyBind(t *testing.T) {
+	// A wildcard bind on a port that is already taken would fail with "address in use": only the
+	// address check can produce the loopback message.
+	taken, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	port := strconv.Itoa(taken.Addr().(*net.TCPAddr).Port)
+	for _, addr := range []string{"0.0.0.0:" + port, "192.0.2.1:" + port, "[::]:" + port} {
+		_, err := NewLoopbackSink(addr)
+		if err == nil || !strings.Contains(err.Error(), "loopback IP literals only") {
+			t.Errorf("%s: %v (want the address check, before any bind)", addr, err)
+		}
+	}
 }

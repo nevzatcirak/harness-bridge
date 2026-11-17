@@ -144,3 +144,60 @@ func TestFileCanaryScanIsUnobservedWhenTheDirectoryIsGone(t *testing.T) {
 		t.Fatalf("a missing directory reported an observation: %d %v", n, ok)
 	}
 }
+
+// A REAL directory swapped in at the same path (the original renamed away, an empty directory created
+// where the hostile root's hook writes) must not read as "no canary": the scan holds the baseline
+// directory and refuses a path that is no longer it.
+func TestFileCanaryScanIsUnobservedWhenARealDirectoryIsSwappedIn(t *testing.T) {
+	home, dir := scanDirs(t)
+	sc, err := NewFileCanaryScan(dir, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close()
+	if n, ok := sc.Count(); n != 0 || !ok {
+		t.Fatalf("clean: %d %v", n, ok)
+	}
+	if err := os.Rename(dir, dir+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := sc.Count(); ok {
+		t.Fatalf("a swapped-in empty directory was observed: %d %v", n, ok)
+	}
+	// the original directory back at the path is observed again, and its files count
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir+".moved", dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hook-ran"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := sc.Count(); n != 1 || !ok {
+		t.Fatalf("original back: %d %v", n, ok)
+	}
+}
+
+// Removing and recreating the directory (an inode that could be reused) is also a swap: the scan keeps
+// the baseline directory open, so its inode cannot be handed to the new one.
+func TestFileCanaryScanIsUnobservedWhenTheDirectoryIsRecreated(t *testing.T) {
+	home, dir := scanDirs(t)
+	sc, err := NewFileCanaryScan(dir, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close()
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := sc.Count(); ok {
+		t.Fatalf("a recreated directory was observed: %d %v", n, ok)
+	}
+}

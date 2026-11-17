@@ -328,3 +328,68 @@ func TestHistoryTapIsUnobservedWhenTheStoreReadsOnlyPartOfIt(t *testing.T) {
 		t.Fatalf("a partial read was reported as an observation (%d bytes)", len(rec))
 	}
 }
+
+func removeSegments(t *testing.T, dir string) {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The store reading back nothing after a run was recorded (segment files removed) is not "a clean
+// history": it is unobserved.
+func TestHistoryTapIsUnobservedWhenTheSegmentsAreGone(t *testing.T) {
+	dir := histDir(t)
+	tap, err := NewHistoryTap(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tap.Close()
+	if err := tap.Record(deniedStream(histUUID, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tap.Read(); !ok {
+		t.Fatal("precondition: the recorded history reads")
+	}
+	removeSegments(t, dir)
+	if rec, ok := tap.Read(); ok {
+		t.Fatalf("an emptied history was an observation: %q", rec)
+	}
+}
+
+// Every recorded session must contribute: one session emptied while another stays non-empty is
+// unobserved (the marker could have been in the missing one).
+func TestHistoryTapIsUnobservedWhenOneSessionIsEmpty(t *testing.T) {
+	dir := histDir(t)
+	tap, err := NewHistoryTap(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tap.Close()
+	other := "aaaaaaaa-2222-4333-8444-555555555555"
+	if err := tap.Record(deniedStream(histUUID, "first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tap.Record(deniedStream(other, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tap.Read(); !ok {
+		t.Fatal("precondition: two sessions read")
+	}
+	ents, _ := os.ReadDir(dir) // segment names are hashed: removing one of the two empties one session
+	if len(ents) != 2 {
+		t.Fatalf("want one segment per session: %v", ents)
+	}
+	if err := os.Remove(filepath.Join(dir, ents[0].Name())); err != nil {
+		t.Fatal(err)
+	}
+	if rec, ok := tap.Read(); ok {
+		t.Fatalf("a session with no record was an observation: %q", rec)
+	}
+}

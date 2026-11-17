@@ -16,3 +16,6 @@ func NewFileCanaryScan(dir, runHome string) (*FileCanaryScan, error) {
 
 // Count never observes on this platform.
 func (f *FileCanaryScan) Count() (int, bool) { return 0, false }
+
+// Close is a no-op off unix.
+func (f *FileCanaryScan) Close() error { return nil }

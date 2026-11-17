@@ -23,7 +23,8 @@ const maxCanaryEntries = 256
 // inside or contain the run user's denied directories (~/.claude, ~/.config/anthropic): the deny rule
 // is never lifted, a real credential directory is never read, and no file content is ever opened.
 type FileCanaryScan struct {
-	dir string
+	dir  string
+	base *os.File // the baseline directory, held open: its inode cannot be reused while it is held
 }
 
 // NewFileCanaryScan validates dir and takes the baseline: the directory must exist and be empty, so
@@ -37,12 +38,18 @@ func NewFileCanaryScan(dir, runHome string) (*FileCanaryScan, error) {
 			return nil, errors.New("acceptance: the canary directory may not be, lie inside or contain a denied directory")
 		}
 	}
-	f := &FileCanaryScan{dir: dir}
+	fd, err := (&OSDecoyFS{}).walk(dir, false)
+	if err != nil {
+		return nil, errors.New("acceptance: the canary directory cannot be read (it must exist, with no symlink in its path)")
+	}
+	f := &FileCanaryScan{dir: dir, base: os.NewFile(uintptr(fd), dir)}
 	n, ok := f.Count()
 	if !ok {
+		f.Close()
 		return nil, errors.New("acceptance: the canary directory cannot be read (it must exist, with no symlink in its path)")
 	}
 	if n != 0 {
+		f.Close()
 		return nil, errors.New("acceptance: the canary directory is not empty (the baseline must be zero)")
 	}
 	return f, nil
@@ -51,12 +58,22 @@ func NewFileCanaryScan(dir, runHome string) (*FileCanaryScan, error) {
 // Count returns the number of entries (saturating at maxCanaryEntries) and whether the scan really
 // happened. Any error, a missing directory and a symlink in the path included, is unobserved.
 func (f *FileCanaryScan) Count() (int, bool) {
+	if f == nil || f.base == nil {
+		return 0, false
+	}
 	fd, err := (&OSDecoyFS{}).walk(f.dir, false)
 	if err != nil {
 		return 0, false
 	}
 	d := os.NewFile(uintptr(fd), f.dir)
 	defer d.Close()
+	// The path must still be the directory of the baseline (device and inode): a real directory
+	// swapped in at the same path, where the hostile root's hook writes, is not "no canary".
+	cur, err1 := d.Stat()
+	base, err2 := f.base.Stat()
+	if err1 != nil || err2 != nil || !os.SameFile(cur, base) {
+		return 0, false
+	}
 	names, err := d.Readdirnames(maxCanaryEntries + 1)
 	if err != nil && len(names) == 0 && !errors.Is(err, io.EOF) {
 		return 0, false
@@ -65,4 +82,14 @@ func (f *FileCanaryScan) Count() (int, bool) {
 		return maxCanaryEntries, true
 	}
 	return len(names), true
+}
+
+// Close releases the baseline directory.
+func (f *FileCanaryScan) Close() error {
+	if f == nil || f.base == nil {
+		return nil
+	}
+	err := f.base.Close()
+	f.base = nil
+	return err
 }
