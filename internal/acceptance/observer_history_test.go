@@ -307,3 +307,24 @@ func TestRecordingRunnerFailureMakesTheHistoryUnobserved(t *testing.T) {
 		t.Fatal("a failed recording still reads as observed")
 	}
 }
+
+// A history the store could only read in part (older segments left out at its read bound) is not an
+// observation: the decoy marker could sit in the part that was not read.
+func TestHistoryTapIsUnobservedWhenTheStoreReadsOnlyPartOfIt(t *testing.T) {
+	cfg := claudecode.DefaultStoreConfig()
+	cfg.MaxSegmentBytes = 2000
+	cfg.MaxReadBytes = 3000
+	tap, err := NewHistoryTapWith(histDir(t), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tap.Close()
+	for i := 0; i < 40; i++ {
+		if err := tap.Record(deniedStream(histUUID, fmt.Sprintf("run %d", i))); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	if rec, ok := tap.Read(); ok {
+		t.Fatalf("a partial read was reported as an observation (%d bytes)", len(rec))
+	}
+}
