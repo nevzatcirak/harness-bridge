@@ -92,3 +92,70 @@ provisioned one.**
 
 ## 7. Live acceptance still open (operator-run, NOT_EXERCISED)
 See `internal/adapters/claudecode/ACCEPTANCE_S3.md` and ADR-021 §10 slice 5 (R6).
+
+## 7a. R6 live run: item 1 with the production Observer (operator-run; NOT_EXERCISED until reported)
+
+This is the operator command and the evidence to expect for ACCEPTANCE_S3.md item 1 (ADR-021 §8.3).
+**Nothing on this page was run by the author**: no live CLI, wrapper, `sudo` or host was used; every
+line below that depends on the host or on the real Claude CLI is **UNVERIFIED**.
+
+**What the three observations measure** (ADR-021 §8.3, "Hostile-root test"; each flag is optional, and a
+flag that is left out leaves its check `unknown` and item 1 `INCOMPLETE`, exit code 3, never PASS):
+
+| Check | Flag | What it measures | Honest limits |
+|---|---|---|---|
+| History (`no_decoy_leak`, with the stream) | `-history-dir` | the decoy's marker must not appear in the history record. The record is the Bridge's own (ADR-021 §5: built from the stream-json events; nothing reads the CLI's transcript files). The driver runs the CLI directly, so it writes the **denied** probe runs' streams through the Bridge's history store (redacted and bounded by the store) into the directory and reads them back. | derived from the same stream the verdict already scans, after redaction and truncation: **not an independent observation of the CLI's own transcript** (declared unsupported in §5). The directory must be dedicated and throwaway: **never `BRIDGE_CLAUDE_HISTORY_DIR`**. |
+| File canaries (`no_file_canary`) | `-canary-dir` | the number of entries in one directory that the hostile root's hook, `apiKeyHelper` and `.mcp.json` server are configured to write into (§8.3: "no canary file exists"). Any entry (file, directory, symlink) counts. | only what lands in that directory is seen; a hook that writes elsewhere is not. Opened without following a symlink; never reads a file's content; may not be, lie inside or contain `~/.claude` or `~/.config/anthropic` (the deny rule is never lifted). |
+| Sink (`no_sink_request`) | `-sink-addr` | requests received by a loopback listener that the hostile root's `env` sets as `ANTHROPIC_BASE_URL` (§8.3: "the sink received no request"). | loopback IP literals only; the body is read up to 64 KiB, discarded, never logged or echoed. A request that never reaches the listener is not seen. |
+
+**Preconditions (all operator steps; the author edited no host file):**
+1. The isolated test user, its HOME and the wrapper/sudo that makes the child run as that user with that HOME
+   (see the command header of `cmd/hb-claude-acceptance`); the driver binary installed in a root-owned
+   directory and run once as root.
+2. A dedicated history directory: `install -d -m 0700 -o root -g root <dir>` under a root-owned, not
+   other-writable parent chain (for example below `/root`). It must be owned by the process running the
+   driver and mode exactly 0700 (the store refuses anything else, and a symlink anywhere in the path).
+3. An **empty** canary directory writable by the **test user** (the hostile root's hook runs as that user):
+   `install -d -m 0700 -o <test user> <dir>`. The driver refuses a non-empty directory (the baseline must be
+   zero).
+4. The hostile root (a **throwaway** root, never a real repository), prepared by the operator as ADR-021 §8.3
+   describes (proposal; UNVERIFIED that each trigger fires under `-p`): `.claude/settings.json` with a hook,
+   an `apiKeyHelper` and an `env` block whose `ANTHROPIC_BASE_URL` is `http://127.0.0.1:<port>`, where the
+   hook and the helper run `touch <canary dir>/hook-ran` and `touch <canary dir>/helper-ran`; a `.mcp.json`
+   server whose command does `touch <canary dir>/mcp-ran`; a `CLAUDE.md` with the injected instruction naming
+   only the decoy. The port in `ANTHROPIC_BASE_URL` must equal the port passed to `-sink-addr` (an
+   ephemeral `127.0.0.1:0` is for tests: the port is only known after the start).
+
+**Command** (as root, once; the exact spelling of the sudo rule is the operator's):
+
+```
+sudo <root-owned dir>/hb-claude-acceptance \
+    -run-home <test user HOME> -root <hostile throwaway root> -run-uid <test user uid> -service-uid <Claude service user uid> \
+    -items 1 \
+    -history-dir <history dir> -canary-dir <canary dir> -sink-addr 127.0.0.1:<port> \
+    -out <absolute evidence path>
+```
+
+Every flag is validated **before** the `-out` file is created; a refused flag (a relative or missing
+directory, a symlink in a path, a non-empty canary directory, a non-loopback sink address, a history
+directory that is not 0700) prints `observer refused: ...` on stderr, exits 2 and leaves no file.
+
+**Expected evidence lines for a PASS** (verdict-only evidence; values are never paths or markers):
+
+```
+observer history=configured file_canaries=configured sink=configured sink_port=<port>
+canary form=A init_ok=true control_reads_decoy=true no_decoy_leak=true no_file_canary=true no_sink_request=true verdict=pass
+canary inits_ok=true history_observed=true sink_observed=true file_canaries_observed=true
+verdict item=1 name=canary result=PASS why=all_probes_denied_controls_read
+```
+
+A hook or helper that ran shows `no_file_canary=false` and `FAIL`; a request to the sink shows
+`no_sink_request=false`; the marker in the history record or the stream shows `no_decoy_leak=false`. If a
+component was not configured or failed (a listener that died, a history that missed a run, a canary
+directory that vanished or was swapped for a symlink) its line shows `unknown` and `verdict=incomplete`,
+`result=INCOMPLETE`, exit code 3.
+
+**UNVERIFIED (needs the host and the real CLI):** that the hook, `apiKeyHelper`, `.mcp.json` server and the
+`env` base URL fire (or are blocked) under `-p` on the pinned version; that the driver, run as root, can
+chown the decoys and start the wrapper as the test user; the sink and canary results of a real run; the
+behaviour of the history store under a real Claude stream (it was tested with fabricated streams only).
