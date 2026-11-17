@@ -564,8 +564,8 @@ configuration**. With no `BRIDGE_CLAUDE_COMMAND` (the default) nothing here is s
 every OpenCode response and every OpenCode audit line are byte-identical to a build without the
 adapter, and `bridge admin release-guard` refuses `claudecode:` IDs. With it, the Bridge builds the
 adapter at startup or refuses to start (no partial enablement; see "Enabling" below). A read-only
-ingress never enables it. Tool names, input fields and output fields of the eleven tools do not
-change.
+ingress never enables it. Tool names, input fields and output fields of the eleven base tools (twelve with `reply_permission` under the
+default `reject_only` relay) do not change.
 
 **Enabling.** `BRIDGE_CLAUDE_COMMAND` (absolute path of the root-owned wrapper) turns the adapter on and
 then requires `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600), `BRIDGE_CLAUDE_VERSIONS` (exact
@@ -739,7 +739,8 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
   these keys. The archive and close lines are in the S6 entry below.
 - The tool is registered only when the server has a create configuration; nothing wires it from
-  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge keeps its eleven tools.
+  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge gains no lifecycle tool: it keeps its base tools (eleven with
+  `BRIDGE_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`).
 
 ### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured; NOT wired in production)
 
@@ -766,7 +767,10 @@ call is refused and the overlay is unchanged).
 - **No native write for archive or unarchive.** The preconditions are native READS. `close_session`
   makes at most one native write, the `POST /session/:id/abort` of the existing interrupt path, and only
   while a Bridge execution holds the session's guard.
-- **Order and errors** (every refusal up to the reservation makes no native write):
+- **Order and errors** (for `archive_session` and `unarchive_session`, every refusal up to the reservation makes
+  no native write; for `close_session`, only the refusals **before its interrupt step** make none, because
+  the interrupt, which can send the native abort POST, runs before the reservation: a refusal at the interrupt
+  step or after it may already follow that abort):
   `BRIDGE_READ_ONLY` `FORBIDDEN`; not an `opencode:ses_...` session ID `INVALID_INPUT` (a `claudecode:` ID too:
   "claudecode sessions are not enabled on this Bridge"); outside the static ACL the
   existing refusals; lifecycle authorization with the `archive` mode: a missing directory `NOT_FOUND`, a
@@ -779,8 +783,10 @@ call is refused and the overlay is unchanged).
   list or session tree (or a tree of 1000 sessions or more) `UPSTREAM_FAILURE`. Then the cap, a re-check of
   the authorization and of the native state, and the one overlay write.
 - **Cap (D16 Q3).** `archive_per_hour` (default 10) is **one** hourly window shared by the three tools and
-  by successful and failed overlay writes alike (a call is counted when it reaches the write, before it);
-  the window is memory-only, a restart resets it. Reached: `SESSION_LIMIT` (retryable). A full overlay
+  by successful and failed overlay writes alike. A call is counted by `charge`, which runs after the first
+  native preconditions and **before** the authorization/native re-check and the overlay write, so a failing
+  write, and an idempotent no-op (archiving an archived session, unarchiving one that is not archived), spend
+  budget too; a call refused earlier is not counted. The window is memory-only, a restart resets it. Reached: `SESSION_LIMIT` (retryable). A full overlay
   (1000 entries or 512 KiB) is `SESSION_LIMIT` too; entries are never dropped silently.
 - **Overlay write errors.** A rename that fails changes nothing (`UPSTREAM_FAILURE`, reason
   `overlay_unavailable`); a write whose outcome is unknown (directory fsync, a hung rename) is
@@ -827,7 +833,7 @@ call is refused and the overlay is unchanged).
 
 `BRIDGE_LIFECYCLE_CONFIG` is parsed by `lifecycle.FromEnv` (`internal/lifecycle/config.go:141`), but no
 production code calls it; nothing sets `Server.Catalog`, `Server.Create` or `Server.Archive`. A deployed
-Bridge therefore lists eleven tools (twelve with the default `reject_only` relay). Operator view:
+Bridge therefore lists the base eleven tools (twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`). Operator view:
 `docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`.
 
 ### ADR-024 S3: `reply_permission` (reject only, against a fake native; registered only when configured)
