@@ -5,6 +5,7 @@ package acceptance
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,10 +70,23 @@ func TestBuildObserverBuildsOnlyWhatWasAskedFor(t *testing.T) {
 }
 
 // A refused component closes everything opened before it (no leaked listener) and reports an error.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	ents, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(ents)
+}
+
 func TestBuildObserverClosesWhatItOpenedOnError(t *testing.T) {
 	hd := histDir(t)
+	before := openFDs(t)
 	if _, _, err := BuildObserver(ObserverOptions{HistoryDir: hd, CanaryDir: "relative/dir", RunHome: tHome}, &cannedRunner{}); err == nil {
 		t.Fatal("a relative canary directory was accepted")
+	}
+	if after := openFDs(t); after != before {
+		t.Fatalf("a failed build leaked descriptors: %d before, %d after", before, after)
 	}
 	// the history directory is released again: it can be opened afresh
 	tap, err := NewHistoryTap(hd)
