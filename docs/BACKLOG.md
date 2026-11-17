@@ -202,3 +202,18 @@ Open items recorded here, not fixed:
 - **`close_session` can interrupt and then refuse the archive** (the cap, `SESSION_BUSY`, an overlay write failure or uncertainty); the interrupt is not rolled back. Documented in CONTRACTS (#318 P3-1). Reordering the production code (for example reserving the overlay write before the interrupt) is not done here and would be an ADR-025 4.3 change.
 - **The overlay's second closed-store check is untested.** `commit` re-checks `closed` for a change that was queued behind `Close` (`internal/overlay/overlay.go`), but removing only that check leaves every test green: a deterministic test needs a controlled interleaving of a hung write, a queued change and `Close`, and the mutex hand-off order is not deterministic. The first check (in `change`) is pinned by `TestClosedStoreRefusesNoOpChangesToo` and `TestCloseLatchesTheStore`.
 - **The `TestCloseSessionInterruptFailsWhileTheGuardIsFree` barrier is count-keyed (#343 P3-1, recorded, no change).** It waits for two `/permission` arrivals (the send preflight's single read, then the monitor's first observation). A change to the preflight's native reads, or an extra `/permission` read before the monitor's first observation, shifts the count; the guard assertion would then fail loudly. Tying the barrier to the observation itself (a hook on the monitor's first `observe`) would be sturdier.
+
+### ADR-021 production Observer (task #372): deferred items (2026-11-17, appended)
+
+- **Not run live.** The `Observer` (history tap, canary-directory scan, loopback sink) is tested with fabricated streams, `t.TempDir()` and loopback sockets only; what the real Claude CLI does under `-p` (hooks, `apiKeyHelper`, `.mcp.json`, the `ANTHROPIC_BASE_URL` env) and the driver's behaviour as root are UNVERIFIED until the R6 run reports (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
+- **The history check is derived, not independent.** It reads back the Bridge's own record of the denied runs (ADR-021 §5: nothing reads the CLI's transcript files), so it adds redaction and truncation to the stream check but is not a second source; an independent check of the CLI's own transcript would need ADR-021 §5 to be amended.
+- **The file-canary scan sees one directory.** A hook that writes elsewhere is not seen; the operator points every hostile-root trigger at the canary directory.
+- **The sink port is an operator choice.** An ephemeral port is only known after the start; the hostile root's base URL must carry the fixed port passed to `-sink-addr`.
+
+### ADR-021 production Observer, R378-FIX-1 (task #382): items recorded, not fixed (2026-11-18, appended)
+
+- **Fixed here (#380 P2-1, P2-2, P3-1, P3-4/#381 P3-4, docs P3-5/#381 P3-2/P3-3):** an emptied history and a recorded session that reads back empty are unobserved; a real directory swapped in at the canary path is unobserved (the baseline directory is held open and compared by device and inode; its inode cannot be reused while held); any `EndTurn` refusal fails the record (the former `ErrInvalidTurnEnd` exception was unreachable with the fixed turn-end values, so it is removed rather than tested); a test pins the sink address check before any bind.
+- **#380 P3-2, not fixed:** the history directory may be the live `BRIDGE_CLAUDE_HISTORY_DIR`. The runbook says "never"; the driver does not compare the two (it does not read the Bridge environment).
+- **#380 P3-3, not fixed:** the canary directory's mode and owner are not validated; only the empty baseline and the path checks are. The runbook gives the operator command and the root-owned parent.
+- **#380 P3-4 / #381 P3-1, not fixed:** the sink counts a request at handler entry (headers parsed); a connection that never completes its headers is not counted.
+
