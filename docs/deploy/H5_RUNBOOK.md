@@ -27,7 +27,7 @@ H4 was `9db1c1d`. Since then `main` has merged:
 | ADR-023 dashboard | yes (`#270`, `#291`) | `BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR`, unset = off (`internal/dashboard/config.go:27-36`) | yes (stage 2); R-DASH live still NOT_EXERCISED |
 | ADR-024 `reply_permission` reject-only | yes (`#283`, `#290`; source `#306` at b98c004) | `BRIDGE_PERMISSION_RELAY`: unset/`reject_only` = registered, `off` = opt-out, `policy`/other = startup error (`cmd/bridge/relay.go:17-32`) | registered with the production `PermissionSource` (`cmd/bridge/relay.go:39-50`); every request stays `unattributed` and the tool refuses `FORBIDDEN`/`not_verified` (no native incarnation evidence), no native write (stage 5); a source construction error stops startup (`cmd/bridge/main.go:89-91`) |
 | Mutation Gate attempt writer | yes (`#275`), installed by the relay wiring | (no switch) `audit.Default()` (`cmd/bridge/relay.go:49`) | yes; it is the audit path of the relay |
-| ADR-025 archive overlay S8/S6 | yes, code (`#307` at `566eb46`); ADR-025 **ACCEPTED** (D18) | `BRIDGE_OVERLAY_DIR` is still a **name proposal** (`docs/adr/ADR-025-archive-overlay-persistence.md:90`, `:425`); no code reads it | **NOT AVAILABLE**: the code is merged (`internal/overlay/overlay.go`, `internal/mcp/archive.go`, `Server.Archive` at `internal/mcp/server.go:41-43`) but nothing in `cmd/bridge` constructs it; stage 4 needs the wiring task |
+| ADR-025 archive overlay S8/S6 | yes, code (`#307` at `566eb46`); ADR-025 **ACCEPTED** (D18) | `BRIDGE_OVERLAY_DIR` is named by ADR-025 §9 Q5/Q6 (D18; unset = tools not registered, separate directory) while §4.1 (`:90`) and §10 still call the name a proposal (recorded in BACKLOG); no code reads it | **NOT AVAILABLE**: the code is merged (`internal/overlay/overlay.go`, `internal/mcp/archive.go`, `Server.Archive` at `internal/mcp/server.go:41-43`) but nothing in `cmd/bridge` constructs it; stage 4 needs the wiring task |
 
 Since `0672867`, main has also merged #307 (`566eb46`, ADR-025 S6 code; ADR-025 is **ACCEPTED** as
 D18) and #306 (`b98c004`, the production `PermissionSource`). Consequence for H5: **stages 3
@@ -269,11 +269,13 @@ native and are still listed by `list_sessions`).
 `internal/mcp/archive.go`, `Server.Archive` (`internal/mcp/server.go:41-43`) and the three tools
 registered only when `Server.Archive != nil` (`internal/mcp/server.go:340-343`) — but nothing in
 `cmd/bridge` constructs it (`docs/adr/ADR-022-session-lifecycle.md:771-773`), so the tools are not
-registered. `BRIDGE_OVERLAY_DIR` is still a **name proposal**
-(`docs/adr/ADR-025-archive-overlay-persistence.md:90`, `:425`) and no code reads it. Do not set it on
-b98c004. If the freeze SHA contains the overlay startup wiring, use:
+registered. ADR-025 §9 Q5/Q6 (D18, `:399-400`) name `BRIDGE_OVERLAY_DIR` as the overlay directory
+(unset = the archive tools are not registered, a directory separate from the lock and history
+directories), while §4.1 (`:90`) and §10 (`:417`) still call the name a proposal; the ADR is
+inconsistent on that word (recorded in `docs/BACKLOG.md`) and `docs/adr/ADR-025-archive-overlay-persistence.md:425`
+says the startup wiring is a separate task. No code reads the variable. Do not set it on b98c004. If the freeze SHA contains the overlay startup wiring, use:
 
-- Directory: **`BRIDGE_OVERLAY_DIR`** (name proposal; ADR-025 §4.1:90, §10): absolute, owned by the
+- Directory: **`BRIDGE_OVERLAY_DIR`** (ADR-025 §9 Q5/Q6; §4.1:90 describes it): absolute, owned by the
   Bridge service user, mode exactly `0700`, no symlink in the final component; files `overlay.json`
   (mode `0600`, regular, single link) and `overlay.lock` (ADR-025 §4.1). Unset = the archive tools
   are not registered.
@@ -330,8 +332,17 @@ Setup/precheck:
 1. Leave `BRIDGE_PERMISSION_RELAY` unset (or `reject_only`); `tools/list` shows 12 tools including
    `reply_permission`; the startup log says `permission relay: reject_only; no native incarnation
    source exists ...` (`cmd/bridge/main.go:89-93`).
-2. Make the native OpenCode instance ask for a permission. The R5b mechanism is a drop-in on the
-   OpenCode unit (`/etc/systemd/system/opencode-hb-test.service.d/zz-r5b-permission.conf` in R5b)
+2. Make the native OpenCode instance ask for a permission. **The H5 unit is `opencode-hb-test.service`**
+   (user `opencode-hb`, `127.0.0.1:4097`, `docs/deploy/SYSTEMD_LOCAL_VALIDATION.md:81`; the unit R5b
+   restarts, `docs/evidence/R5B_RUNBOOK.md` Step 1.3); never the root OpenCode on `:4096`. The operator
+   confirms that it is the unit serving the endpoint the Bridge is configured for before touching it.
+   **Precheck first (operator, reading the operator's own configuration, not a worker):** record the
+   instance's effective `bash` permission policy (the `permission.bash` setting and any existing
+   `OPENCODE_PERMISSION`). **STOP if it is `deny` or a per-pattern object**: `OPENCODE_PERMISSION` is
+   deep-merged into the config's `permission` (`docs/evidence/R5B_RUNBOOK.md:11`), and what a plain `"ask"`
+   does to an object-valued or `deny` rule is **UNVERIFIED**, so it might relax a deny. Only an unset or
+   already-`ask` policy proceeds. The R5b mechanism is a drop-in on the unit
+   (`/etc/systemd/system/opencode-hb-test.service.d/zz-r5b-permission.conf` in R5b)
    with `Environment="OPENCODE_PERMISSION={\"bash\":\"ask\"}"`, then `daemon-reload` and restart
    (`docs/evidence/R5B_RUNBOOK.md` Step 1.2–1.3). It only adds an `ask`; it grants nothing. Verify
    the variable reached the process as in R5B Step 1.4 (read `/proc/<pid>/environ`; the value is
@@ -455,8 +466,8 @@ wrapper/sudoers/managed settings installed.
    request stays `unattributed` and refuses `FORBIDDEN`/`not_verified` (the production source itself
    is installed, #306). The retain/reject decision and the source design are the maintainer's
    (BACKLOG).
-4. **`BRIDGE_OVERLAY_DIR` is still a name proposal** (`docs/adr/ADR-025-archive-overlay-persistence.md:90`,
-   §10), even though ADR-025 is accepted (D18: bounds 1000 entries/512 KiB, reason
+4. **`BRIDGE_OVERLAY_DIR`**: ADR-025 §9 Q5/Q6 (D18) name it, §4.1 (`:90`) and §10 still say "proposal"; the
+   ADR is inconsistent on that word (BACKLOG). ADR-025 is accepted (D18: bounds 1000 entries/512 KiB, reason
    `session_archived`) and the S6 code is merged; the overlay startup wiring is missing.
 5. **R-DASH, R5b and the Claude live acceptance remain NOT_EXERCISED/UNVERIFIED**; each stage's
    pass criterion is evidence, not a claim.

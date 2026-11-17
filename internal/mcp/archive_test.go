@@ -881,8 +881,9 @@ func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRunning(t, e, x.(execution.Execution).ID)
-	// The first arrival is the send preflight's /permission read; the second is the monitor's
-	// first observe. Waiting for the second guarantees that observation has finished reading the
+	// The first arrival is the send preflight's /permission read (its single Permissions call; the
+	// arrival count below depends on it, so a change to the preflight's native reads must update
+	// this count); the second is the monitor's first observe. Waiting for the second guarantees that observation has finished reading the
 	// native (with the still-busy session) before the session is made terminal below.
 	for i := 0; i < 2; i++ {
 		select {

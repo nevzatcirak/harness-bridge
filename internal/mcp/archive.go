@@ -18,11 +18,13 @@ import (
 // ADR-022 slice S6 with ADR-025 (accepted, D18): archive_session, unarchive_session and
 // close_session over the persisted overlay.
 //
-// None of them makes a native write of any kind: the overlay is Bridge state, never a native
-// PATCH, DELETE or POST. The preconditions are native READS. Every change runs under the
-// manager's lifecycle reservation (never x.op, never an execution ID) and then under the
-// overlay's own mutex. The overlay is a label store and never an authority: no authorization
-// function in this package calls Archived or reads an entry (an AST test pins it).
+// archive_session and unarchive_session make no native write: the overlay is Bridge state, never a
+// native PATCH, DELETE or POST. close_session makes exactly one, the abort POST of the existing
+// interrupt path, and only while a Bridge execution holds the session's guard. The preconditions are
+// native READS. Every change runs under the manager's lifecycle reservation (never x.op, never an
+// execution ID) and then under the overlay's own mutex. The overlay is a label store and never an
+// authority: no authorization function in this package calls Archived or reads an entry (an AST test
+// pins it).
 
 // archiveBound bounds each native read and the interrupt settle of one call. A variable only so a
 // test can shorten it.
