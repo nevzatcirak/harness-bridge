@@ -95,12 +95,23 @@ func (o *OSDecoyFS) mkdirOwned(parent int, name, full string) (int, error) {
 	if err := unix.Mkdirat(parent, name, 0o700); err != nil {
 		return -1, err
 	}
+	if o.afterMkdir != nil {
+		o.afterMkdir(parent, name)
+	}
 	fd, err := unix.Openat(parent, name, dirFlags, 0)
 	if err != nil {
 		return -1, errUnsafePath // swapped between mkdirat and openat: nothing is followed or removed
 	}
 	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil || !isDirMode(uint32(st.Mode)) || int(st.Uid) != os.Geteuid() {
+	if err := unix.Fstat(fd, &st); err != nil || !isDirMode(uint32(st.Mode)) {
+		unix.Close(fd)
+		return -1, errUnsafePath // not a directory
+	}
+	owner := int(st.Uid)
+	if o.uidOf != nil {
+		owner = o.uidOf(fd, owner)
+	}
+	if owner != os.Geteuid() {
 		unix.Close(fd)
 		return -1, errUnsafePath // not the directory this process just created
 	}
