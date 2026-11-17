@@ -34,6 +34,11 @@
 // Running the child as the Claude service user in its real HOME is wrong: the canary would then test
 // the production ~/.claude and ~/.config/anthropic.
 //
+// EVIDENCE FILE. -out is created with O_EXCL|O_NOFOLLOW through the same no-follow directory walk
+// as the decoys: a symlink in ANY component of its path (the current directory is resolved first for
+// a relative path), an existing file or a missing directory is refused; use an absolute path in a
+// directory you own.
+//
 // The decoys must be owned by the run user, so the process needs the privilege to chown into the run
 // user's HOME; run it the way the task prescribes. The driver removes only files and directories it
 // created itself. Never pass --bare; the driver refuses it. The history comparison, the file-canary
@@ -47,6 +52,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -80,9 +86,20 @@ func main() {
 	}
 	var w io.Writer = os.Stdout
 	if *out != "" {
-		f, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		p := *out
+		if !filepath.IsAbs(p) {
+			wd, werr := os.Getwd()
+			if werr != nil {
+				fmt.Fprintln(os.Stderr, "cannot resolve the evidence file path")
+				os.Exit(2)
+			}
+			p = filepath.Join(wd, p)
+		}
+		// No component of the path may be a symlink and the file must not exist (the driver may
+		// run as root): see acceptance.CreateEvidenceFile.
+		f, err := acceptance.CreateEvidenceFile(filepath.Clean(p))
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "cannot create the evidence file")
+			fmt.Fprintln(os.Stderr, "cannot create the evidence file (a symlink in its path, an existing file or a missing directory is refused)")
 			os.Exit(2)
 		}
 		defer f.Close()

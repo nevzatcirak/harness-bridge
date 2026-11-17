@@ -762,6 +762,12 @@ type OSDecoyFS struct {
 	// create and its chown, which is where a swap would have to happen.
 	fchown func(fd, uid, gid int) error
 	race   func(path string)
+	// afterMkdir runs between mkdirat and the no-follow reopen of the new directory, which is where
+	// a swap of the directory would have to happen; uidOf can override the owner read from the
+	// reopened descriptor (a test cannot chown to another user without privilege). Both are
+	// unexported and never assigned by non-test code (TestSeamsAreNeverSetByProductionCode).
+	afterMkdir func(parent int, name string)
+	uidOf      func(fd, real int) int
 }
 
 // createdEntry is one object the driver created: its path, the device and inode recorded at create,
