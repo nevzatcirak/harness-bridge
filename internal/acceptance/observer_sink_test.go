@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -125,4 +126,28 @@ func TestSinkIsUnobservedWhenTheListenerFails(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("a failed sink still reports an observation")
+}
+
+// A request whose body never arrives (the client hangs up) is still counted: the count does not
+// depend on the body being delivered.
+func TestSinkCountsARequestWhoseBodyNeverArrives(t *testing.T) {
+	s, err := NewLoopbackSink("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(s.URL(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(conn, "POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\nab")
+	conn.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, _ := s.Count(); n >= 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("a request with a truncated body was not counted")
 }
