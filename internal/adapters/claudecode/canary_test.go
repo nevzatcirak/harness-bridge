@@ -26,6 +26,10 @@ const (
 	cCfgDirB = cTree + "/cfg"
 	cDecoyB  = cTree + "/decoys/cred.decoy.json"
 	cProfB   = cTree + "/decoys/profile.decoy.json"
+	// The control decoys sit where NO deny rule points (D20 follow-up, planner decision 2026-11-16).
+	cCtlMarker = "hbcanary-fedcba9876543210fedcba9876543210"
+	cCtlFile   = cHome + "/canary-control/cred.decoy.json"
+	cCtlProf   = cHome + "/canary-control/profile/profile.decoy.json"
 )
 
 // canaryFS is an in-memory CanaryFS: lstat entries by path and a symlink map for
@@ -56,7 +60,7 @@ func dirInfo() FileInfo  { return FileInfo{Mode: fs.ModeDir | 0o700, UID: cRunUI
 func fileInfo() FileInfo { return FileInfo{Mode: 0o600, UID: cRunUID, Nlink: 1} }
 
 func goodFS(form string) *canaryFS {
-	f := &canaryFS{info: map[string]FileInfo{cTree: dirInfo(), cHome: dirInfo()}, links: map[string]string{}}
+	f := &canaryFS{info: map[string]FileInfo{cTree: dirInfo(), cHome: dirInfo(), cCtlFile: fileInfo(), cCtlProf: fileInfo()}, links: map[string]string{}}
 	if form == CanaryFormA {
 		f.info[cDecoyA], f.info[cProfA] = fileInfo(), fileInfo()
 	} else {
@@ -67,9 +71,9 @@ func goodFS(form string) *canaryFS {
 
 func planFor(form string) CanaryPlan {
 	if form == CanaryFormA {
-		return CanaryPlan{Form: form, Tree: cTree, ServiceUID: cSvcUID, RunUID: cRunUID, Home: cHome, DecoyFile: cDecoyA, DecoyProfile: cProfA, Marker: cMarker}
+		return CanaryPlan{Form: form, Tree: cTree, ServiceUID: cSvcUID, RunUID: cRunUID, Home: cHome, DecoyFile: cDecoyA, DecoyProfile: cProfA, Marker: cMarker, ControlFile: cCtlFile, ControlProfile: cCtlProf, ControlMarker: cCtlMarker}
 	}
-	return CanaryPlan{Form: form, Tree: cTree, ServiceUID: cSvcUID, RunUID: cRunUID, Home: cHome, ConfigDir: cCfgDirB, DecoyFile: cDecoyB, DecoyProfile: cProfB, Marker: cMarker}
+	return CanaryPlan{Form: form, Tree: cTree, ServiceUID: cSvcUID, RunUID: cRunUID, Home: cHome, ConfigDir: cCfgDirB, DecoyFile: cDecoyB, DecoyProfile: cProfB, Marker: cMarker, ControlFile: cCtlFile, ControlProfile: cCtlProf, ControlMarker: cCtlMarker}
 }
 
 func TestPreflightAcceptsBothFormsWhenIsolated(t *testing.T) {
@@ -221,24 +225,24 @@ func deniedStream(plan CanaryPlan, o streamOpts) []byte {
 	return []byte(strings.Join(out, "\n") + "\n")
 }
 
-// controlStream is a FABRICATED positive control: every probe's tool, aimed at the same target
-// with no deny rule, answers with the decoy. drop names probe IDs whose control returns nothing.
+// controlStream is a FABRICATED positive control: every probe's tool, aimed at the control decoy
+// (a path no deny rule covers), answers with the control decoy. drop names probe IDs whose control returns nothing.
 func controlStream(plan CanaryPlan, drop map[string]bool) []byte {
 	lines := []string{
 		cj(map[string]any{"type": "system", "subtype": "init", "session_id": "s", "cwd": cTree, "permissionMode": "default", "apiKeySource": "none",
 			"claude_code_version": "2.1.322", "mcp_servers": []any{}, "plugins": []any{}, "tools": []any{"Read", "Glob", "Grep"}}),
 	}
-	for _, p := range Probes(plan) {
+	for _, p := range ControlProbes(plan) {
 		id := "toolu_c_" + p.ID
 		// Literal expectations (#259 P3-4): the marker for Read and content-mode Grep, the decoy
 		// file's name for files-mode Grep and Glob. Not the production controlNeedle, so a change
 		// to it cannot pass its own test.
-		result := plan.Marker
+		result := plan.ControlMarker
 		switch p.ID {
 		case "grep-files", "glob-decoy-dir":
-			result = path.Base(plan.DecoyFile)
+			result = path.Base(plan.ControlFile)
 		case "glob-profile-dir":
-			result = path.Base(plan.DecoyProfile)
+			result = path.Base(plan.ControlProfile)
 		}
 		if drop[p.ID] {
 			result = "nothing"
@@ -423,7 +427,7 @@ func TestDeniedRunLeaksNothing(t *testing.T) {
 // Committed evidence is verdict lines only.
 func TestVerdictLinesNeverCarryStreamContentOrTheMarker(t *testing.T) {
 	rep := evaluate(CanaryFormA, streamOpts{leak: true}, nil) // even a failing, leaking run
-	text := strings.Join(rep.Lines(), "\n")
+	text := strings.Join(rep.linesAllObserved(), "\n")
 	if strings.Contains(text, cMarker) || strings.Contains(text, "hbcanary-0123") {
 		t.Fatalf("the verdict lines carry the marker:\n%s", text)
 	}
@@ -433,7 +437,7 @@ func TestVerdictLinesNeverCarryStreamContentOrTheMarker(t *testing.T) {
 	if !strings.Contains(text, "verdict=fail") {
 		t.Fatalf("no verdict line:\n%s", text)
 	}
-	ok := strings.Join(evaluate(CanaryFormB, streamOpts{}, nil).Lines(), "\n")
+	ok := strings.Join(evaluate(CanaryFormB, streamOpts{}, nil).linesAllObserved(), "\n")
 	if !strings.Contains(ok, "verdict=pass") || !strings.Contains(ok, "probe=grep-content") || !strings.Contains(ok, "probe=glob-profile-dir") {
 		t.Fatalf("pass lines:\n%s", ok)
 	}
@@ -451,4 +455,78 @@ func TestNewCanaryMarkerIsNotCredentialShaped(t *testing.T) {
 		t.Error("a short random source was accepted")
 	}
 	_ = path.Base
+}
+
+// The deny rule is never lifted: the control decoys must sit outside every denied path, carry their
+// own fresh marker and differ from the denied decoys.
+func TestPreflightRequiresAnIndependentControl(t *testing.T) {
+	type tc struct {
+		name string
+		mod  func(p *CanaryPlan, f *canaryFS)
+	}
+	cases := []tc{
+		{"control marker missing", func(p *CanaryPlan, f *canaryFS) { p.ControlMarker = "" }},
+		{"control marker equals the decoy's", func(p *CanaryPlan, f *canaryFS) { p.ControlMarker = p.Marker }},
+		{"control file under HOME/.claude", func(p *CanaryPlan, f *canaryFS) {
+			p.ControlFile = cHome + "/.claude/control.json"
+			f.info[p.ControlFile] = fileInfo()
+		}},
+		{"control profile under HOME/.config/anthropic", func(p *CanaryPlan, f *canaryFS) {
+			p.ControlProfile = cHome + "/.config/anthropic/control.json"
+			f.info[p.ControlProfile] = fileInfo()
+		}},
+		{"control directory is a parent of a denied directory", func(p *CanaryPlan, f *canaryFS) {
+			p.ControlFile = cHome + "/control.json"
+			f.info[p.ControlFile] = fileInfo()
+		}},
+		{"control file and profile share a directory", func(p *CanaryPlan, f *canaryFS) {
+			p.ControlProfile = cHome + "/canary-control/other.json"
+			f.info[p.ControlProfile] = fileInfo()
+		}},
+		{"control file named like the real login", func(p *CanaryPlan, f *canaryFS) {
+			p.ControlFile = cHome + "/canary-control/.credentials.json"
+			f.info[p.ControlFile] = fileInfo()
+		}},
+		{"control file missing", func(p *CanaryPlan, f *canaryFS) { delete(f.info, p.ControlFile) }},
+		{"control file wrong mode", func(p *CanaryPlan, f *canaryFS) {
+			i := fileInfo()
+			i.Mode = 0o644
+			f.info[p.ControlFile] = i
+		}},
+		{"control file owned by another user", func(p *CanaryPlan, f *canaryFS) {
+			i := fileInfo()
+			i.UID = 0
+			f.info[p.ControlFile] = i
+		}},
+	}
+	for _, c := range cases {
+		p, f := planFor(CanaryFormA), goodFS(CanaryFormA)
+		c.mod(&p, f)
+		if err := Preflight(f, p); err == nil {
+			t.Errorf("%s: pre-flight passed", c.name)
+		}
+	}
+	// form B: the control must also stay out of CLAUDE_CONFIG_DIR
+	p, f := planFor(CanaryFormB), goodFS(CanaryFormB)
+	p.ControlFile = cCfgDirB + "/control.json"
+	f.info[p.ControlFile] = fileInfo()
+	if err := Preflight(f, p); err == nil {
+		t.Error("form B: a control inside CLAUDE_CONFIG_DIR passed")
+	}
+}
+
+// The evaluation refuses a plan whose control marker is absent, and a control stream that shows
+// the DENIED decoy's marker instead of its own proves nothing.
+func TestControlMustShowItsOwnMarker(t *testing.T) {
+	p := planFor(CanaryFormA)
+	rep := evaluate(CanaryFormA, streamOpts{}, func(d, c *CanaryRun) {
+		c.NDJSON = bytes.ReplaceAll(c.NDJSON, []byte(cCtlMarker), []byte(cMarker))
+	})
+	if rep.Pass || rep.ControlReads {
+		t.Fatalf("a control showing the decoy's marker passed: %+v", rep)
+	}
+	p.ControlMarker = ""
+	if rep := EvaluateCanary(p, CanaryRun{NDJSON: deniedStream(planFor(CanaryFormA), streamOpts{})}, CanaryRun{NDJSON: controlStream(planFor(CanaryFormA), nil)}); rep.Pass {
+		t.Fatal("a plan without a control marker passed")
+	}
 }

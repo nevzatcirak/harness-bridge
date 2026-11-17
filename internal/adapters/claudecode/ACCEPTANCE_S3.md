@@ -18,6 +18,17 @@ the canary (ADR-021 "Consequence of D14 Q10"; Q10 is neither answered nor reopen
 | argv hardening flags, settings JSON and deny rules; `BRIDGE_CLAUDE_VERSIONS` | `argv_test.go`, `versions_test.go` |
 | canary pre-flight and verdict logic against FABRICATED streams | `canary_test.go` |
 
+## The live driver (task #314; the live run is a separate task)
+
+`cmd/hb-claude-acceptance` (build tag `live`; not in the default build, tests or CI) with its logic in
+`internal/acceptance` runs items 1-8 through the configured wrapper (default
+`/usr/local/libexec/hb-claude-wrapper`) with the full pinned argv, at most 30 CLI runs and `--max-turns`
+at most 5, stopping at the first budget breach. It writes verdict lines, event types, timings and exit
+codes only. Item 1 now uses a **control path** (ADR-021 §8.3 amendment, 2026-11-16): the deny rule is
+never lifted; each probe has a control run against an identical decoy outside every denied path, and the
+verdict fails unless `init.mcp_servers` is empty with the pinned argv (finding in ADR-021 §8.3). Item 3 is
+recorded by item 2's runs. **Every item below stays NOT_EXERCISED until the live run task reports.**
+
 ## Live items (operator-run; evidence file required; all NOT_EXERCISED)
 
 Run as the Claude service user's isolated test user, in a throwaway root, with a throwaway
@@ -31,8 +42,13 @@ verdict lines and event types only.
    `claudecode.Preflight`; it must pass before anything starts. Run each probe of
    `claudecode.Probes` with its `claudecode.Prompt`, plus the positive control without the deny
    rule, then `claudecode.EvaluateCanary` over the recorded streams; commit
-   `CanaryReport.Lines()` only. Pass needs every probe, the control, no decoy content, no file
-   canary, no sink request, `mcp_servers` empty, `apiKeySource` `none`.
+   the lines of `CanaryReport.LinesWith(observations)` only, normally through the acceptance driver
+   (`cmd/hb-claude-acceptance`, build tag `live`), which writes them. The three checks that are not
+   in the NDJSON stream (the history comparison, the file-canary scan, the sink observation) must
+   each be **explicitly observed** and passed in `CanaryObservations`; a check that was not made
+   prints `unknown` and the verdict is `incomplete`, never `pass`. There is no public entry that
+   assumes them. Pass needs every probe, the control, no decoy content, no file canary, no sink
+   request, all three of those checks observed, `mcp_servers` empty, `apiKeySource` `none`.
    **NOT_EXERCISED: no allowed authenticated run exists (D14 Q10).**
 2. **Result-to-exit lag** of the pinned CLI over several runs: validates or replaces the 10 s
    exit-grace default. NOT_EXERCISED.
