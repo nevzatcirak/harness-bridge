@@ -17,9 +17,10 @@ maintainer requirement D11. Decision in force: D12 (maintainer decision, recorde
 `reject_only` default may be implemented. This ADR does not enable any
 `allow_once` policy.
 
-**Amendment A1 (PROPOSED, 2026-11-16, task #315):** an incarnation source for production attribution is
-proposed in the section "Amendment A1: Incarnation source" before section 13; it changes nothing until the
-maintainer accepts it (D19).
+**Amendment A1 (ACCEPTED, D21, 2026-11-17):** an incarnation source for production attribution is
+accepted in the section "Amendment A1: Incarnation source" before section 13. The mode is off in the first
+slice (Q2); the assistant-message pin (e) is deferred (Q6) and (b) stays a later optional hardening (Q3);
+until S7 is accepted and exercised live, the operator runs with `BRIDGE_PERMISSION_RELAY=off` (Q7).
 
 **Acceptance note (2026-11-12, planner task #205).** The Planning Desk accepted
 this ADR under decision D12 (issue #117): PR #162 was merged (`479e917`) after
@@ -847,11 +848,15 @@ tested against a fake native; no live run was made.
   reply forwarded by the client (1 RED), a fabricated epoch (1 RED), the wiring dropped (1 RED), mode
   `off` installing the source (2 RED).
 
-## Amendment A1: Incarnation source (PROPOSED, task #315, 2026-11-16)
+## Amendment A1: Incarnation source (ACCEPTED, D21, 2026-11-17)
 
-**Status: PROPOSED.** Design and research only: no code, no test, no live run. Acceptance is the
-maintainer's (D19); nothing here changes D12, D15 (reject-only, policy OFF), an accepted section of this
-ADR, ADR-018 or ADR-010. Upstream facts are static source reading of OpenCode v1.19.4 `148842ef` (a
+**Status: ACCEPTED (D21, 2026-11-17).** Design and research only: no code, no test, no live run. D21
+accepts every recommendation of A1.7: Q1 accepts the Bridge-observed continuity epoch (continuity of
+observation, not native identity); Q2 keeps the mode off in the first slice; Q3 keeps (b) as a later
+optional hardening; Q4 one global subscription; Q5 the proposed 25 s heartbeat gap and backoff bounds;
+Q6 defers the assistant-message pin (e); Q7 runs the operator with `BRIDGE_PERMISSION_RELAY=off` until S7
+is accepted and exercised live. Nothing here changes D12, D15 (reject-only, policy OFF), an accepted
+section of this ADR, ADR-018 or ADR-010. Upstream facts are static source reading of OpenCode v1.19.4 `148842ef` (a
 fresh sparse checkout of `packages/opencode/src` and `packages/schema/src`, read only; OpenCode was not
 run and no Bridge or OpenCode call was made). Paths below are under `packages/opencode/src/` and
 anything not settled by that reading is marked **UNVERIFIED**. Bridge-side citations were re-checked
@@ -1043,18 +1048,18 @@ not pinned and verified in the same view. Precisely:
 
 ### A1.4 Recommendation
 
-**Adopt (c), with (e) (option (a), with its stated cost) as an optional complement in the same slice (Q6), and keep (b) as a later optional
-hardening for process restarts that does not rely on the stream.** Reasons: (c) is the only candidate
+**Adopt (c); keep (b) as a later optional hardening for process restarts that does not rely on the
+stream; defer (e) (D21 Q3/Q6).** Reasons: (c) is the only candidate
 that follows the lifetime of the pending store (instance disposal included), needs no host privilege,
 works for a remote OpenCode, adds no authority (the epoch is a Bridge-generated token that can only be
 replaced, never forged into a verification) and fails closed everywhere. It stays inside D15: replies
 remain reject-only, policy mode stays off, `allow_once` stays refused with zero native calls, and every
 check of ADR-024 4.2 and ADR-018 section 5 still has to pass; the epoch only **adds** a condition to
 verification (a continuity bound) and lifts the blanket `unattributed` that makes the relay inert.
-If the maintainer does not accept (c)'s weaker meaning (Q1), the remaining choices are (b) with its
-privilege and deployment requirements, or (d).
+D21 Q1 accepts (c)'s weaker meaning: the epoch proves continuity of observation, not native identity.
+The mode is off in the first slice (Q2).
 
-### A1.5 Implementation slice S7 (proposal) and tests
+### A1.5 Implementation slice S7 (accepted design) and tests
 
 Files (proposal): `internal/adapters/opencode/epoch.go` (the tracker: one SSE reader of `/global/event`
 with the existing size bounds, deterministic reconnect backoff 1 s doubling to 30 s, `Epoch() (token,
@@ -1065,14 +1070,9 @@ unarmed and therefore unverifiable; `runAuthority.PermissionScope` (`permissions
 `Snapshot`; the **`NativeIncarnation` seam is unchanged**, `NativeEpoch(ctx) (string, error)`, since the
 armed state is the tracker's own `Epoch()` result and an empty string already means unarmed), and
 `cmd/bridge` (start and stop the tracker for `reject_only`; the default is **off** behind a proposed
-`BRIDGE_PERMISSION_INCARNATION=observed`, so the first slice changes no deployed behaviour). If (e) is
-included (Q6), the per-execution pinned set is written by the execution's reconciliation path and read
-through the authority: a new field on `opencode.KnownPermissionExecution`
-(`permission_observation_types.go:37-41`, returned by `PermissionExecutions`, `permissionsource.go:144`),
-for example the pinned assistant message IDs usable for that execution, and `correlate`
-(`permission_observation.go:281`) gains **one additional refusal condition** (`message_unpinned`) beside
-the existing ones. No existing attribution condition is changed or relaxed, and there is no change to
-`allow_once` handling or to the client's reject-only reply. Without (e) the observer is unchanged.
+`BRIDGE_PERMISSION_INCARNATION=observed`, so the first slice changes no deployed behaviour). The assistant-message pin (e) is deferred (D21 Q6): S7 has no pinned set and `correlate`
+(`permission_observation.go:281`) is unchanged. No existing attribution condition is changed or relaxed,
+and there is no change to `allow_once` handling or to the client's reject-only reply.
 
 Tests (fake SSE and fake native, `-race`, `-count=20`, goroutine-leak check after `Stop`): not armed
 before the first heartbeat; armed after it; a dispose event, a global disposed event, a stream end, a
@@ -1085,25 +1085,16 @@ bounded and ignored; a request attributed after a replacement is refused; `allow
 zero native calls; `BRIDGE_PERMISSION_RELAY=off` starts no tracker. A
 `server.instance.disposed` for any directory (including one other than the run's) replaces the epoch,
 and so does `global.disposed` (envelope `directory: "global"`) arriving **alone**, and a `global.disposed`
-after a failed `disposeAll`. The (e) pin rule (option (a)): a request whose assistant message is not
-pinned before the request was first listed is `unattributed` (`message_unpinned`), `reply_permission`
-answers `FORBIDDEN`/`not_verified` with zero native writes and no attempt line, and stays refused even
-after the reconciliation path pins that message later (a request seen first is not verified by a later pin);
-a request whose message was pinned by an earlier reconciliation read verifies; a pin written by
-`PermissionView` itself is impossible (the view has no write access); a message pinned for another
-execution, or pinned while the epoch was unarmed or different, never verifies; an unarmed tracker
-returns `("", nil)` and not an error (an error from the seam fails the scope read,
-`permissionsource.go:123-125`, instead of yielding an unattributed request).
+after a failed `disposeAll`. No (e) pin test is in S7 (D21 Q6); an unarmed tracker returns `("", nil)` and not an error (an error
+from the seam fails the scope read, `permissionsource.go:123-125`, instead of yielding an unattributed
+request).
 
 Mutations (each alone must go RED): arm at the hello; ignore the dispose event; ignore the global disposed
 event; ignore stream end; drop the heartbeat-gap rule; derive the epoch from an event ID; read the epoch
 once instead of before and after; skip the `submitEpoch` equality; supply an epoch when the tracker is
 nil; keep the epoch across a reconnect; let `Stop` leave the goroutine; start the tracker in mode `off`; match
 only `server.instance.disposed` (a `global.disposed` goes unnoticed); only `global.disposed`; match the
-disposed event on the run's directory only; attribute an unpinned message on the epoch alone; let
-`PermissionView` pin the message it is about to verify (pin and verify in one view); accept a pin made
-after the request was first listed; pin a message without the armed-and-equal epoch; keep pins across an
-epoch replacement.
+disposed event on the run's directory only.
 
 ### A1.6 Live acceptance outline (R5b style, reject-only)
 
@@ -1128,23 +1119,19 @@ M need the maintainer.
    shows no call.
 8. Capture: native request log, Bridge journal, tool results, the tracker's log lines; no secret.
 
-### A1.7 Open questions for the maintainer (D19)
+### A1.7 Decided (D21, 2026-11-17)
 
-- **Q1.** Is a Bridge-observed continuity epoch (c) an acceptable meaning of "native incarnation" for
-  ADR-018 section 5, given that it proves continuity of observation and not a native identity?
-- **Q2.** Default of the new mode: off in the first slice (recommended) and a later decision to flip it
-  after the live acceptance, or on from the start?
-- **Q3.** Also require (b) when the server is host-local, as a second independent signal, or keep it as a
-  later hardening?
-- **Q4.** One global subscription (recommended) or one `/event` per active directory?
-- **Q5.** The heartbeat-gap threshold (25 s proposed, 2.5 heartbeats) and the backoff bounds.
-- **Q6.** Include the assistant-message pin (e) in S7, or defer it? The proposed rule is option (a) of
-  A1.3(e): pinned before the request was first listed, otherwise refused (never attributed on the epoch
-  alone, never pinned and verified in one view). It narrows windows (i) and (iv) but makes the relay
-  refuse requests whose message was not read earlier (possibly most first-asks); without (e) the relay
-  verifies more, with the full residual of (i) and (iv). The maintainer decides.
-- **Q7.** Until S7 is accepted and exercised, should the operator be told to run with
-  `BRIDGE_PERMISSION_RELAY=off` (the runbook currently says the tool is registered by default)?
+- **Q1 — decided: yes.** A Bridge-observed continuity epoch (c) is the meaning of "native
+  incarnation" for ADR-018 section 5; it proves continuity of observation, not native identity. State
+  that limit explicitly in the implementation and the evidence.
+- **Q2 — decided: off in the first slice.** Flipping the mode is a later decision after the live
+  acceptance.
+- **Q3 — decided: (b) stays a later optional hardening**, not required now.
+- **Q4 — decided: one global `/event` subscription.**
+- **Q5 — decided: the 25 s heartbeat-gap threshold and the backoff bounds as proposed in A1.4/A1.5.**
+- **Q6 — decided: defer the assistant-message pin (e); it is not in S7.**
+- **Q7 — decided: until S7 is accepted and exercised live, the runbook tells the operator to run with
+  `BRIDGE_PERMISSION_RELAY=off`.**
 
 ### A1.8 Limitations of this amendment
 
@@ -1155,8 +1142,8 @@ least one 10 s interval, not observed), which native actions create an assistant
 is an existing user message (T-I is a hypothesis about such an action; upstream `session/prompt.ts`
 creates assistant messages with `parentID: lastUser.id` inside its run loop, but which public endpoint
 starts that loop without a new prompt was not determined), the behaviour behind proxies that buffer SSE,
-other OpenCode versions, and the cost of one extra long-lived connection. The recommendation is a
-proposal; every name, threshold and default above is a proposal.
+other OpenCode versions, and the cost of one extra long-lived connection. The design is accepted (D21); the implementation does not exist and the runtime behaviour above is
+UNVERIFIED. Names not decided by D21 remain proposals.
 
 
 ## 13. Limitations of this record
