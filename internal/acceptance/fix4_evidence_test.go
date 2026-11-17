@@ -76,3 +76,29 @@ func TestEvidenceFileNeverCreatesAMissingParent(t *testing.T) {
 		t.Fatalf("something was created: %v", es)
 	}
 }
+
+// R359-CLEANUP (#362 P3-2): the missing-parent property must hold for a non-root caller too. Here the
+// decoy filesystem's chown succeeds, so a walk that created directories (walk(..., true)) would leave
+// them behind: the test fails for it as root and as any other uid.
+func TestEvidenceFileNeverCreatesAMissingParentEvenIfChownWouldSucceed(t *testing.T) {
+	root := realDir(t)
+	o := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid()}
+	o.fchown = func(int, int, int) error { return nil }
+	f, err := createEvidenceFile(o, filepath.Join(root, "missing", "deeper", "evidence.txt"))
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("the evidence file was created below a missing directory")
+	}
+	if es, _ := os.ReadDir(root); len(es) != 0 {
+		t.Fatalf("a directory was created for the evidence file: %v", es)
+	}
+	if len(o.created) != 0 {
+		t.Fatalf("the walk recorded created directories: %v", o.created)
+	}
+	// and the same helper still creates the file when the directory exists
+	f, err = createEvidenceFile(o, filepath.Join(root, "evidence.txt"))
+	if err != nil {
+		t.Fatalf("existing parent: %v", err)
+	}
+	_ = f.Close()
+}

@@ -8,17 +8,32 @@ import (
 )
 
 // seamReaders names, for each test seam of OSDecoyFS, the only functions of non-test code that may
-// READ it. Any other reference (a read elsewhere, an assignment, taking the address with &, a
-// composite-literal key) is a violation: production code must never set or reach a seam.
+// READ it. Any other reference is a violation: a read elsewhere, an assignment, taking the address
+// with & (parentheses around the seam are looked through, also inside an accessor), an increment, a
+// composite-literal key, and any unkeyed (positional) composite literal of OSDecoyFS, which could
+// fill a seam field without naming it. Empty and keyed literals are allowed.
 //
-// The match is by field NAME, so an unrelated field that happens to be called fchown, race,
-// afterMkdir or uidOf in non-test code would be flagged too (a false positive that fails closed:
-// rename the field). It is a syntactic guard: reflection or unsafe could still reach a field.
+// Limits (the guard is a convention check, not a proof): it matches by field NAME, so an unrelated
+// field called fchown, race, afterMkdir or uidOf in non-test code would be flagged too (a false
+// positive that fails closed: rename the field); it is syntactic and per file, so reflection,
+// unsafe, cgo or assembly, a copy of the struct made outside this package, or a seam handed in
+// through a new function parameter or interface are not seen; and it scans only this package's
+// non-test files (every build tag, since each file is parsed).
 var seamReaders = map[string]map[string]bool{
 	"fchown":     {"doFchown": true},
 	"race":       {"raceAt": true},
 	"afterMkdir": {"mkdirOwned": true},
 	"uidOf":      {"mkdirOwned": true},
+}
+
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
 }
 
 func seamViolations(f *ast.File) []string {
@@ -39,6 +54,12 @@ func seamViolations(f *ast.File) []string {
 		}
 		stack = append(stack, x)
 		switch v := x.(type) {
+		case *ast.CompositeLit:
+			if id, ok := v.Type.(*ast.Ident); ok && id.Name == "OSDecoyFS" && len(v.Elts) > 0 {
+				if _, keyed := v.Elts[0].(*ast.KeyValueExpr); !keyed {
+					out = append(out, "has an unkeyed composite literal of OSDecoyFS")
+				}
+			}
 		case *ast.KeyValueExpr:
 			if id, ok := v.Key.(*ast.Ident); ok && seamReaders[id.Name] != nil {
 				out = append(out, "sets the test seam "+id.Name+" in a literal")
@@ -48,9 +69,13 @@ func seamViolations(f *ast.File) []string {
 			if !isSeam {
 				break
 			}
+			// the nearest ancestor that is not a pair of parentheses
 			var parent ast.Node
-			if len(stack) >= 2 {
-				parent = stack[len(stack)-2]
+			for i := len(stack) - 2; i >= 0; i-- {
+				if _, paren := stack[i].(*ast.ParenExpr); !paren {
+					parent = stack[i]
+					break
+				}
 			}
 			switch p := parent.(type) {
 			case *ast.UnaryExpr:
@@ -60,7 +85,7 @@ func seamViolations(f *ast.File) []string {
 				}
 			case *ast.AssignStmt:
 				for _, l := range p.Lhs {
-					if l == ast.Expr(v) {
+					if unparen(l) == ast.Expr(v) {
 						out = append(out, "assigns the test seam "+v.Sel.Name)
 						return true
 					}
@@ -104,6 +129,18 @@ func (o *OSDecoyFS) doFchown(fd int) error { q := &o.fchown; _ = q; return nil }
 var o = OSDecoyFS{race: nil}`,
 		"call through the field from another function": `package p
 func f(o *OSDecoyFS) { o.race("x") }`,
+		"unkeyed (positional) literal of OSDecoyFS": `package p
+var o = OSDecoyFS{0, 0}`,
+		"unkeyed pointer literal of OSDecoyFS": `package p
+func f() *OSDecoyFS { return &OSDecoyFS{1, 2} }`,
+		"parenthesised left side": `package p
+func f(o *OSDecoyFS) { (o.afterMkdir) = nil }`,
+		"parenthesised left side inside its own accessor": `package p
+func (o *OSDecoyFS) mkdirOwned(parent int, name, full string) (int, error) { (o.afterMkdir) = nil; return 0, nil }`,
+		"address of a parenthesised seam": `package p
+func f(o *OSDecoyFS) { p := &(o.race); _ = p }`,
+		"doubly parenthesised address inside the accessor": `package p
+func (o *OSDecoyFS) raceAt(p string) { q := &((o.race)); _ = q }`,
 	}
 	for name, src := range bad {
 		if len(seamViolations(parseSrc(t, src))) == 0 {
@@ -135,6 +172,10 @@ func (o *OSDecoyFS) mkdirOwned(parent int, name, full string) (int, error) {
 }`,
 		"an unrelated field of another name": `package p
 func f(o *OSDecoyFS) { o.UID = 1; o.mu.Lock() }`,
+		"empty and keyed literals of OSDecoyFS": `package p
+func f() { _ = &OSDecoyFS{}; _ = OSDecoyFS{UID: 1, GID: 2} }`,
+		"a parenthesised read inside its accessor": `package p
+func (o *OSDecoyFS) raceAt(p string) { if (o.race) != nil { (o.race)(p) } }`,
 	}
 	for name, src := range good {
 		if v := seamViolations(parseSrc(t, src)); len(v) != 0 {
