@@ -4,7 +4,6 @@ package acceptance
 
 import (
 	"errors"
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -76,9 +75,9 @@ func TestMkdirRefusesADirectorySwappedForAnotherUsersOne(t *testing.T) {
 	}
 }
 
-// The test seams exist only for tests: no non-test file of the package assigns them.
+// The test seams exist only for tests: no non-test file of the package sets them or takes their
+// address; see seamViolations.
 func TestSeamsAreNeverSetByProductionCode(t *testing.T) {
-	seams := map[string]bool{"fchown": true, "race": true, "afterMkdir": true, "uidOf": true}
 	ents, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -93,20 +92,8 @@ func TestSeamsAreNeverSetByProductionCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ast.Inspect(f, func(x ast.Node) bool {
-			switch v := x.(type) {
-			case *ast.AssignStmt:
-				for _, l := range v.Lhs {
-					if se, ok := l.(*ast.SelectorExpr); ok && seams[se.Sel.Name] {
-						t.Errorf("%s assigns the test seam %s", n, se.Sel.Name)
-					}
-				}
-			case *ast.KeyValueExpr:
-				if id, ok := v.Key.(*ast.Ident); ok && seams[id.Name] {
-					t.Errorf("%s sets the test seam %s in a literal", n, id.Name)
-				}
-			}
-			return true
-		})
+		for _, v := range seamViolations(f) {
+			t.Errorf("%s: %s", n, v)
+		}
 	}
 }

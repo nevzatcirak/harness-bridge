@@ -54,7 +54,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/acceptance"
@@ -84,6 +83,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "configuration refused:", err)
 		os.Exit(2)
 	}
+	// Every flag is validated before the -out file is created: an invalid configuration or item list
+	// leaves no file behind (pinned by TestLiveCommandValidatesFlagsBeforeCreatingTheEvidenceFile).
+	nums, err := acceptance.ParseItems(*items)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "items must be numbers 1-8")
+		os.Exit(2)
+	}
 	var w io.Writer = os.Stdout
 	if *out != "" {
 		p := *out
@@ -111,15 +117,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "configuration refused:", err)
 		os.Exit(2)
-	}
-	var nums []int
-	for _, s := range strings.Split(*items, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil || n < 1 || n > 8 {
-			fmt.Fprintln(os.Stderr, "items must be numbers 1-8")
-			os.Exit(2)
-		}
-		nums = append(nums, n)
 	}
 	_ = ev.KV("driver", "started", time.Now().UTC().Format("2006-01-02T15:04:05Z"), "candidate_mcp", strconv.FormatBool(*candidate))
 	verdicts := d.RunItems(context.Background(), nums)
