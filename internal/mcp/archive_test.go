@@ -161,6 +161,14 @@ type archEnv struct {
 }
 
 func newArchEnv(t *testing.T, mod func(*lifecycle.Config)) *archEnv {
+	return newArchEnvTiming(t, mod, 5*time.Millisecond)
+}
+
+// newArchEnvTiming is newArchEnv with an injected manager reconcile interval. A long interval pins
+// the monitor out of the test window: a run whose native state turns terminal is then NOT settled
+// and its guard is NOT released until the interval elapses, so a test that needs the guard held at
+// close time gets it deterministically (explicit timing injection, no sleeps, no changed timeouts).
+func newArchEnvTiming(t *testing.T, mod func(*lifecycle.Config), reconcile time.Duration) *archEnv {
 	t.Helper()
 	canon := func(d string) string {
 		r, err := filepath.EvalSymlinks(d)
@@ -207,7 +215,7 @@ func newArchEnv(t *testing.T, mod func(*lifecycle.Config)) *archEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := execution.NewWithTiming(client, 3*time.Second, 5*time.Millisecond)
+	runs := execution.NewWithTiming(client, 3*time.Second, reconcile)
 	t.Cleanup(runs.Close)
 	ac.Install(runs)
 	e.s = &Server{Client: client, Runs: runs, Policy: policy, Archive: ac}
@@ -837,17 +845,60 @@ func TestCatalogWithTheRealOverlayAcrossARestart(t *testing.T) {
 // interrupt and the overlay stays unchanged (the branch is pinned without the reservation's help,
 // which would not refuse a free guard).
 func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
-	e := newArchEnv(t, nil)
+	// Determinism. Two facts pin the branch:
+	//
+	// (1) The long interval (10 s) keeps every interval-gated observe out of the window. The
+	// monitor observes immediately once when the run starts (internal/execution/manager.go:509)
+	// and then only when the 10 s ticker fires, so after its first observe completes nothing can
+	// settle the run until far after this test has finished.
+	//
+	// (2) The barrier below waits for TWO arrivals of the last native read of an observation
+	// (/permission), not one. The first /permission arrival is the send preflight's read (it runs
+	// synchronously inside send_prompt, manager.go:365-396); the second is the monitor's first
+	// observe. Only after the second arrival is the monitor's first observation guaranteed to hold
+	// all its native reads (Get, status, history, permission, in that order, reconcile.go:242-266),
+	// so the terminal flip in nat.set below is invisible to it: an observation that started before
+	// the flip cannot settle the run afterwards. waitRunning's Gets perform no native reads while
+	// the monitor is alive (refresh returns early on !monitorDone, reconcile.go:171), so no other
+	// observation can run between the barrier and close_session's guard snapshot. The guard
+	// assertion pins the held run, and the interrupt's own probe (manager.go:658) is therefore the
+	// first observation that sees the terminal native: it settles the run and answers
+	// "execution already terminal" deterministically.
+	e := newArchEnvTiming(t, nil, 10*time.Second)
+	probed := make(chan struct{}, 2)
+	e.nat.mu.Lock()
+	e.nat.hook = func(p string) {
+		if p == "/permission" { // the last native read of one observation
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	e.nat.mu.Unlock()
 	x, err := e.s.call(context.Background(), "send_prompt", args{SessionID: "opencode:ses_arch1", Prompt: "work", IdempotencyKey: "key-close-0003"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitRunning(t, e, x.(execution.Execution).ID)
+	// The first arrival is the send preflight's /permission read; the second is the monitor's
+	// first observe. Waiting for the second guarantees that observation has finished reading the
+	// native (with the still-busy session) before the session is made terminal below.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-probed:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("native observation %d/2 did not reach its permission read", i+1)
+		}
+	}
 	e.nat.set("ses_arch1", func(s *archSession) {
 		s.busy = false
 		a := &s.msgs[len(s.msgs)-1]
 		a.Info.Time.Completed, a.Info.Finish = 1, "stop"
 	})
+	if held, st := e.s.Runs.SessionGuard("ses_arch1"); !held || st != "running" {
+		t.Fatalf("test premise failed: guard held=%v state=%q before close", held, st)
+	}
 	_, err = e.call("close_session", "opencode:ses_arch1")
 	if err == nil {
 		t.Fatal("close succeeded although the interrupt failed")
