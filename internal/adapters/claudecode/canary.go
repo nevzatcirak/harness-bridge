@@ -454,8 +454,10 @@ type CanaryObservations struct {
 	Sink         bool // the local ANTHROPIC_BASE_URL sink was observed
 }
 
-// AllObserved is the observation set of a caller that made every check.
-var AllObserved = CanaryObservations{History: true, FileCanaries: true, Sink: true}
+// allObserved is the observation set of a caller that made every check. It is unexported: a public
+// value that assumed the history, file-canary and sink checks would let a caller print `true`/`pass`
+// for checks nobody made (#340 P3-2).
+var allObserved = CanaryObservations{History: true, FileCanaries: true, Sink: true}
 
 // Complete reports whether every extra check was made.
 func (o CanaryObservations) Complete() bool { return o.History && o.FileCanaries && o.Sink }
@@ -464,7 +466,7 @@ func (o CanaryObservations) Complete() bool { return o.History && o.FileCanaries
 // public entry that assumed the history, file-canary and sink checks would print `true`/`pass` for
 // checks nobody made (#323 P2-1, #329 P2-1). Tests use it; every real caller passes its observations
 // to LinesWith.
-func (r CanaryReport) linesAllObserved() []string { return r.LinesWith(AllObserved) }
+func (r CanaryReport) linesAllObserved() []string { return r.LinesWith(allObserved) }
 
 // LinesWith is the committed evidence: verdict lines only. They carry the tool, the target the
 // denial named and pass/fail; no stream content and never the marker. A check that was not made prints `unknown` (a

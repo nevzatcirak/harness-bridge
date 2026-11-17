@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -638,11 +637,13 @@ func (d *Driver) itemManaged(ctx context.Context) (v Verdict) {
 		return v
 	}
 	d.Out.Forbid(cp.plan.Marker, cp.plan.ControlMarker)
-	defer d.cleanup([]string{cp.plan.DecoyFile}, cp.controlDir)
+	var created []string // the decoy is registered for removal only after it was created here
+	defer func() { d.cleanup(created, cp.controlDir) }()
 	if err := d.FS.Write(cp.plan.DecoyFile, cp.decoyContent); err != nil {
 		v.Why = "decoy_write_failed"
 		return v
 	}
+	created = append(created, cp.plan.DecoyFile)
 	if err := d.ensureSession(ctx); err != nil {
 		v.Why = "bootstrap_failed"
 		return v
@@ -741,134 +742,44 @@ func (d *Driver) itemSIGPIPE(ctx context.Context) Verdict {
 
 // OSDecoyFS writes decoys as 0600 files owned by the run user (it needs the privilege to chown;
 // without it the pre-flight fails closed on ownership). It refuses the real login names. It
-// records every directory it creates and removes only those (never one that already existed).
+// records every file and directory it creates and removes only those (never one that already
+// existed).
+//
+// It never operates by path inside the run user's HOME (#340 P2-1): that tree belongs to the run
+// user, who could swap a path for a symlink between a create and a privileged chown or remove. The
+// unix implementation (decoyfs_unix.go) walks from "/" one component at a time with
+// O_DIRECTORY|O_NOFOLLOW, creates with openat(O_CREAT|O_EXCL|O_NOFOLLOW) / mkdirat relative to the
+// parent descriptor, chowns the open descriptor (fchown), and removes with unlinkat relative to the
+// parent after checking that the entry is still the object it created (device and inode recorded at
+// create). Any symlink or mismatch fails closed. Other platforms refuse every operation.
 type OSDecoyFS struct {
 	UID, GID int
 
 	mu      sync.Mutex
-	created []string // directories this value created, in creation order
+	created []createdEntry // everything this value created, in creation order
 
-	chown func(name string, uid, gid int) error // test seam; nil means os.Chown
+	// Test seams (nil means the real call): fchown acts on an open descriptor; race runs between a
+	// create and its chown, which is where a swap would have to happen.
+	fchown func(fd, uid, gid int) error
+	race   func(path string)
 }
 
-func (o *OSDecoyFS) doChown(p string) error {
-	if o.chown != nil {
-		return o.chown(p, o.UID, o.GID)
-	}
-	return os.Chown(p, o.UID, o.GID)
+// createdEntry is one object the driver created: its path, the device and inode recorded at create,
+// and whether it is a directory.
+//
+// keep is a descriptor on the created object that stays open until the entry is forgotten: while it
+// is open the inode cannot be freed, so a later object under the same name can never share the
+// recorded device and inode (inode numbers are recycled the moment the last reference goes).
+type createdEntry struct {
+	path     string
+	dev, ino uint64
+	dir      bool
+	keep     int
 }
 
 var realNames = map[string]bool{".credentials.json": true, "active_config": true}
 
 func cleanAbs(p string) bool { return filepath.IsAbs(p) && filepath.Clean(p) == p && p != "/" }
-
-func (o *OSDecoyFS) mkdir(p string) error {
-	if err := os.Mkdir(p, 0o700); err != nil {
-		return err
-	}
-	if err := o.doChown(p); err != nil {
-		_ = os.Remove(p) // never leave a directory the run user cannot use, and never record it
-		return err
-	}
-	o.mu.Lock()
-	o.created = append(o.created, p)
-	o.mu.Unlock()
-	return nil
-}
-
-// Mkdir implements DecoyFS: it fails when the directory exists.
-func (o *OSDecoyFS) Mkdir(p string) error {
-	if !cleanAbs(p) {
-		return errors.New("acceptance: refused directory path")
-	}
-	return o.mkdir(p)
-}
-
-// ensureDirs creates the missing ancestors of dir (and dir), top down, recording each one.
-func (o *OSDecoyFS) ensureDirs(dir string) error {
-	var missing []string
-	for p := dir; p != "/" && p != "."; p = filepath.Dir(p) {
-		fi, err := os.Lstat(p)
-		if err == nil {
-			if !fi.IsDir() {
-				return errors.New("acceptance: a path component is not a directory")
-			}
-			break
-		}
-		if !os.IsNotExist(err) {
-			return err
-		}
-		missing = append(missing, p)
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		if err := o.mkdir(missing[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Write implements DecoyFS.
-func (o *OSDecoyFS) Write(p string, content []byte) error {
-	if realNames[path.Base(p)] || !filepath.IsAbs(p) || filepath.Clean(p) != p {
-		return errors.New("acceptance: refused decoy path")
-	}
-	if err := o.ensureDirs(filepath.Dir(p)); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, werr := f.Write(content)
-	cerr := f.Close()
-	if werr != nil || cerr != nil {
-		return errors.New("acceptance: decoy write failed")
-	}
-	if err := o.doChown(p); err != nil {
-		_ = os.Remove(p) // the file was created here (O_EXCL): do not leave it with the wrong owner
-		return err
-	}
-	return nil
-}
-
-// Remove implements DecoyFS (a decoy file only).
-func (*OSDecoyFS) Remove(p string) error {
-	if realNames[path.Base(p)] {
-		return errors.New("acceptance: refused")
-	}
-	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-// RemoveDir implements DecoyFS: the directories this value created at or under p, empty ones
-// only, deepest first. A directory that was not created here is never touched; a non-empty one is
-// left and reported.
-func (o *OSDecoyFS) RemoveDir(p string) error {
-	if !cleanAbs(p) {
-		return errors.New("acceptance: refused")
-	}
-	o.mu.Lock()
-	var mine, keep []string
-	for _, d := range o.created {
-		if d == p || strings.HasPrefix(d, p+"/") {
-			mine = append(mine, d)
-		} else {
-			keep = append(keep, d)
-		}
-	}
-	o.created = keep
-	o.mu.Unlock()
-	var first error
-	for i := len(mine) - 1; i >= 0; i-- {
-		if err := os.Remove(mine[i]); err != nil && !os.IsNotExist(err) && first == nil {
-			first = err
-		}
-	}
-	return first
-}
 
 // ProcFS is the production ProcessProbe: it scans /proc/*/cmdline for the token.
 type ProcFS struct{ Root string }

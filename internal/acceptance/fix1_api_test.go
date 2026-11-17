@@ -2,7 +2,6 @@ package acceptance
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,58 +146,5 @@ func TestCleanupRemovesTheDirectoriesItCreated(t *testing.T) {
 		if len(fsys.dirs) != 0 || len(fsys.content) != 0 {
 			t.Errorf("item %d left dirs %v files %v", item, fsys.dirs, fsys.content)
 		}
-	}
-}
-
-// R317-FIX-2 P3-3: when the chown of a directory the driver just created fails, the directory is
-// removed and not left recorded, so the next run does not fail with "exists".
-func TestMkdirChownFailureLeavesNothingBehind(t *testing.T) {
-	root := t.TempDir()
-	o := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(string, int, int) error { return errors.New("operation not permitted") }}
-	dir := filepath.Join(root, "canary-control")
-	if err := o.Mkdir(dir); err == nil {
-		t.Fatal("Mkdir succeeded although the chown failed")
-	}
-	if _, err := os.Stat(dir); err == nil {
-		t.Fatal("the directory was left behind after a failed chown")
-	}
-	o.chown = nil // a later run (privileged) must be able to create it again
-	if err := o.Mkdir(dir); err != nil {
-		t.Fatalf("second Mkdir: %v", err)
-	}
-	_ = o.RemoveDir(dir)
-	// the same through Write's ancestor walk, and the file itself
-	o2 := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(string, int, int) error { return errors.New("operation not permitted") }}
-	f := filepath.Join(root, "a", "b", "decoy-profile.json")
-	if err := o2.Write(f, []byte("x")); err == nil {
-		t.Fatal("Write succeeded although the chown failed")
-	}
-	if _, err := os.Stat(filepath.Join(root, "a")); err == nil {
-		t.Fatal("a created ancestor was left behind after a failed chown")
-	}
-}
-
-// R317-FIX-2 P3-3: a decoy file whose chown fails is removed (it was created here), while the
-// directories made for it stay recorded and are removed by RemoveDir.
-func TestWriteFileChownFailureRemovesTheFile(t *testing.T) {
-	root := t.TempDir()
-	o := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(p string, _, _ int) error {
-		if strings.HasSuffix(p, ".json") {
-			return errors.New("operation not permitted")
-		}
-		return nil
-	}}
-	f := filepath.Join(root, "x", "decoy-profile.json")
-	if err := o.Write(f, []byte("x")); err == nil {
-		t.Fatal("Write succeeded although the file chown failed")
-	}
-	if _, err := os.Stat(f); err == nil {
-		t.Fatal("a decoy file with the wrong owner was left behind")
-	}
-	if err := o.RemoveDir(filepath.Join(root, "x")); err != nil {
-		t.Fatalf("RemoveDir: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "x")); err == nil {
-		t.Fatal("the created directory was not removed")
 	}
 }

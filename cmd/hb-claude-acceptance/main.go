@@ -6,15 +6,24 @@
 // real Claude CLI through the configured wrapper and spends subscription runs, so it is a separate,
 // planner-scheduled task. It writes verdict lines, event types, timings and exit codes only.
 //
-//	go build -tags live -o /tmp/hb-claude-acceptance ./cmd/hb-claude-acceptance
-//	sudo /tmp/hb-claude-acceptance -run-home <test user HOME> -root <throwaway root> \
+//	go build -tags live -o ./hb-claude-acceptance ./cmd/hb-claude-acceptance      (in a directory only you can write)
+//	sudo install -o root -g root -m 0755 ./hb-claude-acceptance <root-owned dir>/hb-claude-acceptance
+//	sudo <root-owned dir>/hb-claude-acceptance -run-home <test user HOME> -root <throwaway root> \
 //	    -run-uid <test user uid> -service-uid <Claude service user uid> -items 1,2,4,5,6,7,8 -out evidence.txt
 //
-// PRIVILEGE. The driver chowns the decoy files and the directories it creates to -run-uid, so it must
-// run as root or with CAP_CHOWN (for example `setcap cap_chown+ep` on the built binary); an
-// unprivileged service user cannot chown to another user and the first decoy write fails closed. The
-// sudo rule that lets this process start the wrapper is the operator's to provision. This comment
-// does not change the privilege model.
+// BUILD AND RUN. Install the binary into a ROOT-OWNED directory (for example /usr/local/libexec, next
+// to the wrapper) and run it from there: a binary left in /tmp or in any directory another user can
+// write can be swapped between the build and the privileged run. Never give the binary a file
+// capability (CAP_CHOWN is root-equivalent, and a capability on the file lets any
+// executor of it choose -run-home and -run-uid and race it).
+//
+// PRIVILEGE. The driver chowns the decoy files and the directories it creates to -run-uid, so the
+// single run is made as root (sudo, as above); an unprivileged service user cannot chown to another
+// user and the first decoy write fails closed. The driver never operates by path inside -run-home
+// (that tree belongs to the run user): it walks from / without following symlinks and creates,
+// chowns and removes through directory descriptors; a symlink anywhere in the -run-home path, or a
+// swapped entry, makes it refuse. The sudo rule that lets this process start the wrapper is the
+// operator's to provision. This comment does not change the privilege model.
 //
 // IDENTITY (ADR-021 form A). -run-uid and -run-home name an ISOLATED TEST USER: its UID and its HOME
 // differ from the Claude service user's (hbclaude, whose HOME holds the real ~/.claude). -service-uid
