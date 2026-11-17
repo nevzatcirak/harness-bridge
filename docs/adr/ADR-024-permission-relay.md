@@ -886,7 +886,11 @@ instance state:
   `permission/index.ts:86`, defined at `packages/schema/src/v1/permission.ts:10-12` as `"per_" + ascending()`
   with `ascending` from `packages/schema/src/identifier.ts:6-30`; the opencode package's own prefixed
   generator `id/id.ts:22-24,51-69` uses the same scheme), so **a stale ID does not collide with a new
-  one**: the incarnation problem is not "a reply hits another request".
+  one**: the incarnation problem is not "a reply hits another request". This depends on callers supplying
+  no ID of their own: `AskInput` has an optional `id` (`packages/schema/src/v1/permission.ts:51`) and
+  `ascending(id?)` returns a given ID unchanged (`:12`); the one in-tree caller that supplies one
+  (`session/llm.ts:164,187-188`) generates it with the same `PermissionV1.ID.ascending()`, so the conclusion
+  holds today.
 
 So the property attribution needs is: *the request belongs to a turn that started in the same instance
 incarnation the Bridge submitted its prompt into.* The residual threat (T-I) is attribution, not ID
