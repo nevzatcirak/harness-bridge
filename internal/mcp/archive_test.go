@@ -845,25 +845,47 @@ func TestCatalogWithTheRealOverlayAcrossARestart(t *testing.T) {
 // interrupt and the overlay stays unchanged (the branch is pinned without the reservation's help,
 // which would not refuse a free guard).
 func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
-	// Determinism: the monitor's first observe runs immediately and then once per reconcile
-	// interval (internal/execution/manager.go:509, ticker at :504); an observation that finds the
-	// native terminal settles the run and releases the guard in the same critical section. With
-	// the default 5 ms interval this test raced the monitor: if it settled between the nat.set
-	// below and close_session's snapshot read, closeInterrupt saw no guard and took the "none"
-	// path, so close legitimately succeeded and this test failed. A 10 s interval keeps the
-	// monitor out of the window, so the guard is held at the snapshot and the interrupt's own
-	// probe (internal/execution/manager.go:658) answers "execution already terminal" every time.
+	// Determinism: the monitor observes immediately and then once per reconcile interval
+	// (internal/execution/manager.go:509, ticker at :504); an observation that finds the native
+	// terminal settles the run and releases the guard in the same critical section. With the
+	// default 5 ms interval this test raced the monitor: if it settled between the nat.set below
+	// and close_session's snapshot read, closeInterrupt saw no guard and took the "none" path, so
+	// close legitimately succeeded and this test failed. Two controls pin the branch: the long
+	// interval keeps every later probe out, and the permission-read barrier waits for the first
+	// probe (which is not interval-gated) to finish against the still-busy native before the
+	// session is made terminal. The guard assertion then pins the held run before close; the
+	// interrupt's own probe (internal/execution/manager.go:658) answers "execution already
+	// terminal" every time.
 	e := newArchEnvTiming(t, nil, 10*time.Second)
+	probed := make(chan struct{}, 1)
+	e.nat.mu.Lock()
+	e.nat.hook = func(p string) {
+		if p == "/permission" { // the last native read of one probe
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	e.nat.mu.Unlock()
 	x, err := e.s.call(context.Background(), "send_prompt", args{SessionID: "opencode:ses_arch1", Prompt: "work", IdempotencyKey: "key-close-0003"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitRunning(t, e, x.(execution.Execution).ID)
+	select {
+	case <-probed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the monitor's first probe did not reach its permission read")
+	}
 	e.nat.set("ses_arch1", func(s *archSession) {
 		s.busy = false
 		a := &s.msgs[len(s.msgs)-1]
 		a.Info.Time.Completed, a.Info.Finish = 1, "stop"
 	})
+	if held, st := e.s.Runs.SessionGuard("ses_arch1"); !held || st != "running" {
+		t.Fatalf("test premise failed: guard held=%v state=%q before close", held, st)
+	}
 	_, err = e.call("close_session", "opencode:ses_arch1")
 	if err == nil {
 		t.Fatal("close succeeded although the interrupt failed")
