@@ -67,6 +67,9 @@ func (f *FileCanaryScan) Count() (int, bool) {
 	}
 	d := os.NewFile(uintptr(fd), f.dir)
 	defer d.Close()
+	// TOCTOU: the identity comparison below must use cur, the descriptor that was just walked and is
+	// read right after it, never a stat of the path (a second lookup by path could be answered by a
+	// different directory than the one this descriptor, and the read, refer to).
 	// The path must still be the directory of the baseline (device and inode): a real directory
 	// swapped in at the same path, where the hostile root's hook writes, is not "no canary".
 	cur, err1 := d.Stat()
