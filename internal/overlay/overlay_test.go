@@ -614,31 +614,60 @@ func TestDeadlineBeforeRenameNeverCommitsLater(t *testing.T) {
 	}
 }
 
-func TestHungRenameIsUncertainHoldsTheMutexAndIsAdopted(t *testing.T) {
-	shortBound(t, 100*time.Millisecond)
+// hungRenameScenario is the hung-rename premise of ADR-025 4.3 without any timing assumption about
+// the disk: the Hook may add slowIO to every fsync_file to model a slow runner (OVERLAY-FLAKE-1).
+//
+//  1. the first change hangs in the rename; the caller is released by cancelling its context only
+//     AFTER the worker reached the rename (a channel), so "uncertain" never depends on how fast the
+//     worker got there;
+//  2. a second change waits behind the hung worker and times out on its own, short deadline;
+//  3. the gate opens, the test waits for the hung worker to finish (it holds the mutex until it
+//     returns), the late commit must not be published by it, and the NEXT change runs under the
+//     normal WriteBound (it does real file I/O: adopt, write, fsync) and adopts the late commit.
+func hungRenameScenario(t *testing.T, slowIO time.Duration) {
 	dir := newDir(t)
 	s := open(t, dir, true)
 	gate := make(chan struct{})
+	reached := make(chan struct{})
+	var once sync.Once
 	s.Hook = func(step string) error {
-		if step == "rename" {
+		switch step {
+		case "fsync_file":
+			if slowIO > 0 {
+				time.Sleep(slowIO) // injected slow disk: a fault model, not synchronization
+			}
+		case "rename":
+			once.Do(func() { close(reached) })
 			<-gate
 		}
 		return nil
 	}
-	_, _, err := s.Archive(bg, sid(1), "op")
-	if KindOf(err) != KindUncertain {
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() { _, _, err := s.Archive(ctx, sid(1), "op"); first <- err }()
+	select {
+	case <-reached:
+	case <-time.After(30 * time.Second): // failure detector only
+		t.Fatal("the worker never reached the rename")
+	}
+	cancel() // the caller gives up while the rename hangs
+	if err := <-first; KindOf(err) != KindUncertain {
 		t.Fatalf("hung rename: %v, want uncertain", err)
 	}
 	if ok, _ := s.Archived(bg, sid(1)); ok {
 		t.Fatal("memory snapshot replaced on a hung write")
 	}
+	shortBound(t, 100*time.Millisecond) // only for the second change's own deadline
 	start := time.Now()
-	_, _, err = s.Archive(bg, sid(2), "op") // waits behind the hung worker, own deadline
+	_, _, err := s.Archive(bg, sid(2), "op") // waits behind the hung worker, own deadline
 	if KindOf(err) != KindTimeout || time.Since(start) < 80*time.Millisecond {
 		t.Fatalf("second write during the hang: %v after %v, want UPSTREAM_TIMEOUT after its own deadline", err, time.Since(start))
 	}
+	WriteBound = 5 * time.Second // the normal bound again: the steps below do real I/O
 	close(gate)
-	time.Sleep(50 * time.Millisecond)
+	s.mu.Lock() // the hung worker holds the mutex until it returns: wait for it, no sleep
+	s.mu.Unlock()
 	if ok, _ := s.Archived(bg, sid(1)); ok {
 		t.Fatal("a worker that outlived its caller published")
 	}
@@ -654,6 +683,12 @@ func TestHungRenameIsUncertainHoldsTheMutexAndIsAdopted(t *testing.T) {
 		t.Fatal("the refused timeout call committed")
 	}
 }
+
+func TestHungRenameIsUncertainHoldsTheMutexAndIsAdopted(t *testing.T) { hungRenameScenario(t, 0) }
+
+// The same scenario on a slow disk (each fsync_file takes 250 ms, well above the 100 ms second
+// deadline): the old test failed here with "the overlay write did not start in time".
+func TestHungRenameScenarioOnASlowDisk(t *testing.T) { hungRenameScenario(t, 250*time.Millisecond) }
 
 // Test 14: the checksum is over re-encoded values.
 func TestChecksumIsOverValuesNotBytes(t *testing.T) {
