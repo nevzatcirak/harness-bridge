@@ -564,8 +564,8 @@ configuration**. With no `BRIDGE_CLAUDE_COMMAND` (the default) nothing here is s
 every OpenCode response and every OpenCode audit line are byte-identical to a build without the
 adapter, and `bridge admin release-guard` refuses `claudecode:` IDs. With it, the Bridge builds the
 adapter at startup or refuses to start (no partial enablement; see "Enabling" below). A read-only
-ingress never enables it. Tool names, input fields and output fields of the eleven tools do not
-change.
+ingress never enables it. Tool names, input fields and output fields of the eleven base tools (twelve with `reply_permission` under the
+default `reject_only` relay) do not change.
 
 **Enabling.** `BRIDGE_CLAUDE_COMMAND` (absolute path of the root-owned wrapper) turns the adapter on and
 then requires `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600), `BRIDGE_CLAUDE_VERSIONS` (exact
@@ -739,7 +739,8 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
   these keys. The archive and close lines are in the S6 entry below.
 - The tool is registered only when the server has a create configuration; nothing wires it from
-  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge keeps its eleven tools.
+  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge gains no lifecycle tool: it keeps its base tools (eleven with
+  `BRIDGE_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`).
 
 ### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured; NOT wired in production)
 
@@ -832,7 +833,7 @@ call is refused and the overlay is unchanged).
 
 `BRIDGE_LIFECYCLE_CONFIG` is parsed by `lifecycle.FromEnv` (`internal/lifecycle/config.go:141`), but no
 production code calls it; nothing sets `Server.Catalog`, `Server.Create` or `Server.Archive`. A deployed
-Bridge therefore lists eleven tools (twelve with the default `reject_only` relay). Operator view:
+Bridge therefore lists the base eleven tools (twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`). Operator view:
 `docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`.
 
 ### ADR-024 S3: `reply_permission` (reject only, against a fake native; registered only when configured)
