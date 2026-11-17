@@ -48,7 +48,7 @@ a change**; the H5 runbook marks stages 3 and 4 NOT AVAILABLE for the same reaso
 | Key | Meaning and default | Source |
 |---|---|---|
 | `roots[].path` | required; absolute, clean, no symlink alias, exists, a directory owned by the service user or root, not `/`, and not overlapping another root; at most 64 roots | `config.go:233-330` |
-| `roots[].modes` | non-empty subset of `create`, `archive`, no duplicates | `config.go:25-29,60-63` |
+| `roots[].modes` | non-empty subset of `create`, `archive`, no duplicates | `config.go:25-29` (the two modes), `:350-365` (`checkModes`: empty, unknown or duplicate refused) |
 | `roots[].max_sessions` | default 20, a positive integer | `config.go:33-38` |
 | `roots[].max_depth` | default 0 (only the root itself), not negative | `config.go:96-98,309-313` |
 | `roots[].existing_tools` | default false; parsed only, grants nothing until the ADR-012 amendment (S9) | `config.go:99-102` |

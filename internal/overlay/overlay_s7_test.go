@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+// uncertainMarker reports the internal uncertain-write marker (ADR-025 4.3), which only a rename that may
+// have happened leaves set.
+func uncertainMarker(s *Store) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.uncertain
+}
+
 // ADR-022 S7, #318 P3-3: a failure of the rename step (the Hook("rename") seam) changes nothing at
 // all: not the published snapshot, not its counters (Entries, Generation), not the file on disk.
 // TestAtomicWriteFaultAtEachStep already checks the in-memory Archived answer and the state after a
@@ -52,6 +60,11 @@ func TestRenameHookErrorLeavesEverythingUnchanged(t *testing.T) {
 		t.Fatal("rename failed but overlay.json changed on disk")
 	}
 	noTmp(t, dir)
+	// The rename step marks the write uncertain before the rename is issued and clears the marker when the
+	// rename fails ("nothing changed"): a left-over marker would make the next change re-read the file.
+	if uncertainMarker(s) {
+		t.Fatal("rename failed but the uncertain-write marker is still set: the failure would be treated as an uncertain write")
+	}
 
 	// Unarchive takes the same step: its rename failure changes nothing either.
 	if _, err := s.Unarchive(bg, sid(1)); KindOf(err) != KindUnavailable {
@@ -61,7 +74,12 @@ func TestRenameHookErrorLeavesEverythingUnchanged(t *testing.T) {
 		t.Fatalf("a failed Unarchive changed the snapshot: archived=%v generation=%d entries=%d", ok, s.Generation(), s.Entries())
 	}
 
-	// Nothing is latched: with the fault gone the same change commits and moves the counters by one.
+	if uncertainMarker(s) {
+		t.Fatal("a failed Unarchive left the uncertain-write marker set")
+	}
+
+	// Nothing visible is latched (the marker is clear, checked above, and no error state is set): with the
+	// fault gone the same change commits and moves the counters by one.
 	s.Hook = nil
 	if _, archived, err := s.Archive(bg, sid(2), "op"); err != nil || !archived {
 		t.Fatalf("Archive after the fault cleared: archived=%v err=%v", archived, err)

@@ -338,7 +338,10 @@ Setup/precheck:
    confirms that it is the unit serving the endpoint the Bridge is configured for before touching it.
    **Precheck first (operator, reading the operator's own configuration, not a worker):** record the
    instance's effective `bash` permission policy (the `permission.bash` setting and any existing
-   `OPENCODE_PERMISSION`). **STOP if it is `deny` or a per-pattern object**: `OPENCODE_PERMISSION` is
+   `OPENCODE_PERMISSION`). Read it as the operator, from the running instance or its configuration, on the
+   operator's own responsibility: no supported way to read the **merged** policy is documented in this
+   repository (UNVERIFIED), and R5B Step 1.4 only shows how to read the process environment variable, not the
+   merged configuration. Nothing is granted by reading it. **STOP if it is `deny` or a per-pattern object**: `OPENCODE_PERMISSION` is
    deep-merged into the config's `permission` (`docs/evidence/R5B_RUNBOOK.md:11`), and what a plain `"ask"`
    does to an object-valued or `deny` rule is **UNVERIFIED**, so it might relax a deny. Only an unset or
    already-`ask` policy proceeds. The R5b mechanism is a drop-in on the unit
