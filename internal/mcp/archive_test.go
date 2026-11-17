@@ -161,6 +161,14 @@ type archEnv struct {
 }
 
 func newArchEnv(t *testing.T, mod func(*lifecycle.Config)) *archEnv {
+	return newArchEnvTiming(t, mod, 5*time.Millisecond)
+}
+
+// newArchEnvTiming is newArchEnv with an injected manager reconcile interval. A long interval pins
+// the monitor out of the test window: a run whose native state turns terminal is then NOT settled
+// and its guard is NOT released until the interval elapses, so a test that needs the guard held at
+// close time gets it deterministically (explicit timing injection, no sleeps, no changed timeouts).
+func newArchEnvTiming(t *testing.T, mod func(*lifecycle.Config), reconcile time.Duration) *archEnv {
 	t.Helper()
 	canon := func(d string) string {
 		r, err := filepath.EvalSymlinks(d)
@@ -207,7 +215,7 @@ func newArchEnv(t *testing.T, mod func(*lifecycle.Config)) *archEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := execution.NewWithTiming(client, 3*time.Second, 5*time.Millisecond)
+	runs := execution.NewWithTiming(client, 3*time.Second, reconcile)
 	t.Cleanup(runs.Close)
 	ac.Install(runs)
 	e.s = &Server{Client: client, Runs: runs, Policy: policy, Archive: ac}
@@ -837,7 +845,15 @@ func TestCatalogWithTheRealOverlayAcrossARestart(t *testing.T) {
 // interrupt and the overlay stays unchanged (the branch is pinned without the reservation's help,
 // which would not refuse a free guard).
 func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
-	e := newArchEnv(t, nil)
+	// Determinism: the monitor's first observe runs immediately and then once per reconcile
+	// interval (internal/execution/manager.go:509, ticker at :504); an observation that finds the
+	// native terminal settles the run and releases the guard in the same critical section. With
+	// the default 5 ms interval this test raced the monitor: if it settled between the nat.set
+	// below and close_session's snapshot read, closeInterrupt saw no guard and took the "none"
+	// path, so close legitimately succeeded and this test failed. A 10 s interval keeps the
+	// monitor out of the window, so the guard is held at the snapshot and the interrupt's own
+	// probe (internal/execution/manager.go:658) answers "execution already terminal" every time.
+	e := newArchEnvTiming(t, nil, 10*time.Second)
 	x, err := e.s.call(context.Background(), "send_prompt", args{SessionID: "opencode:ses_arch1", Prompt: "work", IdempotencyKey: "key-close-0003"})
 	if err != nil {
 		t.Fatal(err)
