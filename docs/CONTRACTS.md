@@ -674,10 +674,11 @@ title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggrega
   `UPSTREAM_TIMEOUT` (retryable) when the deadline passes; the native error code when a native
   read of a listed session fails; `INTERNAL` when the archive overlay cannot answer.
 - Read-only: no native write, not audited as a mutation, available under `BRIDGE_READ_ONLY`.
-  Overlay-archived sessions (the persisted overlay of ADR-025 exists but is not wired in production, so
-  none today) are hidden unless `include_archived` is true.
-- The tool is registered only when the server has a catalog configuration; the startup wiring
-  from `BRIDGE_LIFECYCLE_CONFIG` is not done yet, so a deployed Bridge still lists the same tools.
+  Overlay-archived sessions (the persisted overlay of ADR-025, opened from `BRIDGE_OVERLAY_DIR` when it
+  is set; otherwise none) are hidden unless `include_archived` is true.
+- The tool is registered only when the server has a catalog configuration, which `cmd/bridge` builds when
+  `BRIDGE_LIFECYCLE_CONFIG` is set and valid (D22, `cmd/bridge/lifecycle.go`); unset, a deployed Bridge
+  lists the same tools as before. It stays registered on a read-only ingress (it never writes).
 
 ### ADR-022 S4: `create_session` (against a fake native; registered only when configured)
 
@@ -738,11 +739,13 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   wait timed out; a recorded success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
   these keys. The archive and close lines are in the S6 entry below.
-- The tool is registered only when the server has a create configuration; nothing wires it from
-  `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge gains no lifecycle tool: it keeps its base tools (eleven with
-  `BRIDGE_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`).
+- The tool is registered only when the server has a create configuration, which `cmd/bridge` builds when
+  `BRIDGE_LIFECYCLE_CONFIG` is set and valid and the ingress is **not** read-only (D22,
+  `cmd/bridge/lifecycle.go`). With the variable unset a deployed Bridge gains no lifecycle tool and keeps its
+  base tools (eleven with `BRIDGE_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay,
+  `cmd/bridge/relay.go:12-32`); see "Registration and production wiring" for the full count.
 
-### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured; NOT wired in production)
+### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured, wired by `cmd/bridge` from `BRIDGE_OVERLAY_DIR`, D22)
 
 `archive_session {session_id}`, `unarchive_session {session_id}` and `close_session {session_id}` ->
 `{session_id, archived, changed, archived_at?, interrupt?}`. `session_id` is `opencode:<id>` (the input
@@ -754,10 +757,14 @@ call is refused and the overlay is unchanged).
 
 - **Registration.** The three tools exist only when the server has an archive configuration
   (`Server.Archive`, which needs a validated lifecycle configuration and an overlay store that holds
-  the write role). Without it (ADR-025 Q5, `BRIDGE_OVERLAY_DIR` unset) none is registered (the handler
-  itself refuses `INVALID_INPUT` "unknown tool" when the configuration is absent). **Nothing in `cmd/bridge` builds that configuration**: no
-  production code reads `BRIDGE_OVERLAY_DIR` (the name appears only in comments and ADR-025) or opens the
-  overlay, so a deployed Bridge registers none of them.
+  the write role). Without it none is registered (the handler itself refuses `INVALID_INPUT` "unknown tool"
+  when the configuration is absent). `cmd/bridge` builds it when `BRIDGE_LIFECYCLE_CONFIG` is set and valid
+  **and** `BRIDGE_OVERLAY_DIR` names a valid overlay directory (ADR-025 Q5/Q6, D22): the directory is
+  absolute, a real directory (no symlink in the final component), owned by the service user, mode `0700`; an
+  invalid directory or an invalid overlay file is a startup error for the writer (D18 Q3). Not registered on a
+  read-only ingress (the overlay is then opened as a reader for `list_catalog` and the dashboard only), and not
+  registered by a second writer that did not get the overlay write lock (ADR-025 4.3). `BRIDGE_OVERLAY_DIR`
+  set without `BRIDGE_LIFECYCLE_CONFIG` is a startup error.
 - **The overlay is a label store, never an authority** (ADR-025 5). It lives in the Bridge's own
   `overlay.json` (strict JSON, checksum, at most 1000 entries and 512 KiB, D18 Q10): an archived
   session is hidden from `list_catalog` unless `include_archived` is true (D16 Q5) and from the dashboard
@@ -814,8 +821,7 @@ call is refused and the overlay is unchanged).
   (`close_session` only); `principal`. Never logged: a path, a title, free text or the file contents. The
   dashboard ring does not keep these events until its allowlist is amended.
 - **Not verified.** Everything above is tested against a fake native and the real overlay store; no live run
-  was made (the live behaviour of an archived session on the native side is UNVERIFIED). The lifecycle
-  startup wiring and the overlay directory variable are separate, unscheduled tasks.
+  was made (the live behaviour of an archived session on the native side is UNVERIFIED).
 - **Sources (base `ebb2ce3`).** `internal/mcp/server.go:41-43,148-160,330-343` (registration, audit
   hook), `internal/mcp/archive.go:20-31,83-93,125-137,162-180,199-274,279-325,331-369` (output, errors, cap, order,
   preconditions, interrupt), `internal/mcp/audit.go:265-343`, `internal/overlay/overlay.go:41-43,609-720`
@@ -825,16 +831,24 @@ call is refused and the overlay is unchanged).
 
 ### Registration and production wiring of the five lifecycle tools
 
-| Tool | Registered when (`internal/mcp/server.go`) | Built by `cmd/bridge` today |
+| Tool | Registered when (`internal/mcp/server.go`) | Built by `cmd/bridge` (D22, `cmd/bridge/lifecycle.go`) |
 |---|---|---|
-| `list_catalog` | `Server.Catalog != nil && Server.Catalog.Roots != nil` (`:330`) | no |
-| `create_session` | `Server.Create != nil` (`:335`) | no |
-| `archive_session`, `unarchive_session`, `close_session` | `Server.Archive != nil` (`:340`) | no |
+| `list_catalog` | `Server.Catalog != nil && Server.Catalog.Roots != nil` (`:330`) | `BRIDGE_LIFECYCLE_CONFIG` set and valid; also on a read-only ingress |
+| `create_session` | `Server.Create != nil` (`:335`) | the same, and the ingress is not read-only |
+| `archive_session`, `unarchive_session`, `close_session` | `Server.Archive != nil` (`:340`) | the same, plus a valid `BRIDGE_OVERLAY_DIR`, not read-only, and this process holds the overlay write lock |
 
-`BRIDGE_LIFECYCLE_CONFIG` is parsed by `lifecycle.FromEnv` (`internal/lifecycle/config.go:141`), but no
-production code calls it; nothing sets `Server.Catalog`, `Server.Create` or `Server.Archive`. A deployed
-Bridge therefore lists the base eleven tools (twelve with the default `reject_only` relay, `cmd/bridge/relay.go:12-32`). Operator view:
-`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`.
+The lifecycle surface is enabled by default (D22): no extra switch. `lifecycle.FromEnv` and
+`BRIDGE_OVERLAY_DIR` are read at startup; unset, lifecycle is inert; an invalid value refuses to start.
+The startup log names the registered lifecycle tools and the root count (no path). **Tool counts** (the base
+is eleven; `reply_permission` is the twelfth under the default `reject_only` relay, `cmd/bridge/relay.go:12-32`):
+
+| Configuration | `BRIDGE_PERMISSION_RELAY` default | `=off` |
+|---|---|---|
+| no `BRIDGE_LIFECYCLE_CONFIG` | 12 | 11 |
+| config, no overlay | 14 (`list_catalog`, `create_session`) | 13 |
+| config and overlay (writer with the lock) | 17 | 16 |
+| config, read-only ingress (with or without overlay) | 13 (`list_catalog` only) | 12 |
+Operator view: `docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`.
 
 ### ADR-024 S3: `reply_permission` (reject only, against a fake native; registered only when configured)
 
@@ -1035,12 +1049,11 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   call, "ADR-021 pending"). When the lifecycle catalog is configured (ADR-022), each row carries
   `lifecycle_root`, the lifecycle root that contains the session directory, **as a label only**: the
   rule is that of `list_catalog` (ADR-022 6.1), so a session under a lifecycle root that the ACL does
-  not list is **not** shown (reading it would need the O2 flag, D16 Q7). Nothing wires the lifecycle
-  configuration in the production Bridge yet, so the label is absent there until it does.
+  not list is **not** shown (reading it would need the O2 flag, D16 Q7). The production Bridge wires the
+  lifecycle configuration from `BRIDGE_LIFECYCLE_CONFIG` (D22), so the label appears when it is set.
 - **Archived (D17 Q7):** sessions the archive overlay reports archived are hidden by default; the query
   `archived=1` (exactly that value, on any data route) shows them with an `archived` marker. The
-  overlay is empty in production (the persisted overlay of ADR-025 is merged but not wired, so nothing is
-  archived yet). An
+  overlay is the persisted overlay of ADR-025 when `BRIDGE_OVERLAY_DIR` is set (D22), otherwise empty. An
   overlay that cannot answer fails the call (503), as `list_catalog` does: a session is never listed or
   hidden by a guess.
 - **Redaction:** diff paths and patches and the audit ring values are redacted with the shipped list
