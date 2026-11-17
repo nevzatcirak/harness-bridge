@@ -49,6 +49,10 @@ verdict lines and event types only.
    prints `unknown` and the verdict is `incomplete`, never `pass`. There is no public entry that
    assumes them. Pass needs every probe, the control, no decoy content, no file canary, no sink
    request, all three of those checks observed, `mcp_servers` empty, `apiKeySource` `none`.
+   The production `Observer` (task #372, `internal/acceptance/observer.go`) supplies the three observations
+   behind the flags `-history-dir`, `-canary-dir` and `-sink-addr` of the driver command (operator steps,
+   expected evidence lines and the UNVERIFIED list: `docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a); a flag that is
+   left out leaves its check `unknown` and item 1 `INCOMPLETE`.
    **NOT_EXERCISED: no allowed authenticated run exists (D14 Q10).**
 2. **Result-to-exit lag** of the pinned CLI over several runs: validates or replaces the 10 s
    exit-grace default. NOT_EXERCISED.
