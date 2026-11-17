@@ -17,8 +17,8 @@ ADR-025", "Registration and production wiring").
 | neither variable set | inert: no lifecycle tool, the previous tool set (eleven, twelve with the default relay) |
 | `BRIDGE_LIFECYCLE_CONFIG` valid | `list_catalog` and `create_session` are registered |
 | plus `BRIDGE_OVERLAY_DIR` valid, writer holding the overlay lock | `archive_session`, `unarchive_session`, `close_session` too |
-| `BRIDGE_READ_ONLY=1` | `list_catalog` only; the overlay (if set) is opened as a reader; no mutating lifecycle tool |
-| a second writer on the same overlay directory | no archive tool (it did not get the write lock, ADR-025 4.3); `list_catalog` and `create_session` stay |
+| `BRIDGE_READ_ONLY=1` | `list_catalog` only; the overlay (if set) is opened as a reader (an invalid overlay file is then not a startup error: the state is unknown and `list_catalog` fails with `INTERNAL`); no mutating lifecycle tool. `send_prompt` is refused at call time on a read-only ingress, so no archived-session check is installed there |
+| a second writer on the same overlay directory | no archive tool (it did not get the write lock, ADR-025 4.3); `list_catalog` and `create_session` stay. **It still refuses `send_prompt` to an archived session** (D18 Q1): the overlay is loaded, a poller refreshes the snapshot every 250 ms (the overlay re-reads a changed file at most once a second, ADR-025 Q8), so an archive made by the lock holder is refused here within about 1.25 s. An unreadable overlay file keeps the last good snapshot (ADR-025 4.4): archived sessions it knew stay refused, unrelated prompts are not blocked |
 | `BRIDGE_LIFECYCLE_CONFIG` invalid, naming no root, or `BRIDGE_OVERLAY_DIR` invalid (relative, missing, symlink in the final component, not owned by the service user, not mode `0700`, or an invalid `overlay.json` for the writer) | **startup error** |
 | `BRIDGE_OVERLAY_DIR` set without `BRIDGE_LIFECYCLE_CONFIG` | **startup error** (the overlay needs lifecycle roots) |
 
@@ -107,7 +107,9 @@ Create the configuration file (mode `0600`, owned by the service user) and, for 
 `tools/list`, and run the stage 3 and stage 4 acceptance conversations of `docs/deploy/H5_RUNBOOK.md`. A bad value
 stops the Bridge at start with the reason (config path, mode, root, overlay directory), so fix it and restart.
 Rollback is to unset the variables and restart: the tools disappear, created sessions remain native sessions, and
-`overlay.json` stays on disk, unread.
+`overlay.json` stays on disk, unread. **Archived sessions become visible in the catalog and dashboard and accept
+`send_prompt` again**, because nothing reads the overlay any more; to keep a session hidden after a rollback,
+archive it natively (operator-only) or leave the variables set.
 
 ## Verification status
 

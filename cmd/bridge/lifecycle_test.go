@@ -326,58 +326,203 @@ func TestLifecycleSummaryNamesToolsAndRootsWithoutPaths(t *testing.T) {
 
 var _ = mcp.CatalogConfig{}
 
-// main itself is not unit-testable, so its lifecycle steps are pinned on its syntax tree: the wiring is
-// opened before the server is built (an invalid configuration refuses to start before anything
-// listens), applied to that very server, and announced in the startup log.
-func TestMainOpensAppliesAndAnnouncesTheLifecycle(t *testing.T) {
+// main itself is not unit-testable, so its lifecycle steps are pinned on its syntax tree (#379 P3-1):
+//   - openLifecycle is a statement of main's body and is followed at once by an `if err != nil` whose first
+//     statement is log.Fatal (an invalid configuration refuses to start; log.Print would start without it);
+//   - `defer lc.Close()` follows;
+//   - the wiring is applied to the very server newMCPServer returned, and to the manager main made
+//     (lc.apply(<server>, runs)), after it was built, and announced after that (lc.summary);
+//   - nothing listens (ListenAndServe, ListenAndServeTLS, Serve, Listen) before the wiring is opened.
+//
+// mainLifecycleProblems returns what is wrong with the source of main.go, nothing when it is right.
+func mainLifecycleProblems(src string) []string {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	f, err := parser.ParseFile(fset, "main.go", src, 0)
+	if err != nil {
+		return []string{"main.go does not parse: " + err.Error()}
+	}
+	var body *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" {
+			body = fd.Body
+		}
+	}
+	if body == nil {
+		return []string{"no func main"}
+	}
+	callName := func(c *ast.CallExpr) string {
+		switch fun := c.Fun.(type) {
+		case *ast.Ident:
+			return fun.Name
+		case *ast.SelectorExpr:
+			if id, ok := fun.X.(*ast.Ident); ok {
+				return id.Name + "." + fun.Sel.Name
+			}
+			return "." + fun.Sel.Name
+		}
+		return ""
+	}
+	offset := func(n ast.Node) int { return fset.Position(n.Pos()).Offset }
+	// topCall returns the call a top-level statement makes (assignment right side, expression, defer).
+	topCall := func(st ast.Stmt) *ast.CallExpr {
+		switch s := st.(type) {
+		case *ast.AssignStmt:
+			if len(s.Rhs) == 1 {
+				c, _ := s.Rhs[0].(*ast.CallExpr)
+				return c
+			}
+		case *ast.ExprStmt:
+			c, _ := s.X.(*ast.CallExpr)
+			return c
+		case *ast.DeferStmt:
+			return s.Call
+		}
+		return nil
+	}
+	var problems []string
+	stmts := body.List
+	openIdx, serverIdx, applyIdx, summaryIdx := -1, -1, -1, -1
+	server := ""
+	for i, st := range stmts {
+		as, isAssign := st.(*ast.AssignStmt)
+		c := topCall(st)
+		if c == nil {
+			// log.Print(lc.summary(...)) is an expression statement whose argument is the call.
+			continue
+		}
+		switch callName(c) {
+		case "openLifecycle":
+			if _, isDefer := st.(*ast.DeferStmt); !isDefer && isAssign && openIdx < 0 {
+				openIdx = i
+			}
+		case "newMCPServer":
+			if isAssign && serverIdx < 0 {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok {
+					server, serverIdx = id.Name, i
+				}
+			}
+		case "lc.apply":
+			if applyIdx < 0 {
+				applyIdx = i
+				if len(c.Args) != 2 {
+					problems = append(problems, "lc.apply does not take (server, runs)")
+				} else {
+					a0, ok0 := c.Args[0].(*ast.Ident)
+					a1, ok1 := c.Args[1].(*ast.Ident)
+					if !ok0 || a0.Name != server || server == "" {
+						problems = append(problems, "lc.apply is not applied to the server newMCPServer returned")
+					}
+					if !ok1 || a1.Name != "runs" {
+						problems = append(problems, "lc.apply is not applied with the execution manager `runs`")
+					}
+				}
+			}
+		case "log.Print", "log.Printf":
+			for _, a := range c.Args {
+				if ac, ok := a.(*ast.CallExpr); ok && callName(ac) == "lc.summary" && summaryIdx < 0 {
+					summaryIdx = i
+				}
+			}
+		}
+	}
+	switch {
+	case openIdx < 0:
+		return append(problems, "main does not call openLifecycle as a top-level assignment")
+	case serverIdx < 0:
+		return append(problems, "main does not build the server with newMCPServer as a top-level assignment")
+	case applyIdx < 0:
+		return append(problems, "main does not apply the lifecycle wiring (lc.apply)")
+	case summaryIdx < 0:
+		return append(problems, "main does not announce the lifecycle tools (log.Print(lc.summary(...)))")
+	}
+	// Fail closed: the statement right after openLifecycle is `if err != nil { log.Fatal(...) ... }`.
+	if openIdx+1 >= len(stmts) {
+		return append(problems, "nothing follows openLifecycle")
+	}
+	ifs, ok := stmts[openIdx+1].(*ast.IfStmt)
+	if !ok {
+		problems = append(problems, "the statement after openLifecycle is not an if on its error")
+	} else {
+		cond, isBin := ifs.Cond.(*ast.BinaryExpr)
+		if !isBin || cond.Op != token.NEQ {
+			problems = append(problems, "the error check after openLifecycle is not `err != nil`")
+		}
+		fatal := false
+		if len(ifs.Body.List) > 0 {
+			if es, ok := ifs.Body.List[0].(*ast.ExprStmt); ok {
+				if c, ok := es.X.(*ast.CallExpr); ok {
+					n := callName(c)
+					fatal = n == "log.Fatal" || n == "log.Fatalf" || n == "log.Fatalln"
+				}
+			}
+		}
+		if !fatal {
+			problems = append(problems, "an openLifecycle error does not end main with log.Fatal (an invalid configuration would start)")
+		}
+	}
+	// defer lc.Close() right after the check.
+	deferred := false
+	if openIdx+2 < len(stmts) {
+		if d, ok := stmts[openIdx+2].(*ast.DeferStmt); ok && callName(d.Call) == "lc.Close" {
+			deferred = true
+		}
+	}
+	if !deferred {
+		problems = append(problems, "`defer lc.Close()` does not follow the openLifecycle error check")
+	}
+	if serverIdx < openIdx {
+		problems = append(problems, "the server is built before the lifecycle wiring is opened")
+	}
+	if applyIdx < serverIdx {
+		problems = append(problems, "the wiring is applied before the server exists")
+	}
+	if summaryIdx < applyIdx {
+		problems = append(problems, "the lifecycle tools are announced before they are applied")
+	}
+	// Nothing listens before the wiring is opened (and, in fact, before it is applied).
+	open, apply := offset(stmts[openIdx]), offset(stmts[applyIdx])
+	ast.Inspect(body, func(x ast.Node) bool {
+		c, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch n := callName(c); n {
+		case ".ListenAndServe", ".ListenAndServeTLS", ".Serve", ".Listen", "net.Listen", "http.ListenAndServe", "http.ListenAndServeTLS":
+			if p := offset(c); p < open {
+				problems = append(problems, "a listener ("+n+") is opened before the lifecycle wiring")
+			} else if p < apply {
+				problems = append(problems, "a listener ("+n+") is opened before the lifecycle wiring is applied")
+			}
+		}
+		return true
+	})
+	return problems
+}
+
+func TestMainOpensAppliesAndAnnouncesTheLifecycle(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := map[string]int{}
-	for _, d := range f.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Recv != nil || fd.Name.Name != "main" {
-			continue
+	src := string(raw)
+	if p := mainLifecycleProblems(src); len(p) > 0 {
+		t.Fatalf("main.go: %s", strings.Join(p, "; "))
+	}
+	// The pin must see each mutation of main that breaks the property (#379 P3-1).
+	for _, m := range []struct{ name, old, new string }{
+		{"an invalid configuration is only logged", "lc, err := openLifecycle(os.Getenv, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Fatal(err)", "lc, err := openLifecycle(os.Getenv, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Print(err)"},
+		{"the wiring is applied to another server", "lc.apply(mcpServer, runs)", "lc.apply(newMCPServer(client, runs, token, policy, cfg.remote, cfg.readOnly, claude), runs)"},
+		{"the wiring is never closed", "defer lc.Close()", "lc.Close()"},
+		{"the wiring is never applied", "lc.apply(mcpServer, runs)\n", "\n"},
+		{"the wiring is not announced", "log.Print(lc.summary(cfg.readOnly))", "log.Print(\"lifecycle\")"},
+		{"a listener opens first", "func main() {\n", "func main() {\n\tgo http.ListenAndServe(\"127.0.0.1:0\", nil)\n"},
+	} {
+		if strings.Count(src, m.old) != 1 {
+			t.Fatalf("mutation %q: the text it replaces occurs %d times in main.go; update the pin", m.name, strings.Count(src, m.old))
 		}
-		ast.Inspect(fd.Body, func(x ast.Node) bool {
-			call, ok := x.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := ""
-			switch fun := call.Fun.(type) {
-			case *ast.Ident:
-				name = fun.Name
-			case *ast.SelectorExpr:
-				if id, ok := fun.X.(*ast.Ident); ok {
-					name = id.Name + "." + fun.Sel.Name
-				}
-			}
-			if name == "" {
-				return true
-			}
-			off := fset.Position(call.Pos()).Offset
-			if old, seen := first[name]; !seen || off < old {
-				first[name] = off
-			}
-			return true
-		})
-	}
-	for _, need := range []string{"openLifecycle", "newMCPServer", "lc.apply", "lc.summary", "lc.Close"} {
-		if _, ok := first[need]; !ok {
-			t.Fatalf("main does not call %s", need)
+		if p := mainLifecycleProblems(strings.Replace(src, m.old, m.new, 1)); len(p) == 0 {
+			t.Errorf("mutation %q is not caught by the main pin", m.name)
 		}
-	}
-	if first["openLifecycle"] > first["newMCPServer"] {
-		t.Error("main opens the lifecycle wiring after building the server")
-	}
-	if first["lc.apply"] < first["newMCPServer"] {
-		t.Error("main applies the lifecycle wiring before the server exists")
-	}
-	if first["lc.summary"] < first["lc.apply"] {
-		t.Error("main announces the lifecycle tools before applying them")
 	}
 }
 

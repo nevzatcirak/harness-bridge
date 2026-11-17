@@ -763,7 +763,10 @@ call is refused and the overlay is unchanged).
   absolute, a real directory (no symlink in the final component), owned by the service user, mode `0700`; an
   invalid directory or an invalid overlay file is a startup error for the writer (D18 Q3). Not registered on a
   read-only ingress (the overlay is then opened as a reader for `list_catalog` and the dashboard only), and not
-  registered by a second writer that did not get the overlay write lock (ADR-025 4.3). `BRIDGE_OVERLAY_DIR`
+  registered by a second writer that did not get the overlay write lock (ADR-025 4.3); that second writer still
+  refuses `send_prompt` to an archived session, from a snapshot a poller refreshes every 250 ms on top of the
+  overlay's own once-a-second stat poll (about 1.25 s after the lock holder's archive; an unreadable file keeps the
+  last good snapshot, ADR-025 4.4). `BRIDGE_OVERLAY_DIR`
   set without `BRIDGE_LIFECYCLE_CONFIG` is a startup error.
 - **The overlay is a label store, never an authority** (ADR-025 5). It lives in the Bridge's own
   `overlay.json` (strict JSON, checksum, at most 1000 entries and 512 KiB, D18 Q10): an archived

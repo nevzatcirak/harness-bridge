@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
 	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
@@ -26,6 +28,20 @@ import (
 
 const envOverlayDir = "BRIDGE_OVERLAY_DIR"
 
+// The archived-session refusal of send_prompt (ADR-025 4.5, D18 Q1) is installed in every process that
+// can send and has the overlay loaded: the lock holder through ArchiveConfig.Install, a process without the
+// lock (a second writer, which behaves as a reader, ADR-025 4.3) through the same memory-only lookup.
+// The lookup does no I/O (execution.SetArchiveCheck), so a process that is not the lock holder refreshes
+// its snapshot from a poller: every archiveWatchEvery it calls Store.Archived, which re-checks the file
+// identity at most once a second (ADR-025 Q8) and keeps the last good snapshot when the file cannot be
+// read (4.4: an unknown state never blocks unrelated prompts). An archive made by the lock holder is
+// therefore refused here within about one second plus one tick (about 1.25 s) of the file replacement.
+// A read-only ingress sends nothing (send_prompt is refused at call time), so it installs no check.
+const (
+	archiveWatchEvery = 250 * time.Millisecond
+	archiveWatchProbe = "opencode:ses_00000000000000000000000000" // any ID: the call is made for its refresh
+)
+
 // lifecycleWiring is the validated lifecycle state of one process. A nil *lifecycleWiring means the
 // feature is not configured.
 type lifecycleWiring struct {
@@ -34,6 +50,11 @@ type lifecycleWiring struct {
 	archive *mcp.ArchiveConfig // nil without an overlay, on a read-only ingress, or without the write lock
 	store   *overlay.Store     // nil without BRIDGE_OVERLAY_DIR
 	roots   int
+
+	readOnly bool
+	// The archive poller of a process that is not the lock holder (nil when none runs).
+	stop chan struct{}
+	done chan struct{}
 }
 
 // openLifecycle resolves the configuration before any listener is opened. uid is the service user.
@@ -60,7 +81,7 @@ func openLifecycle(env func(string) string, uid int, readOnly bool) (*lifecycleW
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle roots: %w", err)
 	}
-	w := &lifecycleWiring{catalog: &mcp.CatalogConfig{Roots: roots}, roots: len(cfg.Roots)}
+	w := &lifecycleWiring{catalog: &mcp.CatalogConfig{Roots: roots}, roots: len(cfg.Roots), readOnly: readOnly}
 	fail := func(err error) (*lifecycleWiring, error) {
 		w.Close()
 		return nil, err
@@ -95,9 +116,17 @@ func openLifecycle(env func(string) string, uid int, readOnly bool) (*lifecycleW
 	return w, nil
 }
 
-// Close releases the overlay. It is safe on a nil wiring.
+// Close stops the archive poller and releases the overlay. It is safe on a nil wiring and idempotent.
 func (w *lifecycleWiring) Close() {
-	if w != nil && w.store != nil {
+	if w == nil {
+		return
+	}
+	if w.stop != nil {
+		close(w.stop)
+		w.stop = nil
+		<-w.done // done stays set, closed, so a caller can see the poller has stopped
+	}
+	if w.store != nil {
 		w.store.Close()
 	}
 }
@@ -111,9 +140,39 @@ func (w *lifecycleWiring) apply(s *mcp.Server, runs *execution.Manager) {
 	s.Catalog = w.catalog
 	s.Create = w.create
 	s.Archive = w.archive
-	if w.archive != nil {
-		w.archive.Install(runs) // send_prompt refuses an archived session
+	switch {
+	case w.archive != nil:
+		w.archive.Install(runs) // the lock holder: send_prompt refuses an archived session
+	case w.store != nil && !w.readOnly:
+		// A writer that lost the overlay lock still refuses prompts to an archived session (D18 Q1).
+		// Same lookup as Install, kept fresh by the poller.
+		store := w.store
+		runs.SetArchiveCheck(func(session string) bool { return store.ArchivedKnown("opencode:" + session) })
+		w.startPoller()
 	}
+}
+
+// startPoller refreshes the snapshot of a process that does not hold the overlay lock.
+func (w *lifecycleWiring) startPoller() {
+	if w.stop != nil {
+		return
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	w.stop, w.done = stop, done
+	store := w.store
+	go func() {
+		defer close(done)
+		t := time.NewTicker(archiveWatchEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				_, _ = store.Archived(context.Background(), archiveWatchProbe) // refreshes; the answer is not used
+			}
+		}
+	}()
 }
 
 // tools names the lifecycle tools this wiring registers.
