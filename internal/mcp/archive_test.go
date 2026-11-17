@@ -845,22 +845,30 @@ func TestCatalogWithTheRealOverlayAcrossARestart(t *testing.T) {
 // interrupt and the overlay stays unchanged (the branch is pinned without the reservation's help,
 // which would not refuse a free guard).
 func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
-	// Determinism: the monitor observes immediately and then once per reconcile interval
-	// (internal/execution/manager.go:509, ticker at :504); an observation that finds the native
-	// terminal settles the run and releases the guard in the same critical section. With the
-	// default 5 ms interval this test raced the monitor: if it settled between the nat.set below
-	// and close_session's snapshot read, closeInterrupt saw no guard and took the "none" path, so
-	// close legitimately succeeded and this test failed. Two controls pin the branch: the long
-	// interval keeps every later probe out, and the permission-read barrier waits for the first
-	// probe (which is not interval-gated) to finish against the still-busy native before the
-	// session is made terminal. The guard assertion then pins the held run before close; the
-	// interrupt's own probe (internal/execution/manager.go:658) answers "execution already
-	// terminal" every time.
+	// Determinism. Two facts pin the branch:
+	//
+	// (1) The long interval (10 s) keeps every interval-gated observe out of the window. The
+	// monitor observes immediately once when the run starts (internal/execution/manager.go:509)
+	// and then only when the 10 s ticker fires, so after its first observe completes nothing can
+	// settle the run until far after this test has finished.
+	//
+	// (2) The barrier below waits for TWO arrivals of the last native read of an observation
+	// (/permission), not one. The first /permission arrival is the send preflight's read (it runs
+	// synchronously inside send_prompt, manager.go:365-396); the second is the monitor's first
+	// observe. Only after the second arrival is the monitor's first observation guaranteed to hold
+	// all its native reads (Get, status, history, permission, in that order, reconcile.go:242-266),
+	// so the terminal flip in nat.set below is invisible to it: an observation that started before
+	// the flip cannot settle the run afterwards. waitRunning's Gets perform no native reads while
+	// the monitor is alive (refresh returns early on !monitorDone, reconcile.go:171), so no other
+	// observation can run between the barrier and close_session's guard snapshot. The guard
+	// assertion pins the held run, and the interrupt's own probe (manager.go:658) is therefore the
+	// first observation that sees the terminal native: it settles the run and answers
+	// "execution already terminal" deterministically.
 	e := newArchEnvTiming(t, nil, 10*time.Second)
-	probed := make(chan struct{}, 1)
+	probed := make(chan struct{}, 2)
 	e.nat.mu.Lock()
 	e.nat.hook = func(p string) {
-		if p == "/permission" { // the last native read of one probe
+		if p == "/permission" { // the last native read of one observation
 			select {
 			case probed <- struct{}{}:
 			default:
@@ -873,10 +881,15 @@ func TestCloseSessionInterruptFailsWhileTheGuardIsFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRunning(t, e, x.(execution.Execution).ID)
-	select {
-	case <-probed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the monitor's first probe did not reach its permission read")
+	// The first arrival is the send preflight's /permission read; the second is the monitor's
+	// first observe. Waiting for the second guarantees that observation has finished reading the
+	// native (with the still-busy session) before the session is made terminal below.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-probed:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("native observation %d/2 did not reach its permission read", i+1)
+		}
 	}
 	e.nat.set("ses_arch1", func(s *archSession) {
 		s.busy = false
