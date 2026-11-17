@@ -674,8 +674,8 @@ title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggrega
   `UPSTREAM_TIMEOUT` (retryable) when the deadline passes; the native error code when a native
   read of a listed session fails; `INTERNAL` when the archive overlay cannot answer.
 - Read-only: no native write, not audited as a mutation, available under `BRIDGE_READ_ONLY`.
-  Overlay-archived sessions (no persistence yet, so none today) are hidden unless
-  `include_archived` is true.
+  Overlay-archived sessions (the persisted overlay of ADR-025 exists but is not wired in production, so
+  none today) are hidden unless `include_archived` is true.
 - The tool is registered only when the server has a catalog configuration; the startup wiring
   from `BRIDGE_LIFECYCLE_CONFIG` is not done yet, so a deployed Bridge still lists the same tools.
 
@@ -737,9 +737,98 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   `UNKNOWN_OUTCOME`); `replay=true` (only when a recorded error is returned again, never for a waiter whose own
   wait timed out; a recorded success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
-  these keys. Archive and close lines land with their tools (S6).
+  these keys. The archive and close lines are in the S6 entry below.
 - The tool is registered only when the server has a create configuration; nothing wires it from
   `BRIDGE_LIFECYCLE_CONFIG` yet, so a deployed Bridge keeps its eleven tools.
+
+### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured; NOT wired in production)
+
+`archive_session {session_id}`, `unarchive_session {session_id}` and `close_session {session_id}` ->
+`{session_id, archived, changed, archived_at?, interrupt?}`. `session_id` is `opencode:<id>` (the input
+schema has that one property, `SessionInput`). `archived` is the overlay state after the call;
+`changed` is false for an idempotent no-op (archiving an archived session, unarchiving one that is not
+archived); `archived_at` (RFC 3339) is set by `archive_session` and `close_session`; `interrupt`
+(`interrupted` or `none`) is set by `close_session` only (a `failed` interrupt never reaches a result: the
+call is refused and the overlay is unchanged).
+
+- **Registration.** The three tools exist only when the server has an archive configuration
+  (`Server.Archive`, which needs a validated lifecycle configuration and an overlay store that holds
+  the write role). Without it (ADR-025 Q5, `BRIDGE_OVERLAY_DIR` unset) none is registered (the handler
+  itself refuses `INVALID_INPUT` "unknown tool" when the configuration is absent). **Nothing in `cmd/bridge` builds that configuration**: no
+  production code reads `BRIDGE_OVERLAY_DIR` (the name appears only in comments and ADR-025) or opens the
+  overlay, so a deployed Bridge registers none of them.
+- **The overlay is a label store, never an authority** (ADR-025 5). It lives in the Bridge's own
+  `overlay.json` (strict JSON, checksum, at most 1000 entries and 512 KiB, D18 Q10): an archived
+  session is hidden from `list_catalog` unless `include_archived` is true (D16 Q5) and from the dashboard
+  (`archived=1` shows it), and `send_prompt` to it is refused `FORBIDDEN` with reason `session_archived`
+  from an in-memory snapshot with no I/O and no native call (D18 Q1). `list_sessions`, `find_sessions`,
+  `get_session` and `get_repository` are unchanged (D18 Q2); no authorization decision reads the overlay.
+- **No native write for archive or unarchive.** The preconditions are native READS. `close_session`
+  makes at most one native write, the `POST /session/:id/abort` of the existing interrupt path, and only
+  while a Bridge execution holds the session's guard.
+- **Order and errors** (every refusal up to the reservation makes no native write):
+  `BRIDGE_READ_ONLY` `FORBIDDEN`; not an `opencode:ses_...` session ID `INVALID_INPUT` (a `claudecode:` ID too:
+  "claudecode sessions are not enabled on this Bridge"); outside the static ACL the
+  existing refusals; lifecycle authorization with the `archive` mode: a missing directory `NOT_FOUND`, a
+  bad input `INVALID_INPUT`, any other refusal `FORBIDDEN`, an unfinished directory check
+  `UPSTREAM_TIMEOUT` (retryable); the overlay unreadable or this process without the write role
+  `UPSTREAM_FAILURE` with reason `overlay_unavailable`. Then, for `close_session` only, the interrupt (below).
+  Then the lifecycle reservation (a held execution guard or another lifecycle change `SESSION_BUSY`),
+  then native reads, all fail-closed: the session not idle, a pending permission, an unfinished history
+  message or an unreadable one, or a running child session `SESSION_BUSY`; an unreadable status, permission
+  list or session tree (or a tree of 1000 sessions or more) `UPSTREAM_FAILURE`. Then the cap, a re-check of
+  the authorization and of the native state, and the one overlay write.
+- **Cap (D16 Q3).** `archive_per_hour` (default 10) is **one** hourly window shared by the three tools and
+  by successful and failed overlay writes alike (a call is counted when it reaches the write, before it);
+  the window is memory-only, a restart resets it. Reached: `SESSION_LIMIT` (retryable). A full overlay
+  (1000 entries or 512 KiB) is `SESSION_LIMIT` too; entries are never dropped silently.
+- **Overlay write errors.** A rename that fails changes nothing (`UPSTREAM_FAILURE`, reason
+  `overlay_unavailable`); a write whose outcome is unknown (directory fsync, a hung rename) is
+  `UNKNOWN_OUTCOME` with reason `overlay_uncertain` (D18 Q13): read `list_catalog` with
+  `include_archived`, and repeat the call, which is idempotent; a call that cannot take the overlay's
+  write lock within its bound because a previous write has not returned is `UPSTREAM_TIMEOUT`
+  (retryable). The published snapshot never changes before the rename.
+- **`close_session` is the interrupt, then the archive (D16 Q8).** If a Bridge execution holds the session's
+  guard, the call validates the session, runs the manager's own `Interrupt` (no second audit line), and
+  waits (5 s) until the execution is `interrupted`, `completed` or `failed` **and** the guard is released;
+  `interrupt` is then `interrupted`. With no execution holding the guard it behaves as `archive_session`
+  (`interrupt` is `none`). A failed or uncertain interrupt leaves the session un-archived: an execution that
+  settled in the meantime answers `INVALID_INPUT` ("execution already terminal"), a submission still in
+  progress `SESSION_BUSY`, one that does not settle within the bound `UNKNOWN_OUTCOME`. **The interrupt is
+  not rolled back:** the call may interrupt a running execution and then still refuse the archive (a
+  prompt raced in or another reservation `SESSION_BUSY`, a failed precondition, the cap `SESSION_LIMIT`, an
+  overlay write failure or uncertainty); the execution stays interrupted and the caller reads the state
+  and retries. `close_session` never deletes or abandons anything natively.
+- **Audit (ADR-025 4.6).** Every call writes exactly one AUDIT-01 line (message `session lifecycle`) on
+  every return path: `event` is `session_archive`, `session_unarchive` or `session_close`; `tool`;
+  `outcome` (`archived`, `already_archived`, `unarchived`, `not_archived`, `closed`, `rejected`);
+  `accepted`; `error_code` and `reason` (only when rejected); `session_id` (only when well formed);
+  `root_id` (the index of the configured root, never a path); the closed counters `overlay_generation` and
+  `overlay_entries` after the call; `archived_in_window` (when the call was counted); `interrupt`
+  (`close_session` only); `principal`. Never logged: a path, a title, free text or the file contents. The
+  dashboard ring does not keep these events until its allowlist is amended.
+- **Not verified.** Everything above is tested against a fake native and the real overlay store; no live run
+  was made (the live behaviour of an archived session on the native side is UNVERIFIED). The lifecycle
+  startup wiring and the overlay directory variable are separate, unscheduled tasks.
+- **Sources (base `ebb2ce3`).** `internal/mcp/server.go:41-43,148-160,330-343` (registration, audit
+  hook), `internal/mcp/archive.go:20-31,83-93,125-137,162-180,199-274,279-325,331-369` (output, errors, cap, order,
+  preconditions, interrupt), `internal/mcp/audit.go:265-343`, `internal/overlay/overlay.go:41-43,609-720`
+  (bounds, change and commit), `internal/execution/manager.go:282` (`session_archived`),
+  `internal/execution/lifecycle.go:30-44` (reservation), `internal/mcp/catalog.go:225-238`
+  (`include_archived`).
+
+### Registration and production wiring of the five lifecycle tools
+
+| Tool | Registered when (`internal/mcp/server.go`) | Built by `cmd/bridge` today |
+|---|---|---|
+| `list_catalog` | `Server.Catalog != nil && Server.Catalog.Roots != nil` (`:330`) | no |
+| `create_session` | `Server.Create != nil` (`:335`) | no |
+| `archive_session`, `unarchive_session`, `close_session` | `Server.Archive != nil` (`:340`) | no |
+
+`BRIDGE_LIFECYCLE_CONFIG` is parsed by `lifecycle.FromEnv` (`internal/lifecycle/config.go:141`), but no
+production code calls it; nothing sets `Server.Catalog`, `Server.Create` or `Server.Archive`. A deployed
+Bridge therefore lists eleven tools (twelve with the default `reject_only` relay). Operator view:
+`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`.
 
 ### ADR-024 S3: `reply_permission` (reject only, against a fake native; registered only when configured)
 
@@ -944,7 +1033,8 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   configuration in the production Bridge yet, so the label is absent there until it does.
 - **Archived (D17 Q7):** sessions the archive overlay reports archived are hidden by default; the query
   `archived=1` (exactly that value, on any data route) shows them with an `archived` marker. The
-  overlay is empty in production (no persistence exists, ADR-022 S8), so nothing is archived yet. An
+  overlay is empty in production (the persisted overlay of ADR-025 is merged but not wired, so nothing is
+  archived yet). An
   overlay that cannot answer fails the call (503), as `list_catalog` does: a session is never listed or
   hidden by a guess.
 - **Redaction:** diff paths and patches and the audit ring values are redacted with the shipped list
