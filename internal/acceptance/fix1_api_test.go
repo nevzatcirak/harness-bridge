@@ -177,3 +177,28 @@ func TestMkdirChownFailureLeavesNothingBehind(t *testing.T) {
 		t.Fatal("a created ancestor was left behind after a failed chown")
 	}
 }
+
+// R317-FIX-2 P3-3: a decoy file whose chown fails is removed (it was created here), while the
+// directories made for it stay recorded and are removed by RemoveDir.
+func TestWriteFileChownFailureRemovesTheFile(t *testing.T) {
+	root := t.TempDir()
+	o := &OSDecoyFS{UID: os.Getuid(), GID: os.Getgid(), chown: func(p string, _, _ int) error {
+		if strings.HasSuffix(p, ".json") {
+			return errors.New("operation not permitted")
+		}
+		return nil
+	}}
+	f := filepath.Join(root, "x", "decoy-profile.json")
+	if err := o.Write(f, []byte("x")); err == nil {
+		t.Fatal("Write succeeded although the file chown failed")
+	}
+	if _, err := os.Stat(f); err == nil {
+		t.Fatal("a decoy file with the wrong owner was left behind")
+	}
+	if err := o.RemoveDir(filepath.Join(root, "x")); err != nil {
+		t.Fatalf("RemoveDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "x")); err == nil {
+		t.Fatal("the created directory was not removed")
+	}
+}
