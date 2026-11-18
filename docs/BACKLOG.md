@@ -240,3 +240,10 @@ Open items recorded here, not fixed:
 - **Not fully possible (#401 P3-4):** the path of an in-flight bounded call is not available from the test seam without a production change; only the operation (evalsymlinks or stat) is named.
 - **For the maintainer (#388 P3-3):** the startup line is `log.Print`, not `slog`; the content is pinned; no change made.
 - **Informational, unchanged:** #401 P3-2 (the "exactly 3 executed calls" assertion is a diagnostic, not a guard), #401 P3-3 (V3 is non-fresh by design), #397 P3-2 (`TestAscentIsBounded` load flake).
+
+### ADR-024 A1 S7 continuity-epoch source (task #408, 2026-11-18): items recorded
+
+- **Done by this change:** the incarnation source of A1 (option (c)) behind `BRIDGE_PERMISSION_INCARNATION=observed`, off by default; the older entry "Native incarnation evidence is missing, so a deployed Bridge still cannot verify or answer a request" is superseded for `observed` and still true for the default. See ADR-024 "As built (S7)".
+- **UNVERIFIED, needs a live OpenCode (R5b-style acceptance of A1.6):** the real `/global/event` shape and heartbeat timing, a real dispose, behaviour behind a proxy. The operator keeps `BRIDGE_PERMISSION_RELAY=off` until then (D21 Q7).
+- **Recorded decision:** an undecodable event invalidates the epoch while an oversized one is ignored (ADR-024 As built (S7), decision 1); revisit if the real stream makes either too strict.
+

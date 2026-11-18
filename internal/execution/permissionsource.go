@@ -87,11 +87,59 @@ func (s *OpenCodePermissionSource) PermissionView(ctx context.Context, session s
 	if !opencode.ValidID(session, "ses") {
 		return opencode.PermissionObservationBatch{}, opencode.ErrPermissionInput
 	}
-	o, err := opencode.NewPermissionObserver(ctx, s.client, session, runAuthority{s}, s.cfg.Observation)
+	return s.viewAcrossEpoch(ctx, func() (opencode.PermissionObservationBatch, error) {
+		o, err := opencode.NewPermissionObserver(ctx, s.client, session, runAuthority{s}, s.cfg.Observation)
+		if err != nil {
+			return opencode.PermissionObservationBatch{}, err
+		}
+		return o.Snapshot(ctx)
+	})
+}
+
+// viewAcrossEpoch runs one snapshot between two reads of the incarnation source (ADR-024 A1 S7): if the
+// epoch changed, or is no longer armed, the view spans a possible replacement of the native instance and
+// no request of it is attributed (verified requests are downgraded to unattributed, reason
+// epoch_changed). The observer re-checks its own scope while it reads, so this is the second layer: it
+// catches a change after the observer's last check. Without an incarnation source both reads are "" and
+// nothing changes.
+func (s *OpenCodePermissionSource) viewAcrossEpoch(ctx context.Context, snapshot func() (opencode.PermissionObservationBatch, error)) (opencode.PermissionObservationBatch, error) {
+	before := s.currentEpoch(ctx)
+	batch, err := snapshot()
 	if err != nil {
-		return opencode.PermissionObservationBatch{}, err
+		return batch, err
 	}
-	return o.Snapshot(ctx)
+	if after := s.currentEpoch(ctx); after != before || after == "" && before != "" {
+		batch = unattributeAll(batch, "epoch_changed")
+	}
+	return batch, nil
+}
+
+// currentEpoch reads the incarnation source; "" means none, not armed or an error.
+func (s *OpenCodePermissionSource) currentEpoch(ctx context.Context) string {
+	inc := s.cfg.Incarnation
+	if inc == nil {
+		return ""
+	}
+	e, err := inc.NativeEpoch(ctx)
+	if err != nil {
+		return ""
+	}
+	return e
+}
+
+// unattributeAll downgrades every verified request of a view to unattributed (the human answers natively).
+// It returns a copy; conflicting and other entries are left as they are.
+func unattributeAll(b opencode.PermissionObservationBatch, reason string) opencode.PermissionObservationBatch {
+	out := b
+	out.Permissions = append([]opencode.ObservedPermission(nil), b.Permissions...)
+	for i := range out.Permissions {
+		if out.Permissions[i].Attribution == "verified" {
+			out.Permissions[i].Attribution = "unattributed"
+			out.Permissions[i].Reason = reason
+			out.Permissions[i].ExecutionID, out.Permissions[i].UserMessageID = "", ""
+		}
+	}
+	return out
 }
 
 // runAuthority is the observer's PermissionObservationAuthority: a read-only projection of the
@@ -112,7 +160,7 @@ func (a runAuthority) PermissionScope(ctx context.Context, session string) (open
 		return opencode.PermissionScope{}, errNoGuardRun
 	}
 	x.mu.Lock()
-	native, directory, canonical := x.native, x.directory, x.canonicalDirectory
+	native, directory, canonical, submitEpoch := x.native, x.directory, x.canonicalDirectory, x.submitEpoch
 	x.mu.Unlock()
 	if native != session || directory == "" || directory != canonical {
 		return opencode.PermissionScope{}, errNoGuardRun
@@ -122,6 +170,11 @@ func (a runAuthority) PermissionScope(ctx context.Context, session string) (open
 		var err error
 		if epoch, err = inc.NativeEpoch(ctx); err != nil {
 			return opencode.PermissionScope{}, err
+		}
+		// ADR-024 A1 S7: the epoch is supplied only when it is armed (non-empty) AND the run was admitted
+		// under it; otherwise the scope has no epoch and the request stays unattributed.
+		if epoch == "" || submitEpoch != epoch {
+			epoch = ""
 		}
 	}
 	ref := directoryRef(canonical)

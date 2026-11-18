@@ -1165,3 +1165,63 @@ UNVERIFIED. Names not decided by D21 remain proposals.
   it.
 - The original record: no code, test or live run was done for this ADR; the as-built notes above are
   the implemented and tested facts (fakes only), and no live run was made for any slice.
+
+## As built (S7), 2026-11-18
+
+Facts only (task #408, D21). The continuity-epoch incarnation source of Amendment A1 (option (c)) exists, is
+**off by default** and was tested against fake SSE and fake native only; no OpenCode, Bridge or host call was
+made. Everything runtime-dependent is **UNVERIFIED**.
+
+- **Tracker.** `internal/adapters/opencode/epoch.go`: `EpochTracker` (one reader of `GET /global/event` through
+  `Client.GlobalEventOpener`: authenticated, no client timeout, a 200 `text/event-stream` or a refusal),
+  `Epoch() (token, armed)`, `NativeEpoch` (the unchanged `execution.NativeIncarnation` seam; unarmed returns
+  `("", nil)`), `Start`, `Stop` (idempotent, waits for the goroutine). The token is 128 random bits from
+  `crypto/rand`, never derived from a native value; it is replaced at every (re)connection, on every
+  disposal event, on an undecodable event, and the connection is dropped on stream end or error and after
+  25 s without any event (D21 Q5); reconnect backoff 1 s doubling to 30 s, reset by a connection that armed.
+  The epoch is armed only by the first `server.heartbeat` of a connection (the hello does not arm). The
+  clock is injected (`EpochClock`) for the gap and backoff tests.
+- **Execution.** `Manager.SetIncarnation` and `run.submitEpoch`: the epoch armed when the run is admitted
+  (before the prompt is submitted), `""` when none, not armed or a failed read. `runAuthority.PermissionScope`
+  supplies `NativeEpoch` only when the source's epoch is non-empty and equal to the run's `submitEpoch`.
+  `PermissionView` reads the source before and after the snapshot (`viewAcrossEpoch`); a change, or an epoch
+  no longer armed, downgrades every verified request of the view to `unattributed` with reason
+  `epoch_changed` and clears the execution fields. `correlate` and every other attribution condition are
+  unchanged; no (e) pin (D21 Q6); no (b) (D21 Q3).
+- **Wiring.** `cmd/bridge`: `BRIDGE_PERMISSION_INCARNATION` = `off` (default, also unset) or `observed`,
+  anything else is a startup error; the tracker is started only for `observed` together with
+  `BRIDGE_PERMISSION_RELAY=reject_only` and stopped at exit; the same source is installed in the manager and in
+  the `PermissionSource` (`wirePermissionRelayWith`). With mode `off` of either variable nothing changes
+  from S6.
+- **Decisions made here, for review (none changes a D-item).** (1) An event that is not a JSON object with a
+  type (or has a type over 128 bytes) is "malformed" and replaces the epoch and disarms it until the next
+  heartbeat; an **oversized** frame (over 64 KiB) is bounded and ignored, because a disposal event is tiny and
+  a large unrelated event (a tool output) is normal on the global stream. A1.5's "malformed events are
+  bounded and ignored" is therefore tightened for undecodable frames only, which can only refuse more. (2)
+  Disposal matching is the two exact types plus, as a fail-closed superset, any type containing "dispos"
+  (case-insensitive); other event types are ignored but count as activity for the gap rule. (3) The run's own
+  directory is not used: any disposal replaces the epoch. (4) Both JSON shapes `{"payload":{"type":...}}`
+  and a top-level `type` are read, because the exact shape of `/global/event` was not observed.
+- **Tests.** Tracker (fake SSE, injected clock, `-race`): not armed before the first heartbeat, armed after it,
+  hello does not arm; replaced by `server.instance.disposed` for another directory, `global.disposed` alone,
+  an unknown disposed-like type, both JSON shapes; unrelated and oversized events ignored; malformed events
+  invalidate; stream end, reconnect, the 25 s gap (boundary 1 ns either side) and "any event resets the gap";
+  backoff 1,2,4,8,16,30,30 s and reset; refused, 401 and garbage streams never arm; token unrelated to native
+  values and a randomness failure never arms; `Stop` leaves no goroutine; the real opener against an httptest
+  server. Execution (real manager and observer, fake native): a run admitted under the current epoch is
+  verified; a run submitted before a replacement, while unarmed, after a failed admission read, or with no
+  manager source is not; a source that never arms verifies nothing; the view-level check on its own; a change
+  during the native reads never verifies; `allow_once` refused with zero native calls. `cmd/bridge`: the mode
+  is off by default and strict, the tracker starts only for `observed` with `reject_only`, the wiring installs
+  the source in both places.
+- **Mutations (each alone RED, test binary run as uid 65534).** arm at the hello; ignore `server.instance.disposed`;
+  ignore `global.disposed`; ignore the stream end; drop the gap rule; gap 24 s, 26 s and `>` instead of `>=`;
+  a constant token; the nil tracker supplying an epoch; keep the epoch across a reconnect; `Stop` not
+  cancelling; an unarmed source returning an error; read the epoch once instead of before and after; skip the
+  `submitEpoch` equality; fabricate an epoch for an unarmed source; the mode default `observed`; the tracker
+  started with the relay off; the manager not given the source.
+- **Not tested / UNVERIFIED.** The JSON shape and content type of a real `/global/event`; the time of the first
+  heartbeat (expected about 10 s); behaviour behind a buffering proxy; the volume of the global stream under
+  load; that a real dispose emits the events A1.2 reads from source; the hello-before-listener ordering
+  (A1.3(c)(ii)). Residual windows as stated in A1.3(c): event latency (milliseconds) and a silent drop (up to
+  about 25 s). The epoch proves continuity of observation, not native identity (D21 Q1).

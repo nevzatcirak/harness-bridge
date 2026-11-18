@@ -19,16 +19,29 @@ Bridge can attribute to that execution. `reply_permission {execution_id, permiss
 writes an audit line, and sends exactly one native `POST /permission/:id/reply` with `{"reply":"reject"}`.
 Every refusal before the audit line sends nothing.
 
-## Today's limit: nothing can be verified yet
+## What can be verified: the incarnation mode (ADR-024 A1 S7, D21)
 
-The Bridge attributes a request to an execution only with independent native incarnation evidence, and
-no such source exists (`docs/P2_PERM_CORE_02_OBSERVATION.md`: none is fabricated). So on a deployed
-Bridge **every request stays `unattributed`**: `pending_permission` is absent, only
-`pending_permission_count` is shown, and `reply_permission` answers `FORBIDDEN` with reason
-`not_verified`, no native write, no attempt line. The startup log says so:
-`permission relay: reject_only; no native incarnation source exists ...`. Answer such a request in
-OpenCode itself. D21 (2026-11-17) accepted the A1 continuity-epoch design (ADR-024 A1), but S7 is not
-implemented, so this limit stands until it is; run with `BRIDGE_PERMISSION_RELAY=off` (Q7).
+The Bridge attributes a request to an execution only with incarnation evidence. `BRIDGE_PERMISSION_INCARNATION`
+decides, and it is **off by default** (unset or `off`; `observed` turns it on; anything else is a startup
+error; it has no effect with `BRIDGE_PERMISSION_RELAY=off`, no tracker is started).
+
+- **off (the default).** No source exists (`docs/P2_PERM_CORE_02_OBSERVATION.md`: none is fabricated). On a
+  deployed Bridge **every request stays `unattributed`**: `pending_permission` is absent, only
+  `pending_permission_count` is shown, and `reply_permission` answers `FORBIDDEN` with reason `not_verified`,
+  no native write, no attempt line. The startup log says so: `permission relay: reject_only; no native
+  incarnation source (BRIDGE_PERMISSION_INCARNATION is off) ...`. Answer such a request in OpenCode itself.
+- **observed.** The Bridge keeps one subscription to OpenCode's `GET /global/event` and a Bridge-made
+  continuity epoch (a random token, replaced on every reconnect, on any dispose event, on a stream end, on an
+  undecodable event and after 25 s without an event). It is armed after the first heartbeat of a connection,
+  so after every Bridge start and every reconnect **expect about 10 s or more** (UNVERIFIED) in which
+  nothing can be verified. A request is attributed only for an execution **submitted while the epoch was
+  armed and still the current one**: after a dispose, a reload, a config change, an upgrade or a lost stream
+  the earlier executions can never be verified, new ones can. This is continuity of observation, not native
+  identity; a window of milliseconds (event latency) and, on a silent network drop, up to about 25 s remains.
+  The startup log says `permission relay: reject_only; incarnation=observed ...`.
+
+**Operator note (D21 Q7).** Until S7 has been accepted and exercised live, run with
+`BRIDGE_PERMISSION_RELAY=off` (the H5 runbook's stage 1 uses it). S7 has not been run against a live OpenCode.
 
 ## Enable, disable
 
@@ -82,12 +95,13 @@ run is UNVERIFIED, not PASS.
    `off`, so this acceptance is NOT_RUN.
 2. Send a prompt that makes the native session ask for a permission. `get_execution_status` shows
    `waiting_for_permission` and `pending_permission_count: 1`.
-3. **Expected today:** `pending_permission` is absent. `reply_permission(reject)` returns `FORBIDDEN`
+3. **Expected with the incarnation mode off (the default):** `pending_permission` is absent. `reply_permission(reject)` returns `FORBIDDEN`
    / `not_verified`; the native request log shows **no** `POST /permission/*/reply`; the journal has a
    `phase=refused` line and no `phase=attempt` line. The request is still pending: answer it in OpenCode.
 4. `reply_permission(allow_once)` returns `FORBIDDEN` / `allow_once_disabled`; the request log shows no
    call at all for it.
-5. **Once an incarnation source exists** (not today): `pending_permission` carries `attribution:
+5. **With `BRIDGE_PERMISSION_INCARNATION=observed` and an execution submitted while the epoch is armed**
+   (UNVERIFIED live; run it only as the R5b-style acceptance of ADR-024 A1.6): `pending_permission` carries `attribution:
    "verified"` and no pattern; `reply_permission(reject)` yields exactly one native reply with body
    `{"reply":"reject"}`, an `attempt` and a `result` journal line, and the execution is then reported
    through ADR-018's `permission_rejection` without the Bridge releasing its guard. Answering the
