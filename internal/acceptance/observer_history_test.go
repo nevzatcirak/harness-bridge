@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
 )
@@ -391,5 +392,70 @@ func TestHistoryTapIsUnobservedWhenOneSessionIsEmpty(t *testing.T) {
 	}
 	if rec, ok := tap.Read(); ok {
 		t.Fatalf("a session with no record was an observation: %q", rec)
+	}
+}
+
+// EndTurn failing for a reason other than an invalid turn end (a write error) is a failed record: the
+// history is unobserved even though every block and tool result was written. The failure is made at the
+// turn-end line of a second record only: the segment bound is sized so that this one line rolls to the
+// next segment, and the next segment's name is taken by a directory after the first record (the store has
+// the session's state cached by then, so the append is the first thing to fail).
+func TestHistoryTapIsUnobservedWhenTheTurnEndCannotBeWritten(t *testing.T) {
+	fixed := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	cfg := claudecode.DefaultStoreConfig()
+	cfg.Now = func() time.Time { return fixed } // a fixed clock: every line has a fixed size
+	stream := deniedStream(histUUID, "turn end write failure")
+
+	// Measure: two clean records in one segment; the size of the last (turn-end) line.
+	d1 := histDir(t)
+	tap1, err := NewHistoryTapWith(d1, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := tap1.Record(stream); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tap1.Close()
+	ents, err := os.ReadDir(d1)
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("segments: %v %v", ents, err)
+	}
+	data, err := os.ReadFile(filepath.Join(d1, ents[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trimmed := bytes.TrimSuffix(data, []byte("\n"))
+	lastLine := len(trimmed) - bytes.LastIndexByte(trimmed, '\n') // the turn-end line, newline included
+	next := strings.Replace(ents[0].Name(), "-000001.ndjson", "-000002.ndjson", 1)
+	if next == ents[0].Name() {
+		t.Fatalf("unexpected segment name %q", ents[0].Name())
+	}
+
+	// Fail: a segment bound one byte under the clean total; the next segment taken after the first record.
+	cfg.MaxSegmentBytes = int64(len(data) - 1)
+	d2 := histDir(t)
+	tap2, err := NewHistoryTapWith(d2, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tap2.Close()
+	if err := tap2.Record(stream); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(d2, next), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := tap2.Record(stream); err == nil {
+		t.Fatal("a turn end that could not be written was recorded")
+	}
+	// Everything before the second turn end was written: the failure is that line's alone.
+	written, err := os.ReadFile(filepath.Join(d2, ents[0].Name()))
+	if err != nil || len(written) != len(data)-lastLine {
+		t.Fatalf("the failure was not at the turn end: wrote %d bytes, want %d (err %v)", len(written), len(data)-lastLine, err)
+	}
+	if rec, ok := tap2.Read(); ok {
+		t.Fatalf("a history whose turn end failed was an observation: %q", rec)
 	}
 }
