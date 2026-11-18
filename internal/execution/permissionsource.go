@@ -108,7 +108,8 @@ func (s *OpenCodePermissionSource) viewAcrossEpoch(ctx context.Context, snapshot
 	if err != nil {
 		return batch, err
 	}
-	if after := s.currentEpoch(ctx); after != before || after == "" && before != "" {
+	// after != before also covers "no longer armed" (before non-empty, after ""): "" is a value like any other.
+	if after := s.currentEpoch(ctx); after != before {
 		batch = unattributeAll(batch, "epoch_changed")
 	}
 	return batch, nil

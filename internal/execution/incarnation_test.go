@@ -255,3 +255,66 @@ func (n *nativeFake) reqsCopy() []string {
 	defer n.mu.Unlock()
 	return append([]string(nil), n.reqs...)
 }
+
+// outerFlip is a source whose epoch changes exactly on the SECOND read that carries no deadline. The reads
+// viewAcrossEpoch makes with the view's own context (before and after the snapshot) have no deadline; every
+// read the observer makes while it snapshots (its scope checks) runs under the observer's deadline. So the
+// flip lands after all of the observer's own checks and before nothing but viewAcrossEpoch's second read:
+// only that layer can see it (#414 P2-1).
+type outerFlip struct {
+	mu     sync.Mutex
+	epoch  string
+	flipTo string
+	outer  int // reads without a deadline since arm
+	armed  bool
+}
+
+func (o *outerFlip) arm() { o.mu.Lock(); o.outer, o.armed = 0, true; o.mu.Unlock() }
+func (o *outerFlip) NativeEpoch(ctx context.Context) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && o.armed {
+		o.outer++
+		if o.outer == 2 {
+			return o.flipTo, nil // the read right after the snapshot
+		}
+	}
+	return o.epoch, nil
+}
+
+// THROUGH PermissionView: the production path, not viewAcrossEpoch on its own. With the call replaced by a
+// direct call of the snapshot closure this test goes RED (the second read never happens).
+func TestPermissionViewChecksTheEpochAgainAfterTheSnapshot(t *testing.T) {
+	for name, flipTo := range map[string]string{"another epoch": "e2", "no longer armed": ""} {
+		of := &outerFlip{epoch: "e1", flipTo: flipTo}
+		fx := newSourceFixture(t, PermissionSourceConfig{Incarnation: of})
+		of.arm()
+		p := attributedTo(t, fx) // PermissionView
+		if p.Attribution == "verified" || p.Reason != "epoch_changed" || p.ExecutionID != "" || p.UserMessageID != "" {
+			t.Errorf("%s: a view that ended under another epoch attributed a request: %+v", name, p)
+		}
+		of.mu.Lock()
+		if of.outer != 2 {
+			t.Errorf("%s: %d reads without a deadline, want 2 (before and after the snapshot)", name, of.outer)
+		}
+		of.mu.Unlock()
+		// the epoch stays changed: the reply path reads a fresh view of its own (under its own deadline, so
+		// the one-shot flip no longer applies) and is refused, with no native write and no attempt line
+		of.mu.Lock()
+		of.epoch, of.armed = flipTo, false
+		of.mu.Unlock()
+		_, err := fx.m.ReplyPermission(context.Background(), fx.in())
+		wantErr(t, err, "FORBIDDEN", ReasonNotVerified)
+		fx.noWrites(name + ": reply after a view under another epoch")
+	}
+}
+
+// Control: with no change the same view is verified (the flip is what the test above detects).
+func TestPermissionViewKeepsAttributionWhenTheEpochHoldsAcrossTheSnapshot(t *testing.T) {
+	of := &outerFlip{epoch: "e1", flipTo: "e1"}
+	fx := newSourceFixture(t, PermissionSourceConfig{Incarnation: of})
+	of.arm()
+	if p := attributedTo(t, fx); p.Attribution != "verified" {
+		t.Fatalf("control: %+v", p)
+	}
+}

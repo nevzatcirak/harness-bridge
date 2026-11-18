@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,7 +65,10 @@ func eventNative(t *testing.T) (*opencode.Client, *atomic.Int32) {
 func TestIncarnationTrackerStartsOnlyForObservedWithRejectOnly(t *testing.T) {
 	for _, c := range []struct{ relay, inc string }{{"reject_only", "off"}, {"off", "observed"}, {"off", "off"}} {
 		client, hits := eventNative(t)
-		inc, stop := startIncarnation(c.relay, c.inc, client)
+		inc, stop, err := startIncarnation(c.relay, c.inc, client)
+		if err != nil {
+			t.Fatalf("relay=%s incarnation=%s: %v", c.relay, c.inc, err)
+		}
 		time.Sleep(60 * time.Millisecond)
 		stop()
 		if inc != nil || hits.Load() != 0 {
@@ -72,8 +76,8 @@ func TestIncarnationTrackerStartsOnlyForObservedWithRejectOnly(t *testing.T) {
 		}
 	}
 	client, hits := eventNative(t)
-	inc, stop := startIncarnation("reject_only", "observed", client)
-	if inc == nil {
+	inc, stop, err := startIncarnation("reject_only", "observed", client)
+	if err != nil || inc == nil {
 		t.Fatal("observed with reject_only started no tracker")
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -92,5 +96,23 @@ func TestIncarnationTrackerStartsOnlyForObservedWithRejectOnly(t *testing.T) {
 	stop()
 	if e, _ := inc.NativeEpoch(context.Background()); e != "" {
 		t.Fatalf("armed after stop: %q", e)
+	}
+}
+
+// A tracker that cannot be built is a startup error, never a silent "off" (#414 P3-2): observed with no usable
+// client (no opener) is refused with an error that names the variable, and the off cases stay error-free.
+func TestIncarnationObservedThatCannotStartIsAStartupError(t *testing.T) {
+	inc, stop, err := startIncarnation("reject_only", "observed", nil)
+	if err == nil || inc != nil || stop == nil {
+		t.Fatalf("observed without a client started silently: inc=%v err=%v", inc, err)
+	}
+	if !strings.Contains(err.Error(), "BRIDGE_PERMISSION_INCARNATION=observed") {
+		t.Fatalf("the error does not name the variable: %v", err)
+	}
+	stop() // safe
+	for _, c := range []struct{ relay, inc string }{{"reject_only", "off"}, {"off", "observed"}, {"off", "off"}} {
+		if inc, _, err := startIncarnation(c.relay, c.inc, nil); err != nil || inc != nil {
+			t.Errorf("relay=%s incarnation=%s: %v %v", c.relay, c.inc, inc, err)
+		}
 	}
 }

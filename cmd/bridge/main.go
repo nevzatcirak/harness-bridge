@@ -99,7 +99,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	inc, stopIncarnation := startIncarnation(relay, incMode, client)
+	inc, stopIncarnation, err := startIncarnation(relay, incMode, client)
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer stopIncarnation()
 	if err := wirePermissionRelayWith(mcpServer, runs, client, relay, inc); err != nil {
 		log.Fatal(err)

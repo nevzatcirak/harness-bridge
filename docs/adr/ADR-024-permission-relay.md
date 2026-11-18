@@ -1202,6 +1202,11 @@ made. Everything runtime-dependent is **UNVERIFIED**.
   (case-insensitive); other event types are ignored but count as activity for the gap rule. (3) The run's own
   directory is not used: any disposal replaces the epoch. (4) Both JSON shapes `{"payload":{"type":...}}`
   and a top-level `type` are read, because the exact shape of `/global/event` was not observed.
+- **Limit of the oversized-frame rule (review #414 P3-1).** An oversized frame (over 64 KiB) is bounded and
+  ignored, and so is a frame voided by a single line over 64 KiB (a long comment line voids the frame it sits
+  in). A disposal event inside such a frame is therefore not seen. Real disposal events are tiny
+  (`server.instance.disposed` carries one directory, `global.disposed` nothing), so this is not reachable
+  with them; a hostile native is out of the boundary (A1.3(c)(v)). No code change.
 - **Tests.** Tracker (fake SSE, injected clock, `-race`): not armed before the first heartbeat, armed after it,
   hello does not arm; replaced by `server.instance.disposed` for another directory, `global.disposed` alone,
   an unknown disposed-like type, both JSON shapes; unrelated and oversized events ignored; malformed events

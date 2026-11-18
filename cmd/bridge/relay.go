@@ -44,17 +44,19 @@ func permissionIncarnationMode(env func(string) string) (string, error) {
 }
 
 // startIncarnation starts the epoch tracker when, and only when, the relay is reject_only and the incarnation
-// mode is observed. It returns the source (nil when not started) and its stop function (never nil).
-func startIncarnation(relayMode, incMode string, client *opencode.Client) (execution.NativeIncarnation, func()) {
+// mode is observed. It returns the source (nil when not started) and its stop function (never nil). A tracker
+// that cannot be built is a startup error: the Bridge never starts "without" it while observed was asked for
+// (the log must not say off when the operator set observed).
+func startIncarnation(relayMode, incMode string, client *opencode.Client) (execution.NativeIncarnation, func(), error) {
 	if relayMode != "reject_only" || incMode != "observed" {
-		return nil, func() {}
+		return nil, func() {}, nil
 	}
 	tracker, err := opencode.NewEpochTracker(opencode.EpochTrackerConfig{Open: client.GlobalEventOpener()})
 	if err != nil {
-		return nil, func() {}
+		return nil, func() {}, fmt.Errorf("BRIDGE_PERMISSION_INCARNATION=observed: the epoch tracker cannot start: %w", err)
 	}
 	tracker.Start()
-	return tracker, tracker.Stop
+	return tracker, tracker.Stop, nil
 }
 
 // wirePermissionRelay is wirePermissionRelayWith without an incarnation source (the production default).

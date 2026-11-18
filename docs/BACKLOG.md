@@ -247,3 +247,9 @@ Open items recorded here, not fixed:
 - **UNVERIFIED, needs a live OpenCode (R5b-style acceptance of A1.6):** the real `/global/event` shape and heartbeat timing, a real dispose, behaviour behind a proxy. The operator keeps `BRIDGE_PERMISSION_RELAY=off` until then (D21 Q7).
 - **Recorded decision:** an undecodable event invalidates the epoch while an oversized one is ignored (ADR-024 As built (S7), decision 1); revisit if the real stream makes either too strict.
 
+### ADR-024 A1 S7 review fixes (task #417, PR #410, 2026-11-19): items recorded
+
+- **Fixed:** #414 P2-1 (a test through `PermissionView` pins the call of `viewAcrossEpoch`, RED with the direct-call mutation), #414 P3-2 (`startIncarnation` returns the tracker error, a startup error), #414 P3-4 (the comparison is just `after != before`).
+- **Recorded, no code change (#414 P3-1):** a disposal event inside an oversized frame, or inside a frame voided by one line over 64 KiB, is not seen; not reachable with real (tiny) disposal events. See ADR-024 "As built (S7)".
+- **Maintainer design question (#414 P3-3), not changed:** the 25 s gap is reset by ANY event, not by heartbeats only (A1.3(c) says "no event ... for 25 s"). A stream that carries unrelated events but no heartbeat would keep the epoch armed. Heartbeat-only would be stricter; the decision is the maintainer's.
+
