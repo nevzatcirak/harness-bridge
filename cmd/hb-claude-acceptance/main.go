@@ -74,6 +74,11 @@ func main() {
 		lagRuns    = flag.Int("lag-runs", 5, "runs for the result-to-exit lag (1-10)")
 		candidate  = flag.Bool("candidate-mcp", false, "also add disableClaudeAiConnectors and ENABLE_CLAUDEAI_MCP_SERVERS=false (ADR-021 §8.3 finding)")
 		out        = flag.String("out", "", "evidence file (default: stdout)")
+		// The production Observer (ADR-021 §8.3; every flag optional, a missing one leaves its check
+		// unobserved and item 1 INCOMPLETE).
+		historyDir = flag.String("history-dir", "", "a DEDICATED throwaway directory for the history record of the denied runs (absolute, owned by this process, mode 0700; never BRIDGE_CLAUDE_HISTORY_DIR)")
+		canaryDir  = flag.String("canary-dir", "", "the EMPTY directory the hostile root's hook, apiKeyHelper and .mcp.json server write into (absolute; may not touch ~/.claude or ~/.config/anthropic)")
+		sinkAddr   = flag.String("sink-addr", "", "loopback IP:port of the request sink the hostile root's ANTHROPIC_BASE_URL points at (for example 127.0.0.1:18099; 127.0.0.1:0 picks a port; non-loopback addresses are refused)")
 	)
 	flag.Parse()
 	cfg := acceptance.Config{Wrapper: *wrapper, Model: *model, MaxRuns: *maxRuns, MaxTurns: *maxTurns, RunHome: *runHome, Root: *root,
@@ -88,6 +93,14 @@ func main() {
 	nums, err := acceptance.ParseItems(*items)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "items must be numbers 1-8")
+		os.Exit(2)
+	}
+	// The production Observer is assembled (and its directories and listener validated) before the -out
+	// file is created, so a refused flag leaves no file behind.
+	var runner acceptance.Runner = acceptance.ExecRunner{Wrapper: *wrapper}
+	obs, runner, err := acceptance.BuildObserver(acceptance.ObserverOptions{HistoryDir: *historyDir, CanaryDir: *canaryDir, SinkAddr: *sinkAddr, RunHome: *runHome}, runner)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "observer refused:", err)
 		os.Exit(2)
 	}
 	var w io.Writer = os.Stdout
@@ -106,20 +119,27 @@ func main() {
 		f, err := acceptance.CreateEvidenceFile(filepath.Clean(p))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cannot create the evidence file (a symlink in its path, an existing file or a missing directory is refused)")
+			_ = obs.Close()
 			os.Exit(2)
 		}
 		defer f.Close()
 		w = f
 	}
 	ev := acceptance.NewEvidence(w)
-	d, err := acceptance.New(cfg, acceptance.ExecRunner{Wrapper: *wrapper}, &acceptance.OSDecoyFS{UID: int(*runUID), GID: int(*runUID)},
+	d, err := acceptance.New(cfg, runner, &acceptance.OSDecoyFS{UID: int(*runUID), GID: int(*runUID)},
 		claudecode.OSCanaryFS{}, acceptance.ProcFS{}, ev)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "configuration refused:", err)
+		_ = obs.Close()
 		os.Exit(2)
+	}
+	if obs != nil { // a nil *ProdObserver must not become a non-nil Observer
+		d.Obs = obs
+		_ = ev.KV("observer", obs.Describe()...)
 	}
 	_ = ev.KV("driver", "started", time.Now().UTC().Format("2006-01-02T15:04:05Z"), "candidate_mcp", strconv.FormatBool(*candidate))
 	verdicts := d.RunItems(context.Background(), nums)
+	_ = obs.Close() // the sink stops and the history directory is released before the exit
 	code := 0
 	for _, v := range verdicts {
 		switch v.Result {
