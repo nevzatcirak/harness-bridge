@@ -144,6 +144,13 @@ func (s *relayStack) posts() []nativeRequest {
 // the writer, wirePermissionRelay) against a recording native server and a waiting execution.
 func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 	t.Helper()
+	return newRelayStackWith(t, mode, readOnly, nil)
+}
+
+// newRelayStackWith is newRelayStack with an incarnation source installed on the manager BEFORE the run is
+// admitted (ADR-024 A1 S7: the run records the epoch armed at admission). nil installs none.
+func newRelayStackWith(t *testing.T, mode string, readOnly bool, inc execution.NativeIncarnation) *relayStack {
+	t.Helper()
 	root := t.TempDir()
 	st := &relayStack{t: t}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +189,7 @@ func newRelayStack(t *testing.T, mode string, readOnly bool) *relayStack {
 	}
 	st.runs = runs
 	st.srv = &mcp.Server{Client: client, Runs: runs, Token: strings.Repeat("t", 32), Policy: pol, ReadOnly: readOnly}
-	if err := wirePermissionRelay(st.srv, runs, client, mode); err != nil {
+	if err := wirePermissionRelayWith(st.srv, runs, client, mode, inc); err != nil {
 		t.Fatal(err)
 	}
 	x, e := runs.Send(context.Background(), "ses_a", "prompt", "relay-key-0001")
@@ -452,12 +459,29 @@ func TestProductionWiringHasNoIncarnationEvidence(t *testing.T) {
 	}
 	st.attributableNative(root, x.MessageID)
 
-	// Control: a source WITH an epoch verifies this very request, so the fixture is attributable.
-	cli, err := opencode.New(st.nativeURL(), "", "")
+	// Control: on a stack whose run was admitted under an epoch, a source WITH that epoch verifies the same
+	// request, so the fixture is attributable (a run admitted without one can never be verified, S7).
+	ctl := newRelayStackWith(t, "reject_only", false, epochSource{})
+	cx, err := ctl.runs.Snapshot(context.Background(), ctl.execID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withEpoch, err := execution.NewOpenCodePermissionSource(cli, st.runs, execution.PermissionSourceConfig{Incarnation: epochSource{}})
+	ctlRoot := ""
+	for _, n := range ctl.native() {
+		if n.directory != "" {
+			ctlRoot = n.directory
+			break
+		}
+	}
+	if ctlRoot == "" {
+		t.Fatal("the control stack's native requests carried no session directory")
+	}
+	ctl.attributableNative(ctlRoot, cx.MessageID)
+	cli, err := opencode.New(ctl.nativeURL(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEpoch, err := execution.NewOpenCodePermissionSource(cli, ctl.runs, execution.PermissionSourceConfig{Incarnation: epochSource{}})
 	if err != nil {
 		t.Fatal(err)
 	}

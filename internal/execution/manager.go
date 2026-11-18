@@ -118,6 +118,8 @@ type run struct {
 	nextProbe                     time.Time
 	probeError                    error
 	observationValid              bool
+	// ADR-024 A1 S7: the continuity epoch armed at admission ("" = none, never verifiable).
+	submitEpoch string
 }
 type Manager struct {
 	mu   sync.Mutex
@@ -128,6 +130,7 @@ type Manager struct {
 	// execution ID, x.op or ADR-020 release can ever match it.
 	lifecycle         map[string]string
 	archiveCheck      atomic.Pointer[func(string) bool]
+	incarnation       atomic.Pointer[incarnationBox]
 	keys              map[string]string
 	fingerprints      map[string][32]byte
 	pending           map[string]chan struct{}
@@ -399,7 +402,10 @@ retry:
 		return Execution{}, false, err
 	}
 	now := time.Now().UTC()
-	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, workspace: workspace, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
+	// The epoch armed BEFORE the prompt is submitted: if the instance is replaced before the native write
+	// lands, the run carries the old epoch and stays unverifiable (A1.3(c)).
+	submitEpoch := m.admissionEpoch(ctx)
+	x := &run{native: session, runner: r, op: make(chan struct{}, 1), directory: directory, canonicalDirectory: canonical, workspace: workspace, submitEpoch: submitEpoch, view: Execution{ID: id, SessionID: "opencode:" + session, MessageID: messageID(), State: "submitting", Started: now, Updated: now}}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()

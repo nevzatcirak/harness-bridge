@@ -33,7 +33,7 @@ func authorityFixture(t *testing.T, runs ...authRun) runAuthority {
 	}
 	m.mu.Lock()
 	for _, r := range runs {
-		x := &run{native: r.session, directory: r.directory, canonicalDirectory: r.canonical, submissionAttempted: r.attempted,
+		x := &run{native: r.session, directory: r.directory, canonicalDirectory: r.canonical, submissionAttempted: r.attempted, submitEpoch: "epoch-1",
 			view: Execution{ID: r.id, SessionID: "opencode:" + r.session, MessageID: "msg_" + r.id, State: r.state}}
 		m.runs[r.id] = x
 		if r.guard {

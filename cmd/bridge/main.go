@@ -95,11 +95,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := wirePermissionRelay(mcpServer, runs, client, relay); err != nil {
+	incMode, err := permissionIncarnationMode(os.Getenv)
+	if err != nil {
 		log.Fatal(err)
 	}
-	if relay == "reject_only" {
-		log.Print("permission relay: reject_only; no native incarnation source exists, so permission requests stay unattributed and reply_permission refuses with not_verified (docs/CONTRACTS.md, ADR-024 S6)")
+	inc, stopIncarnation, err := startIncarnation(relay, incMode, client)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stopIncarnation()
+	if err := wirePermissionRelayWith(mcpServer, runs, client, relay, inc); err != nil {
+		log.Fatal(err)
+	}
+	switch {
+	case relay == "reject_only" && inc != nil:
+		log.Print("permission relay: reject_only; incarnation=observed (ADR-024 A1 S7): requests are attributed only for runs admitted under the current Bridge-observed continuity epoch, which proves continuity of observation, not native identity")
+	case relay == "reject_only":
+		log.Print("permission relay: reject_only; no native incarnation source (BRIDGE_PERMISSION_INCARNATION is off), so permission requests stay unattributed and reply_permission refuses with not_verified (docs/CONTRACTS.md, ADR-024 S6)")
+	case incMode == "observed":
+		log.Print("BRIDGE_PERMISSION_INCARNATION=observed has no effect: BRIDGE_PERMISSION_RELAY=off starts no tracker")
 	}
 	dash, err := openDashboard(os.Getenv, func() dashboard.Source { return mcpServer.DashboardSource(nil) })
 	if err != nil {

@@ -253,3 +253,14 @@ Open items recorded here, not fixed:
 - **Fixed here:** #412 P1-1 / #413 P1-1 (the production runner rejected every item 1 probe argv: `Invocation.ProbeRunHome` and `ValidateProbeArgv` in `ExecRunner`), #413 P2-1 / #412 P3-1 (glued flag forms), #412 P2-1 (a PASS needs every probe refused by the rule: `probe_not_rule_denied_<class>`), #412 P3-2 (the pre-flight checks `-run-home`).
 - **#412 P3-3, recorded, not changed:** the `scope` and `other` error texts `DenialClass` matches are UNVERIFIED against the real CLI (an unknown real scope wording reads as `other`, which is INCOMPLETE, never PASS); and the driver and the history tap key on the label prefix `canary_` / `canary_denied` (a string coupling: a renamed label would silently skip the history tap or the evidence class). A typed field on `Invocation` for the run's role would remove the coupling; not done here.
 - **Still UNVERIFIED (needs the live run 2):** that `--add-dir <run home>` is honoured under `-p --permission-mode default --permission-prompts none`, that the deny rule still wins inside the granted scope, and whether a control read succeeds in a fresh session. The fix makes item 1 able to run; it does not show that it will pass.
+### ADR-024 A1 S7 continuity-epoch source (task #408, 2026-11-18): items recorded
+
+- **Done by this change:** the incarnation source of A1 (option (c)) behind `BRIDGE_PERMISSION_INCARNATION=observed`, off by default; the older entry "Native incarnation evidence is missing, so a deployed Bridge still cannot verify or answer a request" is superseded for `observed` and still true for the default. See ADR-024 "As built (S7)".
+- **UNVERIFIED, needs a live OpenCode (R5b-style acceptance of A1.6):** the real `/global/event` shape and heartbeat timing, a real dispose, behaviour behind a proxy. The operator keeps `BRIDGE_PERMISSION_RELAY=off` until then (D21 Q7).
+- **Recorded decision:** an undecodable event invalidates the epoch while an oversized one is ignored (ADR-024 As built (S7), decision 1); revisit if the real stream makes either too strict.
+
+### ADR-024 A1 S7 review fixes (task #417, PR #410, 2026-11-19): items recorded
+
+- **Fixed:** #414 P2-1 (a test through `PermissionView` pins the call of `viewAcrossEpoch`, RED with the direct-call mutation), #414 P3-2 (`startIncarnation` returns the tracker error, a startup error), #414 P3-4 (the comparison is just `after != before`).
+- **Recorded, no code change (#414 P3-1):** a disposal event inside an oversized frame, or inside a frame voided by one line over 64 KiB, is not seen; not reachable with real (tiny) disposal events. See ADR-024 "As built (S7)".
+- **Maintainer design question (#414 P3-3), not changed:** the 25 s gap is reset by ANY event, not by heartbeats only (A1.3(c) says "no event ... for 25 s"). A stream that carries unrelated events but no heartbeat would keep the epoch armed. Heartbeat-only would be stricter; the decision is the maintainer's.

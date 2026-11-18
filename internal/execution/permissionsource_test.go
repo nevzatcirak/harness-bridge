@@ -160,6 +160,9 @@ func newSourceFixture(t *testing.T, cfg PermissionSourceConfig) *sourceFixture {
 	}
 	f := &fake{status: "idle"}
 	m := setup(t, f)
+	if cfg.Incarnation != nil {
+		m.SetIncarnation(cfg.Incarnation) // as the production wiring does, before any run is admitted (S7)
+	}
 	x, e := m.Send(context.Background(), srcSession, "prompt", "perm-key-0001")
 	if e != nil {
 		t.Fatal(e)

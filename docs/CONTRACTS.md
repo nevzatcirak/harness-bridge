@@ -995,14 +995,28 @@ the decision is D12 exception (b), the policy mode is D15 Q1 (off).
   session guard (a session nobody runs has no scope), and the executions (execution ID, the
   Bridge-chosen user message ID, submission attempted) from the manager's submitted runs of that
   session. No value comes from a native payload or from model text.
-- **Native incarnation evidence is the one input that does not exist yet.** The observer verifies a
-  request only when the scope carries a native epoch, and `docs/P2_PERM_CORE_02_OBSERVATION.md` forbids
-  fabricating one. The production source therefore has none: on a deployed Bridge every request stays
-  `unattributed`, `pending_permission` is count-only (`pending_permission_count`) and
-  `reply_permission` refuses with `FORBIDDEN`/`not_verified`, with no native write and no attempt
-  line. The seam for such evidence is `execution.NativeIncarnation`
-  (`PermissionSourceConfig.Incarnation`); it is nil in production. Tests supply an epoch to exercise
-  the verified path against a fake native.
+- **Native incarnation evidence (ADR-024 A1 S7, D21): off by default.** The observer verifies a request
+  only when the scope carries an epoch, and `docs/P2_PERM_CORE_02_OBSERVATION.md` forbids fabricating
+  one. `BRIDGE_PERMISSION_INCARNATION` (`off`, the default and when unset; `observed`; anything else is a
+  startup error) decides. With `off`, or with `BRIDGE_PERMISSION_RELAY=off`, there is no source: on a
+  deployed Bridge every request stays `unattributed`, `pending_permission` is count-only
+  (`pending_permission_count`) and `reply_permission` refuses with `FORBIDDEN`/`not_verified`, with no
+  native write and no attempt line. With `observed` (and `reject_only`) the Bridge subscribes once to
+  OpenCode's `GET /global/event` and keeps a **Bridge-observed continuity epoch**: a random 128-bit token
+  it generates itself, replaced at every (re)connection, on any `server.instance.disposed`, on
+  `global.disposed` (and on any event type containing "dispos"), on stream end or error, on an event it
+  cannot decode and when no event has been seen for 25 s; it is **armed** only after the first
+  `server.heartbeat` of a connection (the hello does not arm). A run records the epoch armed when it was
+  admitted; the scope carries an epoch only while it is armed and equal to the run's, and a view that ends
+  under another epoch attributes nothing (`unattributed`, reason `epoch_changed`). So a run admitted
+  before a dispose, a reload, a reconnect or a gap, or while the epoch was not armed, can never be
+  verified (the human answers natively). The epoch is **continuity of observation, not native identity**
+  (D21 Q1) and only ADDS a condition: every check of ADR-024 4.2 and ADR-018 section 5 still has to hold,
+  replies stay reject-only, `allow_once` stays refused with zero native calls. Windows that remain:
+  event latency (milliseconds) and a silent drop (up to about 25 s) between a native replacement and the
+  Bridge noticing it. The seam is unchanged: `execution.NativeIncarnation`
+  (`PermissionSourceConfig.Incarnation` and `Manager.SetIncarnation`, installed together by
+  `cmd/bridge`); an unarmed source returns `("", nil)`. Not run against a live OpenCode (UNVERIFIED).
 - **`pending_permission`** (on `get_execution_status` and `get_execution_result`, only while the state
   is `waiting_for_permission`, only for the one request verified for **this** execution):
   `{permission_id, call_id, message_id, tool, kind, pattern_count, scope_digest, attribution:
