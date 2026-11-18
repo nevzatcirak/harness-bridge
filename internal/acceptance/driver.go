@@ -179,7 +179,12 @@ func newUUID(r io.Reader) (string, error) {
 // argv returns the pinned ADR-021 argv for the session. bootstrap creates the session
 // (--session-id) instead of resuming it.
 func (d *Driver) argv(bootstrap bool, mut func(settings map[string]any)) ([]string, error) {
-	args, err := claudecode.BuildArgv(claudecode.ArgvConfig{UUID: d.uuid, Model: d.Cfg.Model, MaxTurns: d.Cfg.MaxTurns, Root: d.Cfg.Root, Tools: d.tools()})
+	return d.argvUUID(d.uuid, bootstrap, mut)
+}
+
+// argvUUID is argv for an explicit session uuid.
+func (d *Driver) argvUUID(uuid string, bootstrap bool, mut func(settings map[string]any)) ([]string, error) {
+	args, err := claudecode.BuildArgv(claudecode.ArgvConfig{UUID: uuid, Model: d.Cfg.Model, MaxTurns: d.Cfg.MaxTurns, Root: d.Cfg.Root, Tools: d.tools()})
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +216,19 @@ func (d *Driver) argv(bootstrap bool, mut func(settings map[string]any)) ([]stri
 	return args, ValidateArgv(args)
 }
 
+// probeArgv is the argv of one item 1 probe or control run (R6 run 1, #409): a NEW session of its own
+// (--session-id, never --resume of the bootstrap or of another run, so no run sees another run's refusals)
+// and the one readable scope probe and control share (--add-dir <run home>), so that the deny rule is the
+// only difference between a probe and its control. The production adapter argv is unchanged.
+func (d *Driver) probeArgv(uuid string) ([]string, error) {
+	args, err := d.argvUUID(uuid, true, nil)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--add-dir", d.Cfg.RunHome) // last: --add-dir takes a list, nothing may follow it
+	return args, ValidateProbeArgv(args, d.Cfg.RunHome)
+}
+
 func (d *Driver) env() []string {
 	if d.Cfg.Candidate {
 		return []string{"ENABLE_CLAUDEAI_MCP_SERVERS=false"}
@@ -220,11 +238,17 @@ func (d *Driver) env() []string {
 
 // run takes one unit of budget and runs one invocation, writing one event-types line.
 func (d *Driver) run(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn string) (Result, StreamInfo, error) {
+	return d.runInv(ctx, label, args, stdin, steps, closeOn, "")
+}
+
+// runInv is run with the probe run home of an item 1 probe or control run (probeHome empty for every other
+// run): the production runner then validates the argv with ValidateProbeArgv instead of ValidateArgv.
+func (d *Driver) runInv(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn, probeHome string) (Result, StreamInfo, error) {
 	if err := d.budget.Take(); err != nil {
 		_ = d.Out.KV("budget", "state", "breached", "runs", strconv.Itoa(d.budget.Used()))
 		return Result{}, StreamInfo{}, err
 	}
-	res, err := d.Runner.Run(ctx, Invocation{Label: label, Args: args, Stdin: stdin, Dir: "", Env: d.env(), Timeout: d.Cfg.RunTimeout, Signals: steps, CloseReaderOn: closeOn})
+	res, err := d.Runner.Run(ctx, Invocation{Label: label, Args: args, Stdin: stdin, Dir: "", Env: d.env(), Timeout: d.Cfg.RunTimeout, Signals: steps, CloseReaderOn: closeOn, ProbeRunHome: probeHome})
 	if err != nil {
 		_ = d.Out.KV("run", "label", label, "n", strconv.Itoa(d.budget.Used()), "error", "runner")
 		return res, StreamInfo{}, err
@@ -394,23 +418,39 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 		return v
 	}
 	_ = d.Out.KV("canary", "preflight", "pass")
-	if err := d.ensureSession(ctx); err != nil {
-		v.Why = "bootstrap_failed"
-		return v
-	}
-	args, err := d.argv(false, nil)
-	if err != nil {
-		v.Why = "argv_refused"
-		return v
-	}
+	// R6 run 1 (#409): item 1 needs no bootstrap. Every probe and every control run creates and uses its own
+	// throwaway session, so no run resumes (and sees the refusals of) another one.
 	var denied, control []byte
 	mcpOK := true
-	runProbes := func(label string, probes []claudecode.Probe) ([]byte, bool) {
+	argvOK := true
+	controlDefect := "" // the worst denial class of a control that did not read its decoy
+	probeDefect := ""   // the worst class of a probe that was not refused by the deny rule (scope, other, declined)
+	runProbes := func(label, kind string, probes []claudecode.Probe) ([]byte, bool) {
 		var all []byte
 		for _, pr := range probes {
-			res, info, err := d.run(ctx, label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), args, claudecode.Prompt(pr), nil, "")
+			uuid, err := newUUID(d.Rand)
 			if err != nil {
 				return all, false
+			}
+			args, err := d.probeArgv(uuid)
+			if err != nil {
+				argvOK = false
+				return all, false
+			}
+			res, info, err := d.runInv(ctx, label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), args, claudecode.Prompt(pr), nil, "", d.Cfg.RunHome)
+			if err != nil {
+				return all, false
+			}
+			class := claudecode.DenialClass(res.Stdout, pr)
+			_ = d.Out.KV("canary_run", "label", label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), "kind", kind, "probe", pr.ID, "tool_uses", strconv.Itoa(info.ToolUses), "denial_class", class)
+			if kind == "control" && class != claudecode.DenialNone && worseDefect(class, controlDefect) {
+				controlDefect = class
+			}
+			// #412 P2-1: a PASS needs every probe refused BY THE RULE. A probe refused for scope, for another
+			// error, or declined is no evidence about the rule (class none keeps its old way: a read that
+			// shows the marker is a security FAIL, an undenied read that shows nothing is inconclusive).
+			if kind == "probe" && class != claudecode.DenialRule && class != claudecode.DenialNone && worseDefect(class, probeDefect) {
+				probeDefect = class
 			}
 			all = append(all, res.Stdout...)
 			if !info.InitSeen || !info.MCPKnown || info.MCPServers != 0 || info.APIKeySource != "none" {
@@ -420,12 +460,18 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 		return all, true
 	}
 	var ok bool
-	if denied, ok = runProbes("canary_denied", claudecode.Probes(cp.plan)); !ok {
+	if denied, ok = runProbes("canary_denied", "probe", claudecode.Probes(cp.plan)); !ok {
 		v.Why = "run_stopped"
+		if !argvOK {
+			v.Why = "argv_refused"
+		}
 		return v
 	}
-	if control, ok = runProbes("canary_control", claudecode.ControlProbes(cp.plan)); !ok {
+	if control, ok = runProbes("canary_control", "control", claudecode.ControlProbes(cp.plan)); !ok {
 		v.Why = "run_stopped"
+		if !argvOK {
+			v.Why = "argv_refused"
+		}
 		return v
 	}
 	deniedRun, obs := d.observe(ctx, claudecode.CanaryRun{NDJSON: denied})
@@ -435,9 +481,19 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 	}
 	_ = d.Out.KV("canary", "inits_ok", strconv.FormatBool(mcpOK), "history_observed", strconv.FormatBool(obs.History),
 		"sink_observed", strconv.FormatBool(obs.Sink), "file_canaries_observed", strconv.FormatBool(obs.FileCanaries))
+	// A security check that failed is a FAIL and is never hidden behind a harness defect. A control that did
+	// not read its decoy because it was refused (by the rule or for scope), declined or got no result is a
+	// harness defect: INCOMPLETE (exit 3), never a FAIL of the product.
+	securityFail := !rep.InitOK || !rep.NoDecoyLeak || !rep.NoFileCanary || !rep.NoSinkRequest
 	switch {
 	case !mcpOK:
 		v.Why = "mcp_servers_not_empty_or_api_key_source"
+	case securityFail:
+		v.Why = "canary_failed"
+	case controlDefect != "":
+		v.Result, v.Why = Incomplete, "control_refused_"+controlDefect
+	case probeDefect != "":
+		v.Result, v.Why = Incomplete, "probe_not_rule_denied_"+probeDefect
 	case !rep.Pass:
 		v.Why = "canary_failed"
 	case !obs.Complete():
@@ -446,6 +502,13 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 		v.Result, v.Why = Pass, "all_probes_denied_controls_read"
 	}
 	return v
+}
+
+// worseDefect reports whether control denial class c is a worse harness defect than cur (rule, scope, other,
+// declined; "" is none yet).
+func worseDefect(c, cur string) bool {
+	rank := map[string]int{"": 0, claudecode.DenialDeclined: 1, claudecode.DenialOther: 2, claudecode.DenialScope: 3, claudecode.DenialRule: 4}
+	return rank[c] > rank[cur]
 }
 
 // observe fills the denied run's non-stream inputs from the Observer. What is not observed stays
