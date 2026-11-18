@@ -75,10 +75,30 @@ func waitFSIdle(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for fsInFlight() != 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d bounded filesystem calls still in flight", fsInFlight())
+			t.Fatalf("%d bounded filesystem calls still in flight (%s)", fsInFlight(), inFlightOps())
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// inFlightOps names the operations of the bounded calls that are still running, from the goroutine
+// dump: the test seam gives the count only, and the path is not in a stack (review #401 P3-4).
+func inFlightOps() string {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	ops := map[string]int{}
+	for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+		switch {
+		case strings.Contains(g, "execution.evalSymlinksKey"):
+			ops["evalsymlinks"]++
+		case strings.Contains(g, "execution.statKey"):
+			ops["stat"]++
+		}
+	}
+	if len(ops) == 0 {
+		return "no evalsymlinks or stat goroutine found in the dump"
+	}
+	return fmt.Sprintf("goroutines inside evalsymlinks/stat: %v", ops)
 }
 
 // within runs fn and fails if it does not return within d.
@@ -265,11 +285,14 @@ func TestInterruptFSTimeoutSendsNoAbort(t *testing.T) {
 func interruptBlocksTheIdentityCheck(t *testing.T, f *fake, m *Manager, x Execution) {
 	t.Helper()
 	waitFSIdle(t)
-	before, _ := m.Snapshot(context.Background(), x.ID)
+	before, err := m.Snapshot(context.Background(), x.ID)
+	if err != nil {
+		t.Fatalf("snapshot before the interrupt: %v", err)
+	}
 	g := blockFS(t, func(op, _ string, nth int32) bool { return op == "evalsymlinks" && nth == 3 })
-	var err error
-	within(t, 2*fsBound, "interrupt", func() { _, err = m.Interrupt(context.Background(), x.ID) })
-	wantTimeout(t, err, "interrupt")
+	var ierr error
+	within(t, 2*fsBound, "interrupt", func() { _, ierr = m.Interrupt(context.Background(), x.ID) })
+	wantTimeout(t, ierr, "interrupt")
 	f.mu.Lock()
 	aborts := f.aborts
 	f.mu.Unlock()
@@ -279,7 +302,10 @@ func interruptBlocksTheIdentityCheck(t *testing.T, f *fake, m *Manager, x Execut
 	if n := g.n("evalsymlinks"); n != 3 {
 		t.Fatalf("the hook saw %d executed evalsymlinks calls, want the 3 checks of Interrupt (V6, V7, V3)", n)
 	}
-	v, _ := m.Snapshot(context.Background(), x.ID)
+	v, err := m.Snapshot(context.Background(), x.ID)
+	if err != nil {
+		t.Fatalf("snapshot after the interrupt: %v", err)
+	}
 	if terminal(v.State) || !fsGuardHeld(m) {
 		t.Fatalf("interrupt timeout changed state or released the guard: %+v held=%v", v, fsGuardHeld(m))
 	}

@@ -963,7 +963,7 @@ value) and replaces it whenever continuity of observation may have been lost:
      covers the case where `disposeAll` fails and the swallow option still emits `global.disposed`,
      `global-lifecycle.ts:20-23`);
   3. on stream end or error, and when no event (heartbeats arrive every 10 s,
-     `handlers/global.ts:35-37`) has been seen for 25 s (a gap rule; the value is a proposal).
+     `handlers/global.ts:35-37`) has been seen for 25 s (a gap rule; the 25 s value is decided, D21 Q5).
 The epoch is **armed** only after the first heartbeat of a connection. The heartbeat is
 `Stream.tick("10 seconds")` with `Stream.drop(1)` (`handlers/global.ts:35-37`), so the expected arming
 delay after every (re)connection, including Bridge start, is **at least one heartbeat interval (about 10
@@ -994,7 +994,7 @@ and after its `Snapshot` and refuses attribution when they differ.
   as in ADR-020. (vi) It costs one authenticated long-lived connection.
 - *What it is:* **evidence of continuity of observation**, not a native identity. It meets the purpose of
   the epoch (T-I), but not the literal wording "independent native incarnation evidence"; whether that is
-  acceptable is question Q1. **If Q1 is accepted**, the as-built wording must be reworded to "continuity
+  acceptable was question Q1, decided yes (D21 Q1). **As decided**, the as-built wording must be reworded to "continuity
   of observation" in two places, which this amendment deliberately does **not** change now: the doc
   comment of `NativeIncarnation` (`permissionsource.go:33-37`, "changes when the native process that
   holds the pending requests is replaced") and `docs/P2_PERM_CORE_02_OBSERVATION.md` (about `:60-68`,
@@ -1039,7 +1039,7 @@ not pinned and verified in the same view. Precisely:
   appeared is never verified, even later: for example the first permission of a fresh assistant message.
   The relay then answers `not_verified` for such requests and works only for requests of messages the
   Bridge read earlier (for example a later tool call of an already-pinned message). This can make the
-  relay refuse most first-asks; that is fail-closed and inside D15, and it is the main input for Q6.
+  relay refuse most first-asks; that is fail-closed and inside D15, and it was the main input for Q6, which is decided: the pin (e) is deferred (D21 Q6).
 - **Residual, stated.** (e) narrows (c) but does not remove (i) or (iv): a message created in a stale-epoch
   window and pinned by a reconciliation read inside that same window **before the request appears**
   (milliseconds for (i), up to about 25 s for (iv), for instance when a long tool call precedes the
@@ -1123,12 +1123,12 @@ M need the maintainer.
 
 - **Q1 — decided: yes.** A Bridge-observed continuity epoch (c) is the meaning of "native
   incarnation" for ADR-018 section 5; it proves continuity of observation, not native identity. State
-  that limit explicitly in the implementation and the evidence.
+  this limit explicitly.
 - **Q2 — decided: off in the first slice.** Flipping the mode is a later decision after the live
   acceptance.
 - **Q3 — decided: (b) stays a later optional hardening**, not required now.
 - **Q4 — decided: one global `/event` subscription.**
-- **Q5 — decided: the 25 s heartbeat-gap threshold and the backoff bounds as proposed in A1.4/A1.5.**
+- **Q5 — decided: the 25 s heartbeat-gap threshold and the backoff bounds as proposed in A1.3 (the gap rule) and A1.5 (the backoff).**
 - **Q6 — decided: defer the assistant-message pin (e); it is not in S7.**
 - **Q7 — decided: until S7 is accepted and exercised live, the runbook tells the operator to run with
   `BRIDGE_PERMISSION_RELAY=off`.**

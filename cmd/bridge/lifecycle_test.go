@@ -335,6 +335,9 @@ var _ = mcp.CatalogConfig{}
 //   - nothing listens (ListenAndServe, ListenAndServeTLS, Serve, Listen) before the wiring is opened.
 //
 // mainLifecycleProblems returns what is wrong with the source of main.go, nothing when it is right.
+// listenerNames are the selector names that start serving: a call to one before the wiring is a problem.
+var listenerNames = map[string]bool{"ListenAndServe": true, "ListenAndServeTLS": true, "Serve": true, "ServeTLS": true, "Listen": true, "ListenPacket": true}
+
 func mainLifecycleProblems(src string) []string {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "main.go", src, 0)
@@ -486,8 +489,11 @@ func mainLifecycleProblems(src string) []string {
 		if !ok {
 			return true
 		}
-		switch n := callName(c); n {
-		case ".ListenAndServe", ".ListenAndServeTLS", ".Serve", ".Listen", "net.Listen", "http.ListenAndServe", "http.ListenAndServeTLS":
+		// Any method or function with a listener's name, whatever its receiver: srv.ListenAndServe(),
+		// srv.Serve(ln), http.ListenAndServe(...), net.Listen(...), x.Listen() (callName returns
+		// "srv.ListenAndServe" for a plain-identifier receiver, so the bare selector name is what counts).
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok && listenerNames[sel.Sel.Name] {
+			n := callName(c)
 			if p := offset(c); p < open {
 				problems = append(problems, "a listener ("+n+") is opened before the lifecycle wiring")
 			} else if p < apply {
@@ -516,6 +522,9 @@ func TestMainOpensAppliesAndAnnouncesTheLifecycle(t *testing.T) {
 		{"the wiring is never applied", "lc.apply(mcpServer, runs)\n", "\n"},
 		{"the wiring is not announced", "log.Print(lc.summary(cfg.readOnly))", "log.Print(\"lifecycle\")"},
 		{"a listener opens first", "func main() {\n", "func main() {\n\tgo http.ListenAndServe(\"127.0.0.1:0\", nil)\n"},
+		{"a server listens first (receiver-qualified ListenAndServe)", "func main() {\n", "func main() {\n\tgo srv.ListenAndServe()\n"},
+		{"a server serves first (receiver-qualified Serve)", "func main() {\n", "func main() {\n\tgo srv.Serve(nil)\n"},
+		{"a listener is created first (receiver-qualified Listen)", "func main() {\n", "func main() {\n\tln, _ := lc0.Listen()\n\t_ = ln\n"},
 	} {
 		if strings.Count(src, m.old) != 1 {
 			t.Fatalf("mutation %q: the text it replaces occurs %d times in main.go; update the pin", m.name, strings.Count(src, m.old))

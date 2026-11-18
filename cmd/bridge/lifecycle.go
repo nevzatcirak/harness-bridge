@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nevzatcirak/harness-bridge/internal/execution"
@@ -55,6 +56,8 @@ type lifecycleWiring struct {
 	// The archive poller of a process that is not the lock holder (nil when none runs).
 	stop chan struct{}
 	done chan struct{}
+
+	closeOnce sync.Once
 }
 
 // openLifecycle resolves the configuration before any listener is opened. uid is the service user.
@@ -116,19 +119,22 @@ func openLifecycle(env func(string) string, uid int, readOnly bool) (*lifecycleW
 	return w, nil
 }
 
-// Close stops the archive poller and releases the overlay. It is safe on a nil wiring and idempotent.
+// Close stops the archive poller and releases the overlay. It is safe on a nil wiring, for concurrent
+// callers and idempotent: the first call does the work, every other call returns once it is done (a
+// sync.Once blocks the later callers until the first one finished).
 func (w *lifecycleWiring) Close() {
 	if w == nil {
 		return
 	}
-	if w.stop != nil {
-		close(w.stop)
-		w.stop = nil
-		<-w.done // done stays set, closed, so a caller can see the poller has stopped
-	}
-	if w.store != nil {
-		w.store.Close()
-	}
+	w.closeOnce.Do(func() {
+		if w.stop != nil {
+			close(w.stop)
+			<-w.done // done stays set, closed, so a caller can see the poller has stopped
+		}
+		if w.store != nil {
+			w.store.Close()
+		}
+	})
 }
 
 // apply sets the lifecycle configuration on the one mcp.Server. It is safe on a nil wiring (nothing

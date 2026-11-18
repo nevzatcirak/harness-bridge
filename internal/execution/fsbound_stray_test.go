@@ -104,3 +104,23 @@ func TestInterruptFSTimeoutWithAStrayCallStillBlocksTheIdentityCheck(t *testing.
 	time.AfterFunc(strayHold, release)
 	interruptBlocksTheIdentityCheck(t, f, m, x)
 }
+
+// waitFSIdle's failure names the operation of the call that is still running (review #401 P3-4).
+func TestInFlightOpsNamesTheBlockedOperation(t *testing.T) {
+	if got := inFlightOps(); !strings.Contains(got, "no evalsymlinks or stat goroutine") {
+		t.Fatalf("with nothing in flight: %q", got)
+	}
+	release := startStray(t)
+	defer release()
+	// the stray's caller goroutine is parked inside the bounded group, in evalSymlinksKey
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := inFlightOps(); strings.Contains(got, "evalsymlinks:") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the blocked call is not named: %q", inFlightOps())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
