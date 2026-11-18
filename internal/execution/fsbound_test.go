@@ -250,9 +250,23 @@ func monitorEnded(t *testing.T) (*fake, *Manager, Execution) {
 
 func TestInterruptFSTimeoutSendsNoAbort(t *testing.T) {
 	f, m, x := monitorEnded(t)
-	// Interrupt first probes (V6 and V7: two EvalSymlinks), then re-checks the
-	// identity immediately before Abort (V3: the third EvalSymlinks).
-	blockFS(t, func(op, _ string, nth int32) bool { return op == "evalsymlinks" && nth == 3 })
+	interruptBlocksTheIdentityCheck(t, f, m, x)
+}
+
+// interruptBlocksTheIdentityCheck blocks the identity check Interrupt makes right before Abort (V3) and
+// asserts the fail-closed outcome: a retryable UPSTREAM_TIMEOUT, no Abort, state and guard unchanged.
+//
+// Interrupt first probes (V6 and V7: two EvalSymlinks), then re-checks the identity immediately before
+// Abort (V3: the third). The hook counts EXECUTED calls, and a bounded call with the same key (V6 and V3
+// share one) that is already in flight is joined, not executed again. The monitor's last probe can be
+// abandoned at its deadline while its call is still running; V6 would then join that call, the count would
+// be one short and V3 would be the second executed call, never blocked (main ead39fd, #394/#395). So the
+// hook is installed only when no bounded call is in flight, and the count is asserted at the end.
+func interruptBlocksTheIdentityCheck(t *testing.T, f *fake, m *Manager, x Execution) {
+	t.Helper()
+	waitFSIdle(t)
+	before, _ := m.Snapshot(context.Background(), x.ID)
+	g := blockFS(t, func(op, _ string, nth int32) bool { return op == "evalsymlinks" && nth == 3 })
 	var err error
 	within(t, 2*fsBound, "interrupt", func() { _, err = m.Interrupt(context.Background(), x.ID) })
 	wantTimeout(t, err, "interrupt")
@@ -262,9 +276,16 @@ func TestInterruptFSTimeoutSendsNoAbort(t *testing.T) {
 	if aborts != 0 {
 		t.Fatalf("Abort sent %d times without a completed identity check", aborts)
 	}
+	if n := g.n("evalsymlinks"); n != 3 {
+		t.Fatalf("the hook saw %d executed evalsymlinks calls, want the 3 checks of Interrupt (V6, V7, V3)", n)
+	}
 	v, _ := m.Snapshot(context.Background(), x.ID)
 	if terminal(v.State) || !fsGuardHeld(m) {
 		t.Fatalf("interrupt timeout changed state or released the guard: %+v held=%v", v, fsGuardHeld(m))
+	}
+	// The state and the unresolved reason are the ones before the call: a refused interruption records nothing.
+	if v.State != before.State || (before.Unresolved == nil) != (v.Unresolved == nil) || (v.Unresolved != nil && v.Unresolved.Reason != before.Unresolved.Reason) {
+		t.Fatalf("interrupt timeout changed the recorded state: before %s/%+v, after %s/%+v", before.State, before.Unresolved, v.State, v.Unresolved)
 	}
 }
 

@@ -4,6 +4,7 @@ package acceptance
 
 import (
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -83,6 +84,7 @@ func TestSeamsAreNeverSetByProductionCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
+	var files []*ast.File
 	for _, e := range ents {
 		n := e.Name()
 		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
@@ -92,8 +94,12 @@ func TestSeamsAreNeverSetByProductionCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		files = append(files, f)
 		for _, v := range seamViolations(f) {
 			t.Errorf("%s: %s", n, v)
 		}
+	}
+	for _, v := range literalViolations(fset, files) {
+		t.Errorf("package: %s", v)
 	}
 }
