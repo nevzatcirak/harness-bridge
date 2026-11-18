@@ -165,7 +165,39 @@ type sim struct {
 	lag       time.Duration
 	trailing  string
 	blind     bool // a read outside the deny paths returns nothing
+	// R6 run 1 (#409). Both are opt-in so the older tests keep their meaning.
+	scope           bool            // a target outside the run's cwd (tRoot) and outside every --add-dir is refused for a SCOPE reason (not the deny rule)
+	resumeDeclines  bool            // a resumed session that already saw a refusal declines to call the tool (D2)
+	refused         map[string]bool // session uuid -> a refusal was seen in it
+	ruleAll         bool            // the deny rule also covers every other target (a rule that wrongly covers the controls)
+	declineControls bool            // the model makes no tool_use for a control (a target under canary-control)
+	declineProbes   bool            // the model makes no tool_use for a probe (a target under a denied directory)
 }
+
+// sessionOf returns the session uuid of an argv and whether it resumes it (--resume) or creates it (--session-id).
+func sessionOf(args []string) (uuid string, resume bool) {
+	for i, a := range args {
+		if (a == "--resume" || a == "--session-id") && i+1 < len(args) {
+			return args[i+1], a == "--resume"
+		}
+	}
+	return "", false
+}
+
+// addDirOf returns the value of --add-dir, if any.
+func addDirOf(args []string) string {
+	for i, a := range args {
+		if a == "--add-dir" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+const (
+	textRuleDenied  = "File is in a directory that is denied by your permission settings."
+	textScopeDenied = "Claude requested permissions to read from the target, but you haven't granted it yet."
+)
 
 func underDeny(p string) bool {
 	for _, d := range []string{tHome + "/.claude", tHome + "/.config/anthropic"} {
@@ -184,6 +216,10 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 	if s.failAfter > 0 && n >= s.failAfter {
 		return Result{}, errors.New("boom")
 	}
+	uuid, resumed := sessionOf(inv.Args)
+	if s.refused == nil {
+		s.refused = map[string]bool{}
+	}
 	tid := "toolu_" + strconv.Itoa(n)
 	var out strings.Builder
 	out.WriteString(initLine(s.mcp))
@@ -196,6 +232,15 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 	} else if m := globRe.FindStringSubmatch(inv.Stdin); m != nil {
 		tool, pat, target = "Glob", m[1], path.Dir(m[1])
 	}
+	if tool != "" && s.declineControls && strings.Contains(target, "/canary-control") {
+		tool = ""
+	}
+	if tool != "" && s.declineProbes && underDeny(target) {
+		tool = ""
+	}
+	if tool != "" && s.resumeDeclines && resumed && s.refused[uuid] {
+		tool = "" // the model cites the earlier refusal and does not call the tool
+	}
 	if tool != "" {
 		in := map[string]any{}
 		switch tool {
@@ -207,8 +252,21 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 			in["pattern"] = pat
 		}
 		out.WriteString(ev(map[string]any{"type": "assistant", "session_id": "s", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": tid, "name": tool, "input": in}}}}))
-		if s.denied != nil && s.denied(target) && underDeny(target) {
+		refuse := func(text string) {
+			s.refused[uuid] = true
 			deniedList = append(deniedList, map[string]any{"tool_name": tool, "tool_use_id": tid, "tool_input": in})
+			out.WriteString(ev(map[string]any{"type": "user", "session_id": "s", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": tid, "is_error": true, "content": text}}}}))
+		}
+		outOfScope := false
+		if s.scope {
+			ad := addDirOf(inv.Args)
+			covered := target == tRoot || strings.HasPrefix(target, tRoot+"/") || (ad != "" && (target == ad || strings.HasPrefix(target, ad+"/")))
+			outOfScope = !covered
+		}
+		if s.ruleAll || (s.denied != nil && s.denied(target) && underDeny(target)) {
+			refuse(textRuleDenied)
+		} else if outOfScope {
+			refuse(textScopeDenied)
 		} else {
 			content := ""
 			if s.blind {
@@ -301,9 +359,9 @@ func TestCanaryMatrix(t *testing.T) {
 		minRuns  int
 		maxCalls int
 	}{
-		{"deny works, controls read, no mcp", &sim{}, Pass, "all_probes_denied", nil, 13, 13},
-		{"deny does NOT work (the marker is shown)", &sim{denied: func(string) bool { return false }}, Fail, "canary_failed", nil, 13, 13},
-		{"31 mcp servers in init", &sim{mcp: 31}, Fail, "mcp_servers", nil, 13, 13},
+		{"deny works, controls read, no mcp", &sim{}, Pass, "all_probes_denied", nil, 12, 12},
+		{"deny does NOT work (the marker is shown)", &sim{denied: func(string) bool { return false }}, Fail, "canary_failed", nil, 12, 12},
+		{"31 mcp servers in init", &sim{mcp: 31}, Fail, "mcp_servers", nil, 12, 12},
 	}
 	for _, c := range cases {
 		d, buf, fsys := newTestDriver(t, c.sim)
@@ -313,7 +371,7 @@ func TestCanaryMatrix(t *testing.T) {
 			t.Errorf("%s: verdict %+v\n%s", c.name, v, buf.String())
 		}
 		if d.Runs() != c.minRuns {
-			t.Errorf("%s: %d runs, want %d (1 bootstrap + 6 denied + 6 control)", c.name, d.Runs(), c.minRuns)
+			t.Errorf("%s: %d runs, want %d (6 denied + 6 control, each in its own session)", c.name, d.Runs(), c.minRuns)
 		}
 		if !fsys.dirGone || len(fsys.content) != 0 {
 			t.Errorf("%s: decoys left behind: %v", c.name, fsys.content)
@@ -370,7 +428,13 @@ func TestNeverTouchesTheRealLoginAndNeverRunsBare(t *testing.T) {
 		}
 	}
 	for _, inv := range s.runs {
-		if err := ValidateArgv(inv.Args); err != nil {
+		// Item 1's probe and control runs carry the one extra readable scope (R6 run 1); every other run
+		// must pass the generic check, which refuses --add-dir.
+		if strings.HasPrefix(inv.Label, "canary_") {
+			if err := ValidateProbeArgv(inv.Args, tHome); err != nil {
+				t.Fatalf("%v: %v", inv.Label, err)
+			}
+		} else if err := ValidateArgv(inv.Args); err != nil {
 			t.Fatalf("%v: %v", inv.Label, err)
 		}
 		for _, a := range inv.Args {

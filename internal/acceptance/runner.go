@@ -38,6 +38,11 @@ type Invocation struct {
 	// CloseReaderOn closes the parent's read end of the child's stdout right after an event of
 	// this kind (the SIGPIPE test: the reader dies, the child must end). Empty: never.
 	CloseReaderOn string
+	// ProbeRunHome is set only on an item 1 probe or control run (R6 run 1 fix, #416): the run home the
+	// trailing `--add-dir <run home>` of its argv must name. ExecRunner then validates the argv with
+	// ValidateProbeArgv; every other run (ProbeRunHome empty) goes through the generic ValidateArgv, which
+	// refuses --add-dir, so the extra readable scope exists only where the driver asks for it.
+	ProbeRunHome string
 }
 
 // Result is the recorded run. Stdout stays in memory for the verdict logic and is never written out.
@@ -83,7 +88,11 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (Result, error) {
 	if err := ValidateWrapper(r.Wrapper); err != nil {
 		return res, err
 	}
-	if err := ValidateArgv(inv.Args); err != nil {
+	if inv.ProbeRunHome != "" {
+		if err := ValidateProbeArgv(inv.Args, inv.ProbeRunHome); err != nil {
+			return res, err
+		}
+	} else if err := ValidateArgv(inv.Args); err != nil {
 		return res, err
 	}
 	rd, wr, err := os.Pipe()
