@@ -137,6 +137,19 @@ func Preflight(fsys CanaryFS, p CanaryPlan) error {
 	if home != p.Home {
 		return errors.New("canary: HOME is not a real path")
 	}
+	// The run home itself (R6 run 1 fix, #416): the CLI is given it as a readable scope, so it must be a real
+	// directory owned by the run user that nobody else can write into.
+	hi, err := fsys.Lstat(p.Home)
+	switch {
+	case err != nil:
+		return errors.New("canary: the run home cannot be inspected")
+	case hi.isSymlink() || !hi.isDir():
+		return errors.New("canary: the run home is not a directory")
+	case hi.UID != p.RunUID:
+		return errors.New("canary: the run home is not owned by the run user")
+	case hi.Mode.Perm()&0o022 != 0:
+		return errors.New("canary: the run home is group- or world-writable")
+	}
 	switch p.Form {
 	case CanaryFormA:
 		if p.ConfigDir != "" {

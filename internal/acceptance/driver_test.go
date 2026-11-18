@@ -171,6 +171,7 @@ type sim struct {
 	refused         map[string]bool // session uuid -> a refusal was seen in it
 	ruleAll         bool            // the deny rule also covers every other target (a rule that wrongly covers the controls)
 	declineControls bool            // the model makes no tool_use for a control (a target under canary-control)
+	declineProbes   bool            // the model makes no tool_use for a probe (a target under a denied directory)
 }
 
 // sessionOf returns the session uuid of an argv and whether it resumes it (--resume) or creates it (--session-id).
@@ -232,6 +233,9 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 		tool, pat, target = "Glob", m[1], path.Dir(m[1])
 	}
 	if tool != "" && s.declineControls && strings.Contains(target, "/canary-control") {
+		tool = ""
+	}
+	if tool != "" && s.declineProbes && underDeny(target) {
 		tool = ""
 	}
 	if tool != "" && s.resumeDeclines && resumed && s.refused[uuid] {

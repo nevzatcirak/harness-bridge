@@ -79,10 +79,13 @@ func ValidateArgv(args []string) error {
 			return errors.New("acceptance: --bare is never used (it cannot use the subscription login)")
 		case strings.HasPrefix(a, "--dangerously-"), strings.HasPrefix(a, "--allow-dangerously-"):
 			return errors.New("acceptance: a permission-skipping flag is refused")
-		case a == "--add-dir":
+		case strings.HasPrefix(a, "--add-dir"): // also the glued --add-dir=<dir> form
 			return errors.New("acceptance: --add-dir is only for the item 1 probe argv (ValidateProbeArgv)")
-		case a == "--allowedTools", a == "--allowed-tools", a == "--permission-prompt-tool":
+		case a == "--allowedTools", a == "--allowed-tools", a == "--permission-prompt-tool",
+			strings.HasPrefix(a, "--allowedTools="), strings.HasPrefix(a, "--allowed-tools="), strings.HasPrefix(a, "--permission-prompt-tool="):
 			return errors.New("acceptance: a flag that grants tool permissions is refused")
+		case strings.HasPrefix(a, "--permission-mode="), strings.HasPrefix(a, "--permission-prompts="):
+			return errors.New("acceptance: a glued permission flag is refused (the pinned argv uses the separate form)")
 		case a == "--permission-mode" && val(i) != "default":
 			return errors.New("acceptance: only --permission-mode default is allowed")
 		case a == "--permission-prompts" && val(i) != "none":

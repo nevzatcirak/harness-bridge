@@ -238,11 +238,17 @@ func (d *Driver) env() []string {
 
 // run takes one unit of budget and runs one invocation, writing one event-types line.
 func (d *Driver) run(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn string) (Result, StreamInfo, error) {
+	return d.runInv(ctx, label, args, stdin, steps, closeOn, "")
+}
+
+// runInv is run with the probe run home of an item 1 probe or control run (probeHome empty for every other
+// run): the production runner then validates the argv with ValidateProbeArgv instead of ValidateArgv.
+func (d *Driver) runInv(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn, probeHome string) (Result, StreamInfo, error) {
 	if err := d.budget.Take(); err != nil {
 		_ = d.Out.KV("budget", "state", "breached", "runs", strconv.Itoa(d.budget.Used()))
 		return Result{}, StreamInfo{}, err
 	}
-	res, err := d.Runner.Run(ctx, Invocation{Label: label, Args: args, Stdin: stdin, Dir: "", Env: d.env(), Timeout: d.Cfg.RunTimeout, Signals: steps, CloseReaderOn: closeOn})
+	res, err := d.Runner.Run(ctx, Invocation{Label: label, Args: args, Stdin: stdin, Dir: "", Env: d.env(), Timeout: d.Cfg.RunTimeout, Signals: steps, CloseReaderOn: closeOn, ProbeRunHome: probeHome})
 	if err != nil {
 		_ = d.Out.KV("run", "label", label, "n", strconv.Itoa(d.budget.Used()), "error", "runner")
 		return res, StreamInfo{}, err
@@ -418,6 +424,7 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 	mcpOK := true
 	argvOK := true
 	controlDefect := "" // the worst denial class of a control that did not read its decoy
+	probeDefect := ""   // the worst class of a probe that was not refused by the deny rule (scope, other, declined)
 	runProbes := func(label, kind string, probes []claudecode.Probe) ([]byte, bool) {
 		var all []byte
 		for _, pr := range probes {
@@ -430,7 +437,7 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 				argvOK = false
 				return all, false
 			}
-			res, info, err := d.run(ctx, label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), args, claudecode.Prompt(pr), nil, "")
+			res, info, err := d.runInv(ctx, label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), args, claudecode.Prompt(pr), nil, "", d.Cfg.RunHome)
 			if err != nil {
 				return all, false
 			}
@@ -438,6 +445,12 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 			_ = d.Out.KV("canary_run", "label", label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), "kind", kind, "probe", pr.ID, "tool_uses", strconv.Itoa(info.ToolUses), "denial_class", class)
 			if kind == "control" && class != claudecode.DenialNone && worseDefect(class, controlDefect) {
 				controlDefect = class
+			}
+			// #412 P2-1: a PASS needs every probe refused BY THE RULE. A probe refused for scope, for another
+			// error, or declined is no evidence about the rule (class none keeps its old way: a read that
+			// shows the marker is a security FAIL, an undenied read that shows nothing is inconclusive).
+			if kind == "probe" && class != claudecode.DenialRule && class != claudecode.DenialNone && worseDefect(class, probeDefect) {
+				probeDefect = class
 			}
 			all = append(all, res.Stdout...)
 			if !info.InitSeen || !info.MCPKnown || info.MCPServers != 0 || info.APIKeySource != "none" {
@@ -479,6 +492,8 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 		v.Why = "canary_failed"
 	case controlDefect != "":
 		v.Result, v.Why = Incomplete, "control_refused_"+controlDefect
+	case probeDefect != "":
+		v.Result, v.Why = Incomplete, "probe_not_rule_denied_"+probeDefect
 	case !rep.Pass:
 		v.Why = "canary_failed"
 	case !obs.Complete():
