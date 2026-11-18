@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -344,5 +345,109 @@ func TestLifecycleReadOnlyStartsWithAnInvalidOverlayFileAndReportsUnknown(t *tes
 	}
 	if w.done != nil {
 		t.Error("a read-only ingress started an archive poller (it never sends)")
+	}
+}
+
+// Close is safe for concurrent callers and idempotent (review #387 P3-1, #388 P3-2): N goroutines call it
+// at once on a wiring that runs the archive poller; none panics, the poller has stopped afterwards and a
+// later Close is a no-op.
+func TestLifecycleCloseIsSafeForConcurrentCallers(t *testing.T) {
+	dir := newOverlayDir(t)
+	env, _ := lcEnv(t, dir)
+	holder, err := openLifecycle(env, os.Geteuid(), false)
+	if err != nil || holder == nil {
+		t.Fatalf("holder: %v %v", holder, err)
+	}
+	t.Cleanup(holder.Close)
+	second, err := openLifecycle(env, os.Geteuid(), false)
+	if err != nil || second == nil || second.store.CanWrite() {
+		t.Fatalf("second writer: %v %v", second, err)
+	}
+	newLCStack(t, second, false) // applies the wiring: the poller runs
+	if second.stop == nil {
+		t.Fatal("the poller did not start: this test would pin nothing")
+	}
+	const callers = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	panics := make(chan any, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if p := recover(); p != nil {
+					panics <- p
+				}
+			}()
+			<-start
+			second.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(panics)
+	for p := range panics {
+		t.Fatalf("a concurrent Close panicked: %v", p)
+	}
+	select {
+	case <-second.done:
+	default:
+		t.Fatal("the poller is still running after Close")
+	}
+	second.Close() // idempotent
+}
+
+// A reader that never had a good snapshot refuses nothing, and adopts the file once it is repaired
+// (ADR-025 4.4: "none exists at startup", an unknown state never blocks unrelated prompts; review #387
+// P3-2). The lock holder archives sesA, the overlay file is replaced by garbage, a second process starts
+// on it (state unknown, empty snapshot), then the good file comes back.
+func TestLifecycleReaderWithoutAGoodSnapshotRefusesNothingThenAdoptsTheRepairedFile(t *testing.T) {
+	dir := newOverlayDir(t)
+	env, _ := lcEnv(t, dir)
+	holder, err := openLifecycle(env, os.Geteuid(), false)
+	if err != nil || holder == nil {
+		t.Fatalf("holder: %v %v", holder, err)
+	}
+	t.Cleanup(holder.Close)
+	archiveViaStore(t, holder, sesA)
+	file := filepath.Join(dir, "overlay.json")
+	good, err := os.ReadFile(file)
+	if err != nil || len(good) == 0 {
+		t.Fatalf("the holder's overlay file: %v (%d bytes)", err, len(good))
+	}
+	replace := func(content []byte) { // a new inode each time, so the stat poll sees it
+		tmp := file + ".tmp"
+		if err := os.WriteFile(tmp, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replace([]byte("not json"))
+	second, err := openLifecycle(env, os.Geteuid(), false)
+	if err != nil || second == nil || second.store.CanWrite() {
+		t.Fatalf("second process: %v %v", second, err)
+	}
+	t.Cleanup(second.Close)
+	if second.store.Err() == nil {
+		t.Fatal("the second process did not see the file as invalid: this test would pin nothing")
+	}
+	st := newLCStack(t, second, false)
+	if err := st.send(sesA); archivedRefusal(err) {
+		t.Fatalf("a reader with no good snapshot refused a prompt: %v", err)
+	}
+	if err := st.send(sesB); archivedRefusal(err) {
+		t.Fatalf("a reader with no good snapshot refused an unrelated prompt: %v", err)
+	}
+	replace(good)
+	for end := time.Now().Add(5 * time.Second); !archivedRefusal(st.send(sesA)); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the repaired file was never adopted")
+		}
+	}
+	if err := st.send(sesB); archivedRefusal(err) {
+		t.Fatalf("an unrelated session was refused after the repair: %v", err)
 	}
 }

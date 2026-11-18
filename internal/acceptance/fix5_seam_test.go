@@ -33,6 +33,12 @@ import (
 // through a new function parameter or interface are not seen; and only this package's non-test files
 // are scanned (every build tag, since every file is parsed and type-checked together; duplicate
 // declarations across tagged files are ignored).
+//
+// Two more stated properties (review #389 P3-2, P3-3; pinned by TestSeamGuardStatedLimits): a plain
+// copy of the struct inside the package, `x := *o`, is NOT flagged (it copies the seam fields, it does
+// not set one, and production code never sets one); and the positional rule is INTENTIONALLY broad: any
+// unkeyed struct literal in non-test code is flagged, even one of an unrelated type, so a future
+// harmless positional literal has to be rewritten with keys (it fails closed).
 var seamReaders = map[string]map[string]bool{
 	"fchown":     {"doFchown": true},
 	"race":       {"raceAt": true},
@@ -352,5 +358,18 @@ func TestSeamGuardFailsLoudlyWhenTheTypeIsMissing(t *testing.T) {
 	}
 	if v := literalViolations(fset, []*ast.File{f}); len(v) == 0 {
 		t.Fatal("a package without OSDecoyFS passed the type rules silently")
+	}
+}
+
+// The two stated properties of the header, pinned either way (review #389 P3-2, P3-3).
+func TestSeamGuardStatedLimits(t *testing.T) {
+	if v := allViolations(t, `package p
+func f(o *OSDecoyFS) { x := *o; _ = x }`); len(v) != 0 {
+		t.Errorf("a plain copy of OSDecoyFS is documented as not flagged: %v", v)
+	}
+	if len(allViolations(t, `package p
+type T struct{ a, b int }
+var _ = T{1, 2}`)) == 0 {
+		t.Error("an unkeyed literal of an unrelated struct type is intentionally flagged (the positional rule is broad)")
 	}
 }

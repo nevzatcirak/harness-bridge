@@ -22,6 +22,11 @@ import (
 //   - the creation (acceptance.CreateEvidenceFile) is the EARLIEST occurrence anywhere in main, nested
 //     or not, which is the stricter reading;
 //   - both validators must precede the creation. Comments and string literals are not calls.
+//
+// Stated limit (review #389 P3-1, pinned by TestFlagOrderCountsAValidatorUnderShortCircuit): a validator
+// that is an operand of `&&` or `||` in a top-level statement is counted although short-circuit
+// evaluation may skip it (`if false && cfg.Validate() != nil {}`). It needs a deliberate edit, and the
+// real main uses `if err := cfg.Validate(); err != nil`; flagging it would not stop a determined edit.
 func flagOrderViolations(fset *token.FileSet, f *ast.File) []string {
 	callName := func(call *ast.CallExpr) string {
 		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
@@ -190,6 +195,21 @@ func TestParseItems(t *testing.T) {
 	for _, in := range []string{"", "0", "9", "a", "1,,2", "1,x", "-1", "1;2"} {
 		if got, err := ParseItems(in); err == nil {
 			t.Errorf("ParseItems(%q) accepted: %v", in, got)
+		}
+	}
+}
+
+// The stated limit of flagOrderViolations: a short-circuited validator is counted, not flagged
+// (review #389 P3-1). If the check is ever tightened, this test is the one to change on purpose.
+func TestFlagOrderCountsAValidatorUnderShortCircuit(t *testing.T) {
+	const head = "package main\nfunc main() {\n"
+	for name, src := range map[string]string{
+		"validator after a false &&": head + "\tif false && cfg.Validate() != nil {}\n\tn, _ := acceptance.ParseItems(*items)\n\tacceptance.CreateEvidenceFile(p)\n}\n",
+		"validator after a true ||":  head + "\tx := true || acceptance.ParseItems(*items) != nil\n\t_ = x\n\tcfg.Validate()\n\tacceptance.CreateEvidenceFile(p)\n}\n",
+	} {
+		fset, f := parseMain(t, src)
+		if v := flagOrderViolations(fset, f); len(v) != 0 {
+			t.Errorf("%s: documented as counted, got %v", name, v)
 		}
 	}
 }

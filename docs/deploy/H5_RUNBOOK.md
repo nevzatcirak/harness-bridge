@@ -120,11 +120,13 @@ SHA, both sha256 values and both `go version -m` blocks in the H5 evidence file.
 ## Stage 1: binary swap with every feature off, H4 regression
 
 Pass criterion: the H4 regression subset passes on the H5 binary; no new `BRIDGE_*` feature value is
-set (the relay registration default is the only exception and it answers nothing — see stage 5).
+set, except `BRIDGE_PERMISSION_RELAY=off` (D21 Q7: until ADR-024 A1 S7 is exercised live the operator runs with
+`off`). With the variable unset the relay registration default applies and answers nothing (see stage 5).
 
 Precheck (read-only):
-- `tools/list` shows the base surface: 11 tools plus `reply_permission` = **12** (the relay is
-  registered by default; D15 Q3). It must **not** show `list_catalog`, `create_session`,
+- `tools/list` shows the base surface: with `BRIDGE_PERMISSION_RELAY=off` (D21 Q7, the setting to use until
+  ADR-024 A1 S7 is exercised live) **11 tools**; with the variable unset the relay is registered by default
+  (D15 Q3) and the surface is 11 tools plus `reply_permission` = **12**. It must **not** show `list_catalog`, `create_session`,
   `archive_session`, `unarchive_session` or `close_session` (no lifecycle wiring).
 - `list_sessions`/`find_sessions`/`get_session` work; an unauthorized ID is FORBIDDEN.
 
@@ -472,7 +474,7 @@ wrapper/sudoers/managed settings installed.
    (12, 14 or 17 with the default relay).
 2. **Relay registration default is `reject_only`, not off** (D15 Q3), while this task's general rule
    is "each default OFF". `off` is the opt-out; the tool is registered but cannot answer without an
-   incarnation source. Is the registration acceptable for the H5 stage-1 surface (12 tools)?
+   incarnation source. Is the registration acceptable for the H5 stage-1 surface (12 tools with the default)? D21 Q7 settles the operator's setting until ADR-024 A1 S7 is exercised live: `BRIDGE_PERMISSION_RELAY=off`, 11 tools.
 3. **No native incarnation source exists**, so the relay's verified path is not live-testable; every
    request stays `unattributed` and refuses `FORBIDDEN`/`not_verified` (the production source itself
    is installed, #306). The retain/reject decision and the source design are the maintainer's
