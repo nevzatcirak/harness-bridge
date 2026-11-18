@@ -1,30 +1,34 @@
 # Session lifecycle tools: operator runbook (ADR-022, ADR-025)
 
-Status: **the tools exist in the code but are NOT wired into `cmd/bridge`.** A deployed Bridge registers
-none of `list_catalog`, `create_session`, `archive_session`, `unarchive_session` or `close_session`, and
-setting the variables below changes nothing today. This page says what the configuration will be, what the
-tools do, and what is and is not verified. It is a file of its own (next to `PERMISSION_RELAY_RUNBOOK.md`,
-`DASHBOARD.md` and `CLAUDE_CODE_RUNBOOK.md`) because lifecycle has its own configuration file, directory and
-failure modes, and because H5 stages 3 and 4 refer to it; the tool contracts are in
-`docs/CONTRACTS.md` ("ADR-022 S3", "S4", "S6 and ADR-025").
+Status: **wired into `cmd/bridge` and enabled by default (D22), inert until configured.** The five tools
+`list_catalog`, `create_session`, `archive_session`, `unarchive_session` and `close_session` appear when
+`BRIDGE_LIFECYCLE_CONFIG` (and, for the archive tools, `BRIDGE_OVERLAY_DIR`) is set and valid; with the variables
+unset a deployed Bridge lists exactly the tools it listed before. An invalid value **refuses to start**, it never
+starts "without lifecycle". This page says what the configuration is, what the tools do, and what is and is not
+verified. It is a file of its own (next to `PERMISSION_RELAY_RUNBOOK.md`, `DASHBOARD.md` and
+`CLAUDE_CODE_RUNBOOK.md`) because lifecycle has its own configuration file, directory and failure modes, and because
+H5 stages 3 and 4 refer to it; the tool contracts are in `docs/CONTRACTS.md` ("ADR-022 S3", "S4", "S6 and
+ADR-025", "Registration and production wiring").
 
-## What is true today (base `ebb2ce3`)
+## What the Bridge does at startup (`cmd/bridge/lifecycle.go`)
 
-| Item | State | Source |
-|---|---|---|
-| `list_catalog` | registered only when `Server.Catalog != nil && Server.Catalog.Roots != nil` | `internal/mcp/server.go:330` |
-| `create_session` | registered only when `Server.Create != nil` | `internal/mcp/server.go:335` |
-| `archive_session`, `unarchive_session`, `close_session` | registered only when `Server.Archive != nil` | `internal/mcp/server.go:340` |
-| Production code that sets those fields | **none**: `cmd/bridge` does not mention them | grep of `cmd/bridge/*.go` (non-test) |
-| `BRIDGE_LIFECYCLE_CONFIG` | parsed by `lifecycle.FromEnv`, which no production code calls | `internal/lifecycle/config.go:141` |
-| `BRIDGE_OVERLAY_DIR` | named by ADR-025 §9 Q5/Q6 (D18); **no code reads it** (it appears only in comments) | `internal/mcp/server.go:42`, `internal/mcp/archive.go:51` |
-| Tool count of a deployed Bridge | eleven (twelve with the default `reject_only` relay) | `docs/CONTRACTS.md` |
+| Configuration | Result |
+|---|---|
+| neither variable set | inert: no lifecycle tool, the previous tool set (eleven, twelve with the default relay) |
+| `BRIDGE_LIFECYCLE_CONFIG` valid | `list_catalog` and `create_session` are registered |
+| plus `BRIDGE_OVERLAY_DIR` valid, writer holding the overlay lock | `archive_session`, `unarchive_session`, `close_session` too |
+| `BRIDGE_READ_ONLY=1` | `list_catalog` only; the overlay (if set) is opened as a reader (an invalid overlay file is then not a startup error: the state is unknown and `list_catalog` fails with `INTERNAL`); no mutating lifecycle tool. `send_prompt` is refused at call time on a read-only ingress, so no archived-session check is installed there |
+| a second writer on the same overlay directory | no archive tool (it did not get the write lock, ADR-025 4.3); `list_catalog` and `create_session` stay. **It still refuses `send_prompt` to an archived session** (D18 Q1): the overlay is loaded, a poller refreshes the snapshot every 250 ms (the overlay re-reads a changed file at most once a second, ADR-025 Q8), so an archive made by the lock holder is refused here within about 1.25 s. An unreadable overlay file keeps the last good snapshot (ADR-025 4.4): archived sessions it knew stay refused, unrelated prompts are not blocked |
+| `BRIDGE_LIFECYCLE_CONFIG` invalid, naming no root, or `BRIDGE_OVERLAY_DIR` invalid (relative, missing, symlink in the final component, not owned by the service user, not mode `0700`, or an invalid `overlay.json` for the writer) | **startup error** |
+| `BRIDGE_OVERLAY_DIR` set without `BRIDGE_LIFECYCLE_CONFIG` | **startup error** (the overlay needs lifecycle roots) |
 
-Wiring the configuration, and reading `BRIDGE_OVERLAY_DIR`, are separate planner-scheduled tasks
-(ADR-022 "As built (slice S6)", `:771-773`, ADR-025 §11 "Not wired in production", `:424-425`). Until they land, **do not set either variable and expect
-a change**; the H5 runbook marks stages 3 and 4 NOT AVAILABLE for the same reason.
+The startup log carries one line naming the registered lifecycle tools and the root count, for example
+`lifecycle: registered list_catalog,create_session (roots=1, overlay=false)`; it names no path and no secret.
+Tool counts with and without lifecycle configuration are in `docs/CONTRACTS.md` ("Registration and production
+wiring"). ADR-012 authorization and the per-session ACL are unchanged: lifecycle roots grant nothing to the
+existing tools, a created session is not in `BRIDGE_ALLOWED_SESSIONS`, and there is no permanent delete.
 
-## The lifecycle configuration (for when it is wired)
+## The lifecycle configuration
 
 `BRIDGE_LIFECYCLE_CONFIG` is the path of a JSON file. Unset or empty means lifecycle is off
 (`config.go:141-148`). Checks at load, all fail-closed (`config.go:159-215`, constants `:23-70`):
@@ -60,7 +64,7 @@ Lifecycle roots grant authority only to the lifecycle tools (ADR-022 3.2). A cre
 (O2 is parsed but not implemented). `create_session` never creates a directory and refuses a root whose Git top
 level is missing or outside the root (`non_git`, `not_in_root`).
 
-## The archive overlay (for when it is wired)
+## The archive overlay
 
 Archive in Chat is a **Bridge-side label**, not a native archive (D16 Q1; the native `PATCH time.archived` stays
 operator-only). The label lives in `overlay.json` in one directory (ADR-025 4.1, 4.2; `internal/overlay/overlay.go`):
@@ -91,18 +95,21 @@ file by the service user is out of the checksum's protection (ADR-025 §6, T1); 
 | `close_session` | the existing interrupt (at most one native abort POST), then the overlay | the same, plus `INVALID_INPUT` "execution already terminal" and `UNKNOWN_OUTCOME` when the interrupt does not settle in 5 s |
 
 `close_session` **can interrupt a running execution and then still refuse the archive** (the cap, `SESSION_BUSY`,
-an overlay failure); the interrupt is not rolled back. All five tools are unavailable under `BRIDGE_READ_ONLY`
-except `list_catalog`. Every lifecycle mutation writes one AUDIT-01 line (`session_create`, `session_archive`,
+an overlay failure); the interrupt is not rolled back. Under `BRIDGE_READ_ONLY` only `list_catalog` is registered (the create and
+archive tools are not). Every lifecycle mutation writes one AUDIT-01 line (`session_create`, `session_archive`,
 `session_unarchive`, `session_close`) with no paths or free text; the dashboard ring keeps only
 `session_create` until its allowlist is amended (`internal/dashboard/audit.go:32`).
 
-## Enabling (not possible yet) and rollback
+## Enabling and rollback
 
-Today there is nothing to enable. When the wiring exists, the order is: create the configuration file (mode
-`0600`, owned by the service user) and the overlay directory (`0700`), set the variables in the Bridge's
-drop-in, restart, check `tools/list`, and run the stage 3 and stage 4 acceptance conversations of
-`docs/deploy/H5_RUNBOOK.md`. Rollback is to unset the variables and restart: the tools disappear, created
-sessions remain native sessions, and `overlay.json` stays on disk, unread.
+Create the configuration file (mode `0600`, owned by the service user) and, for archive, the overlay directory
+(`0700`, owned by the service user), set the variables in the Bridge's drop-in, restart, check the startup line and
+`tools/list`, and run the stage 3 and stage 4 acceptance conversations of `docs/deploy/H5_RUNBOOK.md`. A bad value
+stops the Bridge at start with the reason (config path, mode, root, overlay directory), so fix it and restart.
+Rollback is to unset the variables and restart: the tools disappear, created sessions remain native sessions, and
+`overlay.json` stays on disk, unread. **Archived sessions become visible in the catalog and dashboard and accept
+`send_prompt` again**, because nothing reads the overlay any more; to keep a session hidden after a rollback,
+archive it natively (operator-only) or leave the variables set.
 
 ## Verification status
 

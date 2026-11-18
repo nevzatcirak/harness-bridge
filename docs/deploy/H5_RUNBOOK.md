@@ -23,18 +23,18 @@ H4 was `9db1c1d`. Since then `main` has merged:
 | Feature | On main b98c004 | Switch and default | Wireable? |
 |---|---|---|---|
 | ADR-021 Claude Code adapter (default off) | yes (`1a571fc`, wiring `#264`) | `BRIDGE_CLAUDE_COMMAND` unset = off (`cmd/bridge/claude.go:16-30,34,40-47`) | config exists; **do not enable** before the ADR-021 live acceptance (stage 6) |
-| ADR-022 lifecycle S1–S5 code | yes (`#246`, `#261`, `#280`) | `BRIDGE_LIFECYCLE_CONFIG` (`internal/lifecycle/config.go:24,142-148`) | **NOT AVAILABLE**: nothing in `cmd/bridge` reads it or sets `Server.Catalog`/`Server.Create`; the tools stay unregistered (`docs/BACKLOG.md:83,132`) |
+| ADR-022 lifecycle S1–S5 code | yes (`#246`, `#261`, `#280`) | `BRIDGE_LIFECYCLE_CONFIG` (`internal/lifecycle/config.go:24,142-148`) | **wired by D22** (`cmd/bridge/lifecycle.go`): `list_catalog` and `create_session` register when the config is set and valid; **NOT AVAILABLE on b98c004**, which has no wiring; the freeze SHA must contain the D22 commit (`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`) |
 | ADR-023 dashboard | yes (`#270`, `#291`) | `BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR`, unset = off (`internal/dashboard/config.go:27-36`) | yes (stage 2); R-DASH live still NOT_EXERCISED |
 | ADR-024 `reply_permission` reject-only | yes (`#283`, `#290`; source `#306` at b98c004) | `BRIDGE_PERMISSION_RELAY`: unset/`reject_only` = registered, `off` = opt-out, `policy`/other = startup error (`cmd/bridge/relay.go:17-32`) | registered with the production `PermissionSource` (`cmd/bridge/relay.go:39-50`); every request stays `unattributed` and the tool refuses `FORBIDDEN`/`not_verified` (no native incarnation evidence), no native write (stage 5); a source construction error stops startup (`cmd/bridge/main.go:89-91`) |
 | Mutation Gate attempt writer | yes (`#275`), installed by the relay wiring | (no switch) `audit.Default()` (`cmd/bridge/relay.go:49`) | yes; it is the audit path of the relay |
-| ADR-025 archive overlay S8/S6 | yes, code (`#307` at `566eb46`); ADR-025 **ACCEPTED** (D18) | `BRIDGE_OVERLAY_DIR` is named by ADR-025 §9 Q5/Q6 (D18; unset = tools not registered, separate directory) while §4.1 (`:90`) and §10 still call the name a proposal (recorded in BACKLOG); no code reads it | **NOT AVAILABLE**: the code is merged (`internal/overlay/overlay.go`, `internal/mcp/archive.go`, `Server.Archive` at `internal/mcp/server.go:41-43`) but nothing in `cmd/bridge` constructs it; stage 4 needs the wiring task |
+| ADR-025 archive overlay S8/S6 | yes, code (`#307` at `566eb46`); ADR-025 **ACCEPTED** (D18) | `BRIDGE_OVERLAY_DIR` is named by ADR-025 §9 Q5/Q6 (D18; unset = tools not registered, separate directory) while §4.1 (`:90`) and §10 still call the name a proposal (recorded in BACKLOG); read by the D22 wiring (`cmd/bridge/lifecycle.go`) on a build that contains it, not on b98c004 | **wired by D22**: the three archive tools register when `BRIDGE_LIFECYCLE_CONFIG` and a valid `BRIDGE_OVERLAY_DIR` are set (writer holding the overlay lock, not read-only); **NOT AVAILABLE on b98c004** (nothing constructs `Server.Archive` there) |
 
 Since `0672867`, main has also merged #307 (`566eb46`, ADR-025 S6 code; ADR-025 is **ACCEPTED** as
 D18) and #306 (`b98c004`, the production `PermissionSource`). Consequence for H5: **stages 3
-(lifecycle) and 4 (overlay) still cannot run on b98c004.** If the Planning Desk freezes a build for
-them, the freeze SHA must contain the lifecycle startup wiring and the overlay startup wiring (both
-separate, not-yet-scheduled tasks); this runbook gives the conditional steps and prompts so either
-freeze can use it. The relay's *registration* default is `reject_only` by D15 Q3, not "off";
+(lifecycle) and 4 (overlay) cannot run on b98c004**, which has no lifecycle wiring. Maintainer decision D22
+wires them into `cmd/bridge` (enabled by default, inert until `BRIDGE_LIFECYCLE_CONFIG`/`BRIDGE_OVERLAY_DIR` are
+set, an invalid value refuses to start); if the Planning Desk freezes a build that contains that commit, the
+stages below are available there, and this runbook gives the steps and prompts for either freeze. The relay's *registration* default is `reject_only` by D15 Q3, not "off";
 `BRIDGE_PERMISSION_RELAY=off` is the explicit opt-out (see stage 5).
 
 ## Step 0: build (workers, no host changes)
@@ -198,13 +198,14 @@ FAIL.
 Rollback: remove `BRIDGE_DASHBOARD_SOCKET` (and any `BRIDGE_DASHBOARD_ADDR`), restart; the socket
 directory may stay.
 
-## Stage 3: lifecycle roots, create and catalog — **CONDITIONAL / NOT AVAILABLE on b98c004**
+## Stage 3: lifecycle roots, create and catalog — **CONDITIONAL on the D22 wiring; NOT AVAILABLE on b98c004**
 
 **On b98c004 there is no wiring:** `BRIDGE_LIFECYCLE_CONFIG` is read by
 `internal/lifecycle.FromEnv` (`internal/lifecycle/config.go:142-148`) but nothing in `cmd/bridge`
-calls it; `docs/BACKLOG.md:83,132` says the production wiring is a separate task, and the tool
-surface stays at 12 (stage 1). Do not set the variable and expect a change; setting it has no
-effect on this build. If the freeze SHA contains the wiring, use the steps below.
+calls it, and the tool surface stays at 12 (stage 1); setting the variable has no effect on that build. **On a
+build that contains the D22 wiring** (`cmd/bridge/lifecycle.go`) a valid configuration registers `list_catalog` and
+`create_session` (the stage 1 count becomes 14 with the default relay), an invalid one refuses to start, and
+`BRIDGE_READ_ONLY=1` keeps `list_catalog` only. Use the steps below on such a build.
 
 Configuration (ADR-022 §3.1, `docs/adr/ADR-022-session-lifecycle.md:103-107`; keys
 `internal/lifecycle/config.go:219-232,390-391`): `BRIDGE_LIFECYCLE_CONFIG` is the path to a JSON file the
@@ -262,18 +263,21 @@ is FAIL.
 Rollback: unset `BRIDGE_LIFECYCLE_CONFIG`, restart; the tools disappear (the created sessions remain
 native and are still listed by `list_sessions`).
 
-## Stage 4: overlay archive/close — **CONDITIONAL / NOT AVAILABLE on b98c004**
+## Stage 4: overlay archive/close — **CONDITIONAL on the D22 wiring; NOT AVAILABLE on b98c004**
 
-**Code merged, startup wiring missing:** #307 merged the S6 code at `566eb46` and ADR-025 is
+**On b98c004 the code is merged but not wired:** #307 merged the S6 code at `566eb46` and ADR-025 is
 **ACCEPTED** (D18, 2026-11-16). On b98c004 the code exists — `internal/overlay/overlay.go`,
 `internal/mcp/archive.go`, `Server.Archive` (`internal/mcp/server.go:41-43`) and the three tools
 registered only when `Server.Archive != nil` (`internal/mcp/server.go:340-343`) — but nothing in
 `cmd/bridge` constructs it (`docs/adr/ADR-022-session-lifecycle.md:771-773`), so the tools are not
-registered. ADR-025 §9 Q5/Q6 (D18, `:399-400`) name `BRIDGE_OVERLAY_DIR` as the overlay directory
+registered. **On a build with the D22 wiring** (`cmd/bridge/lifecycle.go`) they register when
+`BRIDGE_LIFECYCLE_CONFIG` and a valid `BRIDGE_OVERLAY_DIR` are set (writer, holding the overlay lock, not
+read-only); the stage 1 count becomes 17 with the default relay. ADR-025 §9 Q5/Q6 (D18, `:399-400`) name `BRIDGE_OVERLAY_DIR` as the overlay directory
 (unset = the archive tools are not registered, a directory separate from the lock and history
 directories), while §4.1 (`:90`) and §10 (`:417`) still call the name a proposal; the ADR is
 inconsistent on that word (recorded in `docs/BACKLOG.md`) and `docs/adr/ADR-025-archive-overlay-persistence.md:425`
-says the startup wiring is a separate task. No code reads the variable. Do not set it on b98c004. If the freeze SHA contains the overlay startup wiring, use:
+says the startup wiring was a separate task (done by D22). No code reads the variable on b98c004: do not set it
+there. If the freeze SHA contains the D22 wiring, use:
 
 - Directory: **`BRIDGE_OVERLAY_DIR`** (ADR-025 §9 Q5/Q6; §4.1:90 describes it): absolute, owned by the
   Bridge service user, mode exactly `0700`, no symlink in the final component; files `overlay.json`
@@ -461,11 +465,11 @@ wrapper/sudoers/managed settings installed.
 
 ## Open questions for the Planning Desk / maintainer
 
-1. **Lifecycle and overlay wiring are not done.** The ADRs are accepted, but no `cmd/bridge` code
-   reads `BRIDGE_LIFECYCLE_CONFIG` or constructs `ArchiveConfig`/`Server.Catalog`/`Server.Archive`;
-   stages 3 and 4 are NOT AVAILABLE on b98c004 and cannot be enabled by any value. The S6 overlay
-   code (#307 at `566eb46`) and ADR-025 (ACCEPTED, D18) are merged; H5 for those stages needs the
-   lifecycle and overlay wiring tasks in the freeze.
+1. **Lifecycle and overlay wiring (D22).** On b98c004 no `cmd/bridge` code reads `BRIDGE_LIFECYCLE_CONFIG` or
+   constructs `ArchiveConfig`/`Server.Catalog`/`Server.Archive`: stages 3 and 4 are NOT AVAILABLE there and cannot be
+   enabled by any value. D22 wires them (enabled by default, inert until configured); H5 for those stages needs
+   a freeze SHA that contains the wiring commit, and the stage 1 tool counts then depend on the configuration
+   (12, 14 or 17 with the default relay).
 2. **Relay registration default is `reject_only`, not off** (D15 Q3), while this task's general rule
    is "each default OFF". `off` is the opt-out; the tool is registered but cannot answer without an
    incarnation source. Is the registration acceptable for the H5 stage-1 surface (12 tools)?
@@ -475,9 +479,9 @@ wrapper/sudoers/managed settings installed.
    (BACKLOG).
 4. **`BRIDGE_OVERLAY_DIR`**: ADR-025 §9 Q5/Q6 (D18) name it, §4.1 (`:90`) and §10 still say "proposal"; the
    ADR is inconsistent on that word (BACKLOG). ADR-025 is accepted (D18: bounds 1000 entries/512 KiB, reason
-   `session_archived`) and the S6 code is merged; the overlay startup wiring is missing.
+   `session_archived`) and the S6 code is merged; the D22 wiring reads the variable on a build that contains it.
 5. **R-DASH, R5b and the Claude live acceptance remain NOT_EXERCISED/UNVERIFIED**; each stage's
    pass criterion is evidence, not a claim.
-6. The exact freeze SHA and whether the lifecycle and overlay wiring tasks are in it are the
+6. The exact freeze SHA and whether the D22 lifecycle/overlay wiring is in it are the
    Planning Desk's call; #306 and #307 are merged. Re-check every row against that SHA before the
    operator starts.

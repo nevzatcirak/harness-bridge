@@ -208,6 +208,15 @@ Open items recorded here, not fixed:
 - **(b) host-local second signal is deferred.** D21 Q3 keeps it as a later optional hardening for process restarts, not required in S7; it would add a privilege/deployment requirement (ADR-024 A1.3(b)).
 - **(e) assistant-message pin is deferred.** D21 Q6 keeps it out of S7: it narrows the residual windows (i) and (iv) but would refuse first-asks whose assistant message was not read earlier, so it is reconsidered after the S7 live acceptance.
 
+### ADR-022/ADR-025 lifecycle wiring (task #374, D22): deferred items (2026-11-17, appended)
+
+- **Done by this change:** `cmd/bridge/lifecycle.go` reads `BRIDGE_LIFECYCLE_CONFIG` (`lifecycle.FromEnv`) and `BRIDGE_OVERLAY_DIR` (`overlay.Open`) and registers `list_catalog`, `create_session` and the three archive tools, enabled by default (D22) and inert until configured. The older entries above that say "startup wiring is not done" (ADR-022 S3/S4/S6, ADR-023 5a, ADR-025) are superseded by it and kept as the record.
+- **Registration is by configuration, not by root mode.** With a valid configuration `create_session` is registered even if no root has the `create` mode, and the archive tools even if no root has the `archive` mode (with a valid overlay directory): the lifecycle authorizer then refuses every call (`FORBIDDEN`). Registering only the tools a root's modes can serve is a possible tightening, not done here.
+- **A second writer on one overlay directory registers no archive tool** (it did not get the write lock, ADR-025 4.3) but is not an error; the startup line shows which tools registered.
+- **Read-only ingress:** only `list_catalog` registers; the overlay is opened as a reader, so an invalid overlay file is not a startup error there (D18 Q3: the catalog reports the unknown state).
+- **A configuration that names no root** and **`BRIDGE_OVERLAY_DIR` without `BRIDGE_LIFECYCLE_CONFIG`** are startup errors (fail closed), a choice made here, not stated by D22.
+- No live run: the production wiring is tested in-process with fakes (a fake runner, the real overlay store on a temporary directory); nothing was run against a real OpenCode or host.
+
 ### ADR-021 production Observer (task #372): deferred items (2026-11-17, appended)
 
 - **Not run live.** The `Observer` (history tap, canary-directory scan, loopback sink) is tested with fabricated streams, `t.TempDir()` and loopback sockets only; what the real Claude CLI does under `-p` (hooks, `apiKeyHelper`, `.mcp.json`, the `ANTHROPIC_BASE_URL` env) and the driver's behaviour as root are UNVERIFIED until the R6 run reports (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
@@ -217,8 +226,10 @@ Open items recorded here, not fixed:
 
 ### ADR-021 production Observer, R378-FIX-1 (task #382): items recorded, not fixed (2026-11-18, appended)
 
-- **Fixed here (#380 P2-1, P2-2, P3-1, P3-4/#381 P3-4, docs P3-5/#381 P3-2/P3-3):** an emptied history and a recorded session that reads back empty are unobserved; a real directory swapped in at the canary path is unobserved (the baseline directory is held open and compared by device and inode; its inode cannot be reused while held); any `EndTurn` refusal fails the record (the former `ErrInvalidTurnEnd` exception was unreachable with the fixed turn-end values, so it is removed rather than tested); a test pins the sink address check before any bind.
+- **Fixed here (#380 P2-1, P2-2, P3-1, #381 P3-4, docs P3-5/#381 P3-2/P3-3):** an emptied history and a recorded session that reads back empty are unobserved; a real directory swapped in at the canary path is unobserved (the baseline directory is held open and compared by device and inode; its inode cannot be reused while held); any `EndTurn` refusal fails the record (the former `ErrInvalidTurnEnd` exception was unreachable with the fixed turn-end values, so it is removed rather than tested); a test pins the sink address check before any bind.
 - **#380 P3-2, not fixed:** the history directory may be the live `BRIDGE_CLAUDE_HISTORY_DIR`. The runbook says "never"; the driver does not compare the two (it does not read the Bridge environment).
 - **#380 P3-3, not fixed:** the canary directory's mode and owner are not validated; only the empty baseline and the path checks are. The runbook gives the operator command and the root-owned parent.
 - **#380 P3-4 / #381 P3-1, not fixed:** the sink counts a request at handler entry (headers parsed); a connection that never completes its headers is not counted.
 
+
+- **`TestInterruptFSTimeoutSendsNoAbort` hardened (task #395, 2026-11-18; main ead39fd was red once, never reproduced by load).** The test selected the V3 check as "the third executed `evalsymlinks` call", but the hook counts executed calls and `bounded.Group` joins an in-flight call with the same key (V6 and V3 share `{evalsymlinks, "/"}`), so a call already in flight when the hook is installed shifts the count and V3 is never blocked (`got <nil>`, Abort after a completed check: a test-timing defect, not a production one). The test now waits for no bounded call in flight before installing the hook and asserts the three executed calls; `TestInterruptCountBasedBlockIsShiftedByAStrayCall` reproduces the failure deterministically with an injected stray call. Not identified: which goroutine held such a call on the CI runner (a goroutine dump at test start on an idle machine shows none; the monitor's last probe, abandoned at its deadline, is the candidate).
