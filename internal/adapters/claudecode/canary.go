@@ -578,7 +578,11 @@ func controlNeedle(plan CanaryPlan, pr Probe) string {
 	}
 }
 
-type toolPair struct{ name, input, result string }
+type toolPair struct {
+	name, input, result string
+	answered            bool // a tool_result with this tool_use_id was seen
+	isError             bool // that tool_result carries is_error: true
+}
 
 // scanToolPairs pairs each tool_use of a stream with the tool_result that answers it (by
 // tool_use_id). Only the control run is read this way; the denied run's verdict never needs a
@@ -592,6 +596,7 @@ func scanToolPairs(b []byte) []toolPair {
 		Input     json.RawMessage `json:"input"`
 		ToolUseID string          `json:"tool_use_id"`
 		Content   json.RawMessage `json:"content"`
+		IsError   bool            `json:"is_error"`
 	}
 	uses := map[string]*toolPair{}
 	var order []string
@@ -618,6 +623,8 @@ func scanToolPairs(b []byte) []toolPair {
 				if p == nil {
 					continue
 				}
+				p.answered = true
+				p.isError = p.isError || it.IsError
 				var asString string
 				var parts []item
 				switch {
@@ -636,4 +643,75 @@ func scanToolPairs(b []byte) []toolPair {
 		out = append(out, *uses[id])
 	}
 	return out
+}
+
+// Denial classes of one probe or control run (R6 run 1, #409). A closed set: the evidence prints the
+// class, never the tool error text it was derived from.
+const (
+	DenialRule     = "rule"     // the tool error says the directory is denied by the permission settings
+	DenialScope    = "scope"    // the tool error is an out-of-working-directory / needs-approval refusal
+	DenialDeclined = "declined" // the model made no tool_use for the probe
+	DenialNone     = "none"     // the tool ran and returned a result (no refusal)
+	DenialOther    = "other"    // a tool error that is neither of the two known texts
+)
+
+// The texts a refusal carries, matched in lower case. The rule text is the managed deny rule's
+// (seen in the redacted history of R6 run 1, #409 D1). The scope texts are the out-of-working-directory
+// and needs-approval refusals under `--permission-prompts none`: UNVERIFIED against the real CLI, which
+// is why an error text that matches neither is its own class (DenialOther) and never "rule".
+var (
+	denialRuleTexts  = []string{"denied by your permission settings"}
+	denialScopeTexts = []string{"haven't granted", "have not granted", "requested permissions", "outside of the allowed", "outside the allowed",
+		"outside of the working", "outside the working", "working director", "requires approval", "needs approval", "requires permission"}
+)
+
+func containsAny(lower string, texts []string) bool {
+	for _, t := range texts {
+		if strings.Contains(lower, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// DenialClass classifies one run's stream for one probe (R6 run 1, #409). It looks only at the tool_use that
+// is the probe (same tool, same target) and at the tool_result that answers it:
+//
+//   - no matching tool_use: DenialDeclined (the model did not call the tool);
+//   - a result with is_error whose text is the managed rule's: DenialRule; an out-of-scope or needs-approval
+//     text: DenialScope; any other error, or a tool_use that never got a result: DenialOther;
+//   - a result without is_error: DenialNone.
+//
+// With several matching tool_uses the most severe wins (rule, scope, other, none). The text is only read to
+// choose the class: the result is one of five constants and never carries any of it.
+func DenialClass(ndjson []byte, pr Probe) string {
+	matched := false
+	rank := map[string]int{DenialNone: 0, DenialOther: 1, DenialScope: 2, DenialRule: 3}
+	class := DenialNone
+	for _, pair := range scanToolPairs(ndjson) {
+		if !probeMatches(pr, pair.name, pair.input) {
+			continue
+		}
+		matched = true
+		c := DenialNone
+		switch lower := strings.ToLower(pair.result); {
+		case !pair.answered:
+			c = DenialOther
+		case !pair.isError:
+			c = DenialNone
+		case containsAny(lower, denialRuleTexts):
+			c = DenialRule
+		case containsAny(lower, denialScopeTexts):
+			c = DenialScope
+		default:
+			c = DenialOther
+		}
+		if rank[c] > rank[class] {
+			class = c
+		}
+	}
+	if !matched {
+		return DenialDeclined
+	}
+	return class
 }

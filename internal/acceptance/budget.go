@@ -79,6 +79,8 @@ func ValidateArgv(args []string) error {
 			return errors.New("acceptance: --bare is never used (it cannot use the subscription login)")
 		case strings.HasPrefix(a, "--dangerously-"), strings.HasPrefix(a, "--allow-dangerously-"):
 			return errors.New("acceptance: a permission-skipping flag is refused")
+		case a == "--add-dir":
+			return errors.New("acceptance: --add-dir is only for the item 1 probe argv (ValidateProbeArgv)")
 		case a == "--allowedTools", a == "--allowed-tools", a == "--permission-prompt-tool":
 			return errors.New("acceptance: a flag that grants tool permissions is refused")
 		case a == "--permission-mode" && val(i) != "default":
@@ -111,4 +113,21 @@ func ValidateWrapper(p string) error {
 		return errors.New("acceptance: the CLI is run only through the wrapper, never directly")
 	}
 	return nil
+}
+
+// ValidateProbeArgv is ValidateArgv for the argv of an item 1 probe or control run (R6 run 1, #409). Probe and
+// control must both be able to READ the decoys, so the CLI gets one extra readable scope: the isolated test
+// user's HOME (the managed deny rule still refuses the two credential directories under it; a deny rule wins
+// over a granted scope). The only extra flag allowed is ONE trailing `--add-dir <run home>` with exactly the
+// configured run home; everything before it must pass ValidateArgv, which refuses any other --add-dir. The
+// run home is the ISOLATED TEST USER's home, never the Claude service user's: it holds only decoys.
+func ValidateProbeArgv(args []string, runHome string) error {
+	if runHome == "" || !filepath.IsAbs(runHome) || filepath.Clean(runHome) != runHome || runHome == "/" {
+		return errors.New("acceptance: the probe scope must be an absolute clean run home")
+	}
+	n := len(args)
+	if n < 2 || args[n-2] != "--add-dir" || args[n-1] != runHome {
+		return errors.New("acceptance: a probe argv ends with exactly --add-dir <run home>")
+	}
+	return ValidateArgv(args[:n-2])
 }
