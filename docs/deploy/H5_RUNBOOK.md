@@ -320,6 +320,10 @@ are only read when the store is configured).
 
 ## Stage 5: reject-only permission relay (R5b-style)
 
+**D21 Q7 (operator): until ADR-024 A1 slice S7 is accepted and exercised live, set
+`BRIDGE_PERMISSION_RELAY=off`; the tool is then not registered and this stage is NOT_RUN.** The steps
+below are the post-S7 stage 5.
+
 Switch: `BRIDGE_PERMISSION_RELAY` — unset/`reject_only` registers `reply_permission` (the default by
 D15 Q3); `off` keeps the 11-tool surface and installs nothing; `policy` or any other value refuses
 startup (`cmd/bridge/relay.go:17-32`). `allow_once` is never offered (D12 exception (b), D15 Q1).
@@ -329,13 +333,13 @@ incarnation evidence**, so every request stays `unattributed` and the tool refus
 `FORBIDDEN`/`not_verified`, with no native write and no attempt line (`docs/CONTRACTS.md` S6;
 [docs/deploy/PERMISSION_RELAY_RUNBOOK.md](PERMISSION_RELAY_RUNBOOK.md) "Today's limit"). There is no
 `UPSTREAM_FAILURE` branch for the unverified case; that code appears only for a failed native read
-or an unavailable audit journal ("What a call returns"). The verified path remains UNVERIFIED and needs a maintainer
-decision on the incarnation source (BACKLOG).
+or an unavailable audit journal ("What a call returns"). The verified path remains UNVERIFIED; D21 accepted
+the A1 continuity-epoch design, but S7 is not implemented (BACKLOG).
 
 Setup/precheck:
-1. Leave `BRIDGE_PERMISSION_RELAY` unset (or `reject_only`); `tools/list` shows 12 tools including
-   `reply_permission`; the startup log says `permission relay: reject_only; no native incarnation
-   source exists ...` (`cmd/bridge/main.go:89-93`).
+1. After S7 acceptance, leave `BRIDGE_PERMISSION_RELAY` unset (or `reject_only`); `tools/list` shows 12
+   tools including `reply_permission`; the startup log says `permission relay: reject_only; no native
+   incarnation source exists ...` (`cmd/bridge/main.go:89-93`). Before S7, D21 Q7 requires `off`.
 2. Make the native OpenCode instance ask for a permission. **The H5 unit is `opencode-hb-test.service`**
    (user `opencode-hb`, `127.0.0.1:4097`, `docs/deploy/SYSTEMD_LOCAL_VALIDATION.md:81`; the unit R5b
    restarts, `docs/evidence/R5B_RUNBOOK.md` Step 1.3); never the root OpenCode on `:4096`. The operator

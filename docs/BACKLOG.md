@@ -203,6 +203,11 @@ Open items recorded here, not fixed:
 - **The overlay's second closed-store check is untested.** `commit` re-checks `closed` for a change that was queued behind `Close` (`internal/overlay/overlay.go`), but removing only that check leaves every test green: a deterministic test needs a controlled interleaving of a hung write, a queued change and `Close`, and the mutex hand-off order is not deterministic. The first check (in `change`) is pinned by `TestClosedStoreRefusesNoOpChangesToo` and `TestCloseLatchesTheStore`.
 - **The `TestCloseSessionInterruptFailsWhileTheGuardIsFree` barrier is count-keyed (#343 P3-1, recorded, no change).** It waits for two `/permission` arrivals (the send preflight's single read, then the monitor's first observation). A change to the preflight's native reads, or an extra `/permission` read before the monitor's first observation, shifts the count; the guard assertion would then fail loudly. Tying the barrier to the observation itself (a hook on the monitor's first `observe`) would be sturdier.
 
+### ADR-024 A1 accepted (D21, 2026-11-17): deferred items (appended)
+
+- **(b) host-local second signal is deferred.** D21 Q3 keeps it as a later optional hardening for process restarts, not required in S7; it would add a privilege/deployment requirement (ADR-024 A1.3(b)).
+- **(e) assistant-message pin is deferred.** D21 Q6 keeps it out of S7: it narrows the residual windows (i) and (iv) but would refuse first-asks whose assistant message was not read earlier, so it is reconsidered after the S7 live acceptance.
+
 ### ADR-022/ADR-025 lifecycle wiring (task #374, D22): deferred items (2026-11-17, appended)
 
 - **Done by this change:** `cmd/bridge/lifecycle.go` reads `BRIDGE_LIFECYCLE_CONFIG` (`lifecycle.FromEnv`) and `BRIDGE_OVERLAY_DIR` (`overlay.Open`) and registers `list_catalog`, `create_session` and the three archive tools, enabled by default (D22) and inert until configured. The older entries above that say "startup wiring is not done" (ADR-022 S3/S4/S6, ADR-023 5a, ADR-025) are superseded by it and kept as the record.

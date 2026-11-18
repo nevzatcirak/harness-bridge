@@ -6,6 +6,10 @@ execution the Bridge started. It can only reject: `allow_once` is not offered (d
 it off, what it does today, and how to check it live. Status: implemented and tested against fakes;
 the live acceptance below is **not yet exercised**.
 
+**Operator mode (D21 Q7): until ADR-024 A1 slice S7 is accepted and exercised live, run the Bridge with
+`BRIDGE_PERMISSION_RELAY=off`.** The tool is then not registered; the text below describes the code path
+and the post-S7 acceptance.
+
 ## What it does, in one paragraph
 
 When an execution is `waiting_for_permission`, `get_execution_status` may show a `pending_permission`
@@ -23,7 +27,8 @@ Bridge **every request stays `unattributed`**: `pending_permission` is absent, o
 `pending_permission_count` is shown, and `reply_permission` answers `FORBIDDEN` with reason
 `not_verified`, no native write, no attempt line. The startup log says so:
 `permission relay: reject_only; no native incarnation source exists ...`. Answer such a request in
-OpenCode itself. The decision on what can supply the evidence is open (BACKLOG, ADR-024 S6).
+OpenCode itself. D21 (2026-11-17) accepted the A1 continuity-epoch design (ADR-024 A1), but S7 is not
+implemented, so this limit stands until it is; run with `BRIDGE_PERMISSION_RELAY=off` (Q7).
 
 ## Enable, disable
 
@@ -32,6 +37,9 @@ OpenCode itself. The decision on what can supply the evidence is open (BACKLOG, 
 | unset or `reject_only` | the tool is registered (twelve tools; thirteen with `create_session`), the OpenCode client is the one replier, the audit writer is installed |
 | `off` | nothing is installed; the Bridge keeps its eleven tools |
 | `policy` or anything else | the Bridge refuses to start (policy mode is not started) |
+
+**D21 Q7 (operator):** until S7 is accepted and exercised live, the operating setting is `off`
+(the table describes the code path, not the instruction).
 
 `BRIDGE_READ_ONLY=1` refuses the tool (it is a native mutation, like `interrupt_execution`), nothing is
 read natively. Recommendation (D15 Q7): configure claude.ai's **per-call approval** for
@@ -69,8 +77,9 @@ Do not read provider or harness configuration files for this. Use a disposable r
 Bridge may use. Record the native request log, the Bridge journal and the tool results; anything not
 run is UNVERIFIED, not PASS.
 
-1. Start the Bridge with `BRIDGE_PERMISSION_RELAY` unset. `tools/list` shows twelve tools including
-   `reply_permission`; the startup log shows the line above.
+1. After S7 acceptance, start the Bridge with `BRIDGE_PERMISSION_RELAY` unset. `tools/list` shows twelve
+   tools including `reply_permission`; the startup log shows the line above. Before S7, D21 Q7 requires
+   `off`, so this acceptance is NOT_RUN.
 2. Send a prompt that makes the native session ask for a permission. `get_execution_status` shows
    `waiting_for_permission` and `pending_permission_count: 1`.
 3. **Expected today:** `pending_permission` is absent. `reply_permission(reject)` returns `FORBIDDEN`
