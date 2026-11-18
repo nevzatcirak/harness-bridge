@@ -65,6 +65,13 @@ func main() {
 	}
 	runs := execution.New(client)
 	defer runs.Close()
+	// ADR-022/ADR-025 lifecycle surface (D22): enabled by default, inert until BRIDGE_LIFECYCLE_CONFIG
+	// (and, for archive, BRIDGE_OVERLAY_DIR) is set; an invalid value refuses to start.
+	lc, err := openLifecycle(os.Getenv, os.Geteuid(), cfg.readOnly)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lc.Close()
 	var claudeRelease admin.ClaudeReleaser // stays a nil interface unless the adapter runs
 	if claude != nil {
 		claudeRelease = claude
@@ -80,6 +87,8 @@ func main() {
 	// BRIDGE_DASHBOARD_ADDR is set; local transports only.
 	// The one server builder (#291): a nil Claude adapter never reaches the interface.
 	mcpServer := newMCPServer(client, runs, token, policy, cfg.remote, cfg.readOnly, claude)
+	lc.apply(mcpServer, runs)
+	log.Print(lc.summary(cfg.readOnly))
 	// ADR-024 S5 (D15 Q3): reply_permission is registered in reject_only by default;
 	// BRIDGE_PERMISSION_RELAY=off keeps the eleven-tool surface.
 	relay, err := permissionRelayMode(os.Getenv)
