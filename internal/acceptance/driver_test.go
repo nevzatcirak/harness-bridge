@@ -172,6 +172,9 @@ type sim struct {
 	ruleAll         bool            // the deny rule also covers every other target (a rule that wrongly covers the controls)
 	declineControls bool            // the model makes no tool_use for a control (a target under canary-control)
 	declineProbes   bool            // the model makes no tool_use for a probe (a target under a denied directory)
+	// R6 run 2 (#422): Claude Code 2.1.325 answers a Grep/Glob under a deny rule with "Permission to read <dir> has
+	// been denied." (not the Read text). 1 = the probe's own target; 2 = another path (the target's parent).
+	grepGlobText int
 }
 
 // sessionOf returns the session uuid of an argv and whether it resumes it (--resume) or creates it (--session-id).
@@ -264,7 +267,16 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 			outOfScope = !covered
 		}
 		if s.ruleAll || (s.denied != nil && s.denied(target) && underDeny(target)) {
-			refuse(textRuleDenied)
+			switch {
+			case s.grepGlobText != 0 && tool != "Read":
+				named := target
+				if s.grepGlobText == 2 {
+					named = path.Dir(target)
+				}
+				refuse("Permission to read " + named + " has been denied.")
+			default:
+				refuse(textRuleDenied)
+			}
 		} else if outOfScope {
 			refuse(textScopeDenied)
 		} else {

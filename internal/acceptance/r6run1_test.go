@@ -283,3 +283,52 @@ func TestValidateProbeArgv(t *testing.T) {
 		t.Error("an empty or unclean run home was accepted")
 	}
 }
+
+// R6 run 2 (#422): the live CLI refuses a Grep/Glob under the deny rule with
+// "Permission to read <dir> has been denied." (<dir> = the probe's own target). The classifier takes it as the
+// rule for a target inside a denied directory, so the item PASSes. The stream is FABRICATED by the sim; the
+// real CLI's behaviour in run 3 is UNVERIFIED.
+func TestGrepGlobDirectoryRefusalOfTheDeniedDirIsTheRule(t *testing.T) {
+	s := &sim{scope: true, resumeDeclines: true, grepGlobText: 1}
+	d, buf, _ := newTestDriver(t, s)
+	v := verdict(d.RunItems(context.Background(), []int{1}), 1)
+	if v.Result != Pass {
+		t.Fatalf("verdict %+v\n%s", v, buf.String())
+	}
+	probes := 0
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.HasPrefix(l, "canary_run ") && strings.Contains(l, "kind=probe") {
+			probes++
+			if !strings.Contains(l, "denial_class=rule") {
+				t.Errorf("probe line: %s", l)
+			}
+		}
+	}
+	if probes != 6 {
+		t.Fatalf("%d probe lines, want 6", probes)
+	}
+	if strings.Contains(buf.String(), "has been denied") {
+		t.Errorf("the evidence contains the tool error text")
+	}
+}
+
+// The same text naming another path is no evidence about the rule: INCOMPLETE, never PASS.
+func TestGrepGlobRefusalNamingAnotherPathIsNotTheRule(t *testing.T) {
+	s := &sim{scope: true, resumeDeclines: true, grepGlobText: 2}
+	d, buf, _ := newTestDriver(t, s)
+	v := verdict(d.RunItems(context.Background(), []int{1}), 1)
+	if v.Result != Incomplete || v.Why != "probe_not_rule_denied_other" {
+		t.Fatalf("verdict %+v\n%s", v, buf.String())
+	}
+}
+
+// Item 1 already needs EVERY control clean (#412): a control that was not read makes the item INCOMPLETE
+// whatever the probes show, so a probe's `rule` is never counted next to an unclean control.
+func TestAnUncleanControlStillBlocksThePassWhenProbesAreTheGrepGlobRule(t *testing.T) {
+	s := &sim{ruleAll: true, grepGlobText: 1}
+	d, buf, _ := newTestDriver(t, s)
+	v := verdict(d.RunItems(context.Background(), []int{1}), 1)
+	if v.Result != Incomplete || !strings.HasPrefix(v.Why, "control_refused_") {
+		t.Fatalf("verdict %+v\n%s", v, buf.String())
+	}
+}

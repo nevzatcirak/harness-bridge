@@ -441,7 +441,7 @@ func (d *Driver) itemCanary(ctx context.Context) (v Verdict) {
 			if err != nil {
 				return all, false
 			}
-			class := claudecode.DenialClass(res.Stdout, pr)
+			class := claudecode.DenialClass(res.Stdout, pr, claudecode.DeniedDirs(cp.plan))
 			_ = d.Out.KV("canary_run", "label", label+"_"+strings.ReplaceAll(pr.ID, "-", "_"), "kind", kind, "probe", pr.ID, "tool_uses", strconv.Itoa(info.ToolUses), "denial_class", class)
 			if kind == "control" && class != claudecode.DenialNone && worseDefect(class, controlDefect) {
 				controlDefect = class
