@@ -63,8 +63,11 @@ verdict lines and event types only.
    every security check was clean, but the four Grep/Glob probes were refused with `Permission to read <dir> has been
    denied.` (the Read probes with the known "denied by your permission settings" text), a text of the same managed
    rule that the classifier did not know. It now counts as `rule` only for the probe's own, clean target inside a
-   denied directory (`DenialClass(.., DeniedDirs(plan))`); every other text of that shape stays `other`. Run 3 is
-   UNVERIFIED. NOT_EXERCISED as a PASS (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
+   denied directory (`DenialClass(.., DeniedDirs(plan))`); every other text of that shape stays `other`.
+   **R6 run 3 (2026-11-20, relayed from the Planning Desk's log #117, not reproduced here): item 1 PASS**
+   (`why=all_probes_denied_controls_read`, 6/6 probes `denial_class=rule`, 6/6 controls `none`, no leak, no file
+   canary, no sink request, `mcp_servers=0` and `apiKeySource` `none` on 12/12 runs). The only live PASS of item 1 so far; a
+   single run, never repeated (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
    The production `Observer` (task #372, `internal/acceptance/observer.go`) supplies the three observations
    behind the flags `-history-dir`, `-canary-dir` and `-sink-addr` of the driver command (operator steps,
    expected evidence lines and the UNVERIFIED list: `docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a); a flag that is
@@ -75,9 +78,21 @@ verdict lines and event types only.
 3. **Post-`result` stream capture** over several runs (shared with slice 1): decides whether the
    ignorable-trailer list stays empty. NOT_EXERCISED.
 4. **`sudo` relays SIGINT and SIGTERM** to the CLI with a live tool call, and the process-group
-   boundary (`setsid -w`) with `sudo`. NOT_EXERCISED.
+   boundary (`setsid -w`) with `sudo`. **R6 run 4 (2026-11-20, #426): FAIL `signal_not_relayed_or_child_alive`,
+   but the relay was not tested:** the SIGINT run was relayed (tool_use, signal sent, child gone), the SIGTERM run
+   had `tool_uses=0` and `sent=none` (the model never called the tool). The two runs resumed one bootstrap session
+   and ran outside the working directory without a scope. Each run is now a fresh `--session-id` session with the
+   item 1 scope (`--add-dir <run home>`); a run without a tool_use is `INCOMPLETE`
+   `signal_not_sent_no_tool_use`, FAIL stays for "sent, but the wrapper did not exit or the child lives". Run 5
+   (`-items 4,6`) is UNVERIFIED. NOT_EXERCISED as a PASS.
 5. **`--safe-mode` versus §8.3 item 2** on the pinned version. NOT_EXERCISED.
-6. **Managed settings applied in `-p`**, and the deny rule inside the managed file. NOT_EXERCISED.
+6. **Managed settings applied in `-p`**, and the deny rule inside the managed file. **R6 run 4 (2026-11-20,
+   #426): FAIL `inconclusive_no_tool_use_or_denial`** (`tool_use=false`, `denial=false`, marker not shown: the model
+   never called Read; a resumed bootstrap session and no scope). The run is now a fresh session with the item 1
+   scope. No tool_use is `INCOMPLETE` `no_tool_use`; a tool_use without a denial and without the marker is
+   `INCOMPLETE` `no_denial_no_marker`; a denial that is not the rule's is `INCOMPLETE` `denial_not_rule_<class>`;
+   the marker shown is FAIL; **PASS needs `denial_class=rule`** (printed on the `managed` line). Run 5
+   (`-items 4,6`) is UNVERIFIED. NOT_EXERCISED as a PASS.
 7. **Live prompt-from-stdin** with `--resume` and `stream-json` (see `ACCEPTANCE_S1.md`).
    NOT_EXERCISED.
 8. **SIGPIPE ends the child when the Bridge dies** (§5). NOT_EXERCISED.

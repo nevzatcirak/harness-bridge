@@ -38,7 +38,8 @@ type Invocation struct {
 	// CloseReaderOn closes the parent's read end of the child's stdout right after an event of
 	// this kind (the SIGPIPE test: the reader dies, the child must end). Empty: never.
 	CloseReaderOn string
-	// ProbeRunHome is set only on an item 1 probe or control run (R6 run 1 fix, #416): the run home the
+	// ProbeRunHome is set only on a run that is given the run home as a readable scope: an item 1 probe or
+	// control run (R6 run 1 fix, #416) and the runs of items 4 and 6 (R6 run 4, #426). It is the run home the
 	// trailing `--add-dir <run home>` of its argv must name. ExecRunner then validates the argv with
 	// ValidateProbeArgv; every other run (ProbeRunHome empty) goes through the generic ValidateArgv, which
 	// refuses --add-dir, so the extra readable scope exists only where the driver asks for it.

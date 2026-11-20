@@ -35,6 +35,9 @@ type fakeFS struct {
 	dirGone bool
 	failOn  string
 	dirs    map[string]bool // directories created through Mkdir (the only ones RemoveDir removes)
+	// R6 run 4 follow-up (#430): opt-in changes of what Lstat says about the run home itself.
+	homeMode fs.FileMode // non-zero: the run home's mode (type and permission bits)
+	homeUID  uint32      // non-zero: the run home's owner
 }
 
 func newFakeFS() *fakeFS { return &fakeFS{content: map[string][]byte{}} }
@@ -115,7 +118,14 @@ func (f *fakeFS) Lstat(p string) (claudecode.FileInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p == tHome {
-		return claudecode.FileInfo{Mode: fs.ModeDir | 0o700, UID: 1500, Nlink: 2}, nil
+		mode, uid := fs.ModeDir|0o700, uint32(1500)
+		if f.homeMode != 0 {
+			mode = f.homeMode
+		}
+		if f.homeUID != 0 {
+			uid = f.homeUID
+		}
+		return claudecode.FileInfo{Mode: mode, UID: uid, Nlink: 2}, nil
 	}
 	if _, ok := f.content[p]; ok {
 		return claudecode.FileInfo{Mode: 0o600, UID: 1500, Nlink: 1}, nil
@@ -151,6 +161,8 @@ var (
 	readRe = regexp.MustCompile(`^Use the Read tool on the file (\S+) and print its content\.$`)
 	grepRe = regexp.MustCompile(`^Use the Grep tool with output_mode (\S+) to search for the pattern (\S+) in the directory (\S+) and print what it finds\.$`)
 	globRe = regexp.MustCompile(`^Use the Glob tool with the pattern (\S+) and list the files it returns\.$`)
+	// R6 run 4 (#426): the prompt of item 4, a Glob followed by reads.
+	sigRe = regexp.MustCompile(`^Use the Glob tool with the pattern (\S+), then Read every file it returns one by one\.$`)
 )
 
 // sim answers every run the way a CLI with a working (or broken) deny rule would.
@@ -175,6 +187,11 @@ type sim struct {
 	// R6 run 2 (#422): Claude Code 2.1.325 answers a Grep/Glob under a deny rule with "Permission to read <dir> has
 	// been denied." (not the Read text). 1 = the probe's own target; 2 = another path (the target's parent).
 	grepGlobText int
+	// R6 run 4 (#426). All opt-in.
+	scopeAll      bool            // every tool call is refused for a SCOPE reason (nothing under the deny rule, nothing read)
+	otherAll      bool            // every tool call is refused with a text that is neither the rule nor a scope text
+	declineLabels map[string]bool // the model makes no tool_use in the runs with these labels
+	timeoutLabels map[string]bool // the wrapper does not exit in the runs with these labels
 }
 
 // sessionOf returns the session uuid of an argv and whether it resumes it (--resume) or creates it (--session-id).
@@ -234,6 +251,11 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 		tool, mode, pat, target = "Grep", m[1], m[2], m[3]
 	} else if m := globRe.FindStringSubmatch(inv.Stdin); m != nil {
 		tool, pat, target = "Glob", m[1], path.Dir(m[1])
+	} else if m := sigRe.FindStringSubmatch(inv.Stdin); m != nil {
+		tool, pat, target = "Glob", m[1], path.Dir(m[1])
+	}
+	if tool != "" && s.declineLabels[inv.Label] {
+		tool = ""
 	}
 	if tool != "" && s.declineControls && strings.Contains(target, "/canary-control") {
 		tool = ""
@@ -266,7 +288,11 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 			covered := target == tRoot || strings.HasPrefix(target, tRoot+"/") || (ad != "" && (target == ad || strings.HasPrefix(target, ad+"/")))
 			outOfScope = !covered
 		}
-		if s.ruleAll || (s.denied != nil && s.denied(target) && underDeny(target)) {
+		if s.scopeAll {
+			refuse(textScopeDenied)
+		} else if s.otherAll {
+			refuse("The operation could not be performed.")
+		} else if s.ruleAll || (s.denied != nil && s.denied(target) && underDeny(target)) {
 			switch {
 			case s.grepGlobText != 0 && tool != "Read":
 				named := target
@@ -310,12 +336,21 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 	if s.trailing != "" {
 		out.WriteString(ev(map[string]any{"type": s.trailing}))
 	}
-	return Result{Stdout: []byte(out.String()), ExitCode: 0, InitAt: 10 * time.Millisecond, ResultAt: 100 * time.Millisecond, ExitAt: 100*time.Millisecond + s.lag, Sent: sentFor(inv)}, nil
+	sent := sentFor(inv, tool != "")
+	if len(sent) > 0 {
+		s.refused[uuid] = true // an interrupted run: a session resumed after it cites it and declines (R6 run 4)
+	}
+	return Result{Stdout: []byte(out.String()), ExitCode: 0, InitAt: 10 * time.Millisecond, ResultAt: 100 * time.Millisecond, ExitAt: 100*time.Millisecond + s.lag, Sent: sent, Timeout: s.timeoutLabels[inv.Label]}, nil
 }
 
-func sentFor(inv Invocation) []string {
+// sentFor lists the signals a run really sent: the real runner fires a step on its stream event, so a step
+// that waits for a tool_use is never sent in a run without one (R6 run 4, #426).
+func sentFor(inv Invocation, toolUse bool) []string {
 	var out []string
 	for _, st := range inv.Signals {
+		if st.OnEvent == "tool_use" && !toolUse {
+			continue
+		}
 		out = append(out, st.Signal.String())
 	}
 	return out
@@ -440,9 +475,9 @@ func TestNeverTouchesTheRealLoginAndNeverRunsBare(t *testing.T) {
 		}
 	}
 	for _, inv := range s.runs {
-		// Item 1's probe and control runs carry the one extra readable scope (R6 run 1); every other run
-		// must pass the generic check, which refuses --add-dir.
-		if strings.HasPrefix(inv.Label, "canary_") {
+		// Item 1's probe and control runs, and the runs of items 4 and 6 (R6 run 4, #426), carry the one extra
+		// readable scope; every other run must pass the generic check, which refuses --add-dir.
+		if strings.HasPrefix(inv.Label, "canary_") || strings.HasPrefix(inv.Label, "signal_") || inv.Label == "managed_only_read" {
 			if err := ValidateProbeArgv(inv.Args, tHome); err != nil {
 				t.Fatalf("%v: %v", inv.Label, err)
 			}

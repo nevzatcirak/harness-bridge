@@ -221,12 +221,31 @@ func (d *Driver) argvUUID(uuid string, bootstrap bool, mut func(settings map[str
 // and the one readable scope probe and control share (--add-dir <run home>), so that the deny rule is the
 // only difference between a probe and its control. The production adapter argv is unchanged.
 func (d *Driver) probeArgv(uuid string) ([]string, error) {
-	args, err := d.argvUUID(uuid, true, nil)
+	return d.scopedArgv(uuid, nil)
+}
+
+// scopedArgv is probeArgv with an optional change of the inline settings. R6 run 4 (#426): items 4 and 6 use it
+// too (item 6 drops the inline permissions block): each run is a NEW session of its own and has the one trailing
+// readable scope, so the model neither cites an earlier run nor meets a scope refusal for a decoy under the run
+// home. The guard is the same ValidateProbeArgv; nothing was added to its allow-list.
+func (d *Driver) scopedArgv(uuid string, mut func(settings map[string]any)) ([]string, error) {
+	args, err := d.argvUUID(uuid, true, mut)
 	if err != nil {
 		return nil, err
 	}
 	args = append(args, "--add-dir", d.Cfg.RunHome) // last: --add-dir takes a list, nothing may follow it
 	return args, ValidateProbeArgv(args, d.Cfg.RunHome)
+}
+
+// runHomePreflight is the run-home pre-flight of items 4 and 6 (R6 run 4 follow-up, #430, review #429 P2-1): both
+// hand the CLI the run home as a readable scope (--add-dir <run home>), as item 1 does, so the run home must be a
+// real directory owned by the run user that nobody else can write into BEFORE any run starts or anything is
+// created. Item 1 runs the full claudecode.Preflight, which includes the same checks. It prints one line with the
+// item and the result, never a path.
+func (d *Driver) runHomePreflight(item int) bool {
+	ok := claudecode.PreflightRunHome(d.Canary, d.Cfg.RunHome, d.Cfg.RunHome, d.Cfg.RunUID) == nil
+	_ = d.Out.KV("run_home", "item", strconv.Itoa(item), "preflight", map[bool]string{true: "pass", false: "fail"}[ok])
+	return ok
 }
 
 func (d *Driver) env() []string {
@@ -241,8 +260,9 @@ func (d *Driver) run(ctx context.Context, label string, args []string, stdin str
 	return d.runInv(ctx, label, args, stdin, steps, closeOn, "")
 }
 
-// runInv is run with the probe run home of an item 1 probe or control run (probeHome empty for every other
-// run): the production runner then validates the argv with ValidateProbeArgv instead of ValidateArgv.
+// runInv is run with the probe run home of a run that carries the readable scope (an item 1 probe or control
+// run, or a run of item 4 or 6; probeHome empty for every other run): the production runner then validates the
+// argv with ValidateProbeArgv instead of ValidateArgv.
 func (d *Driver) runInv(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn, probeHome string) (Result, StreamInfo, error) {
 	if err := d.budget.Take(); err != nil {
 		_ = d.Out.KV("budget", "state", "breached", "runs", strconv.Itoa(d.budget.Used()))
@@ -622,15 +642,19 @@ func (d *Driver) itemLag(ctx context.Context) Verdict {
 
 // ---- item 4: SIGINT/SIGTERM relay through the wrapper with a live tool call ---------------------
 
+// itemSignals (R6 run 4, #426): each of the two runs is a NEW session of its own with the same readable scope as
+// item 1 (never a resume: a resumed session saw the interrupted Glob and declined to call the tool, so the
+// SIGTERM signal was never sent). The verdict separates three things:
+//
+//   - a signal was sent but the wrapper did not exit or the child is alive: FAIL (a relay failure);
+//   - no tool_use in a run, so its signal was never sent: INCOMPLETE (the relay was not exercised, never FAIL);
+//   - both signals sent, wrapper exited, child gone: PASS.
+//
+// A FAIL of one run is never hidden behind an unexercised other run.
 func (d *Driver) itemSignals(ctx context.Context) Verdict {
 	v := Verdict{Item: 4, Name: itemName(4), Result: Fail}
-	if err := d.ensureSession(ctx); err != nil {
-		v.Why = "bootstrap_failed"
-		return v
-	}
-	args, err := d.argv(false, nil)
-	if err != nil {
-		v.Why = "argv_refused"
+	if !d.runHomePreflight(4) {
+		v.Why = "preflight_failed"
 		return v
 	}
 	cleanup, ok := d.toolDecoys()
@@ -640,29 +664,45 @@ func (d *Driver) itemSignals(ctx context.Context) Verdict {
 	}
 	defer cleanup()
 	prompt := "Use the Glob tool with the pattern " + d.Cfg.RunHome + "/canary-control/*, then Read every file it returns one by one."
-	allOK := true
+	relayFailed, notSent := false, false
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
-		steps := []Step{{OnEvent: "tool_use", Signal: sig}}
-		if sig == syscall.SIGINT {
-			steps = append(steps, Step{OnEvent: "tool_use", Delay: 8 * time.Second, Signal: syscall.SIGTERM}) // the Bridge's escalation
-		}
-		res, _, err := d.run(ctx, "signal_"+strings.ToLower(sig.String()), args, prompt, steps, "")
+		uuid, err := newUUID(d.Rand)
 		if err != nil {
 			v.Why = "run_stopped"
 			return v
 		}
-		gone := !d.Procs.Alive(d.uuid)
+		args, err := d.scopedArgv(uuid, nil)
+		if err != nil {
+			v.Why = "argv_refused"
+			return v
+		}
+		steps := []Step{{OnEvent: "tool_use", Signal: sig}}
+		if sig == syscall.SIGINT {
+			steps = append(steps, Step{OnEvent: "tool_use", Delay: 8 * time.Second, Signal: syscall.SIGTERM}) // the Bridge's escalation
+		}
+		res, _, err := d.runInv(ctx, "signal_"+strings.ToLower(sig.String()), args, prompt, steps, "", d.Cfg.RunHome)
+		if err != nil {
+			v.Why = "run_stopped"
+			return v
+		}
+		gone := !d.Procs.Alive(uuid) // the run's own session uuid is in the child's command line
 		ended := res.ExitAt >= 0 && !res.Timeout
 		_ = d.Out.KV("signal", "first", strings.ReplaceAll(sig.String(), " ", "_"), "sent", nz(strings.ReplaceAll(strings.Join(res.Sent, ","), " ", "_")),
 			"wrapper_exited", strconv.FormatBool(ended), "exit_ms", ms(res.ExitAt), "child_gone", strconv.FormatBool(gone))
-		if !ended || !gone || len(res.Sent) == 0 {
-			allOK = false
+		switch {
+		case len(res.Sent) == 0:
+			notSent = true // no tool_use: the planned signal was never sent
+		case !ended || !gone:
+			relayFailed = true
 		}
 	}
-	if allOK {
-		v.Result, v.Why = Pass, "both_signals_relayed_child_gone"
-	} else {
+	switch {
+	case relayFailed:
 		v.Why = "signal_not_relayed_or_child_alive"
+	case notSent:
+		v.Result, v.Why = Incomplete, "signal_not_sent_no_tool_use"
+	default:
+		v.Result, v.Why = Pass, "both_signals_relayed_child_gone"
 	}
 	return v
 }
@@ -700,6 +740,10 @@ func (d *Driver) itemManaged(ctx context.Context) (v Verdict) {
 		return v
 	}
 	d.Out.Forbid(cp.plan.Marker, cp.plan.ControlMarker)
+	if !d.runHomePreflight(6) { // before anything is written or run: the CLI is given the run home as a readable scope
+		v.Why = "preflight_failed"
+		return v
+	}
 	var created []string // the decoy is registered for removal only after it was created here
 	defer func() { d.cleanup(created, cp.controlDir) }()
 	if err := d.FS.Write(cp.plan.DecoyFile, cp.decoyContent); err != nil {
@@ -707,31 +751,42 @@ func (d *Driver) itemManaged(ctx context.Context) (v Verdict) {
 		return v
 	}
 	created = append(created, cp.plan.DecoyFile)
-	if err := d.ensureSession(ctx); err != nil {
-		v.Why = "bootstrap_failed"
+	// R6 run 4 (#426): a NEW session of its own (never the resumed bootstrap, whose earlier refusals made the model
+	// decline) and the readable scope of item 1, so a refusal can only be the managed deny rule. The inline
+	// settings carry NO deny rules: a denial can only come from the managed file.
+	uuid, err := newUUID(d.Rand)
+	if err != nil {
+		v.Why = "run_stopped"
 		return v
 	}
-	// The inline settings carry NO deny rules: a denial can only come from the managed file.
-	args, err := d.argv(false, func(s map[string]any) { delete(s, "permissions") })
+	args, err := d.scopedArgv(uuid, func(s map[string]any) { delete(s, "permissions") })
 	if err != nil {
 		v.Why = "argv_refused"
 		return v
 	}
 	pr := claudecode.Probes(cp.plan)[0] // Read of the decoy file
-	res, info, err := d.run(ctx, "managed_only_read", args, claudecode.Prompt(pr), nil, "")
+	res, info, err := d.runInv(ctx, "managed_only_read", args, claudecode.Prompt(pr), nil, "", d.Cfg.RunHome)
 	if err != nil {
 		v.Why = "run_stopped"
 		return v
 	}
 	o := claudecode.ScanProbe(res.Stdout, pr, cp.plan.Marker)
-	_ = d.Out.KV("managed", "tool_use", strconv.FormatBool(o.ToolUse), "denial", strconv.FormatBool(o.Denial != ""), "marker_shown", strconv.FormatBool(o.Shown), "mcp_servers", mcpCount(info))
+	class := claudecode.DenialClass(res.Stdout, pr, claudecode.DeniedDirs(cp.plan))
+	_ = d.Out.KV("managed", "tool_use", strconv.FormatBool(o.ToolUse), "denial", strconv.FormatBool(o.Denial != ""), "marker_shown", strconv.FormatBool(o.Shown), "denial_class", class, "mcp_servers", mcpCount(info))
+	// A shown marker is a FAIL. Anything that is not a clean "the managed rule refused the read" is INCOMPLETE,
+	// never a FAIL of the product and never a PASS: PASS needs a tool_use, a denial entry and the rule's own class
+	// (the inline settings carry no deny rule, so a rule denial can only come from the managed file).
 	switch {
 	case o.Shown:
 		v.Why = "managed_deny_did_not_apply"
-	case o.ToolUse && o.Denial != "":
-		v.Result, v.Why = Pass, "managed_deny_applied_no_inline_rules"
+	case !o.ToolUse:
+		v.Result, v.Why = Incomplete, "no_tool_use"
+	case o.Denial == "":
+		v.Result, v.Why = Incomplete, "no_denial_no_marker"
+	case class != claudecode.DenialRule:
+		v.Result, v.Why = Incomplete, "denial_not_rule_"+class
 	default:
-		v.Why = "inconclusive_no_tool_use_or_denial"
+		v.Result, v.Why = Pass, "managed_deny_applied_no_inline_rules"
 	}
 	return v
 }

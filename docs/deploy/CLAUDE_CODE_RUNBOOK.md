@@ -129,7 +129,7 @@ is not the deny rule.
 - **A fresh session per run.** Every probe and every control run creates its own throwaway session
   (`--session-id <new uuid>`), never `--resume` of the bootstrap or of another run, so no run sees another
   run's refusals. Item 1 therefore no longer needs the bootstrap: it costs **12 runs** (6 probes, 6 controls),
-  not 13. The other items still use the bootstrap session.
+  not 13. Items 2, 5, 7 and 8 still use the bootstrap session; items 4 and 6 stopped using it in #426 (below).
 - **The same readable scope for probe and control.** Both get one trailing `--add-dir <run home>` (the
   `-run-home`, the ISOLATED test user's HOME, which holds only decoys, never the Claude service user's HOME), so
   the deny rule is the only difference between a probe and its control; their argv is identical up to the
@@ -205,10 +205,73 @@ was added. Run-3 behaviour of the real CLI (the same two texts, the paths, the o
 the text or the path the CLI returns differs from run 2 (read the redacted history record, never the evidence
 line, which carries only the class).
 
+**R6 run 3 (2026-11-20 about 16:1xZ, run by the maintainer; recorded here from the Planning Desk's state log #117,
+not reproduced by the author).** Driver `54314e7` with `-tags live` (sha256 `ed973c79…`), form A test user
+`hbcanary`, Claude Code 2.1.325. **Item 1 (canary) PASS** `why=all_probes_denied_controls_read`, exit 0: 6/6 probes
+`denial_class=rule`, 6/6 controls `none`, no decoy leak, no file canary, no sink request, `mcp_servers=0` and
+`apiKeySource` `none` on 12/12 runs, all three observations made.
+
+**R6 run 4 (2026-11-20 16:13Z, run by the maintainer; recorded here from the Planning Desk's issue #426, not
+reproduced by the author).** The same driver binary, `-items 2,4,5,6,7,8`. Item 2 OBSERVED (lag runs=5, min 469 /
+median 496 / max 547 ms, the default 10 s grace covers the maximum, `post_result types=none`); item 5 OBSERVED
+(`--safe-mode` accepted, exit 0, `mcp_servers=0`); **items 7 and 8 PASS**. **Item 4 FAIL**
+`signal_not_relayed_or_child_alive`: the SIGINT run had `tool_uses=1`, the signal was sent, the wrapper exited and
+the child was gone (`error_during_execution`, exit 0); the SIGTERM run had **`tool_uses=0` and `sent=none`**: the
+model never made the tool call, so the signal was never sent. The relay was neither tested nor refuted.
+**Item 6 FAIL** `inconclusive_no_tool_use_or_denial` (`tool_use=false denial=false marker_shown=false`): the model
+never called Read. Cause (from `driver.go` `itemSignals`/`itemManaged`): both items resumed the ONE bootstrap
+session (the model sees the earlier turns, for instance the interrupted Glob, and declines), and their targets
+(`RUN_HOME/canary-control/*`, `RUN_HOME/.claude/.credentials.decoy.json`) lie outside the working directory
+without the `--add-dir <run home>` scope that item 1 got in #411.
+
+**What changed for run 5 (#426; driver and tests only, the production adapter argv is unchanged).**
+- **Items 4 and 6: a fresh session and the same scope per run.** Each of the two signal runs of item 4 and the
+  read run of item 6 is a NEW `--session-id <uuid>` session (never `--resume`), with the one trailing
+  `--add-dir <run home>` of item 1 (the helper `scopedArgv`, which `probeArgv` now calls) and the same argv guard,
+  `ValidateProbeArgv`; its allow-list was **not** extended (item 6's only change to the argv, dropping the inline
+  `permissions` block, is inside the `--settings` value and was already allowed). The runs are marked with
+  `ProbeRunHome`, so the production runner validates them with the probe guard. Items 4 and 6 no longer need the
+  bootstrap: `-items 4,6` costs **3 runs** (SIGINT, SIGTERM, the read). Items 2, 5, 7 and 8 still run the
+  bootstrap when requested (item 8 closes its reader after `init`, so its PASS never depended on a tool call). The
+  child check of item 4 now asks about the run's own session uuid.
+- **Item 4 verdict.** A signal that was sent while the wrapper did not exit or the child lives is **FAIL**
+  (`signal_not_relayed_or_child_alive`); a run in which no signal was sent (no tool_use) is **INCOMPLETE**
+  `signal_not_sent_no_tool_use` (exit 3), never FAIL and never PASS; a FAIL of one run is not hidden behind an
+  unexercised other run. The SIGINT, 8 s, SIGTERM escalation is unchanged.
+- **Item 6 verdict.** Marker shown: **FAIL** `managed_deny_did_not_apply`. No tool_use: **INCOMPLETE** `no_tool_use`.
+  Tool_use without a denial entry and without the marker: **INCOMPLETE** `no_denial_no_marker`. A denial that is not
+  the rule's: **INCOMPLETE** `denial_not_rule_<class>` (`scope`, `other`, `declined`, `none`). **PASS** needs a
+  tool_use, a denial entry and `denial_class=rule` (the inline settings carry no deny rule, so a rule denial can only
+  come from the managed file). The `managed` line prints `denial_class=` (a closed-set word, never the error text).
+  That attribution assumes that no other settings layer (project settings in `-root`, the run home's user settings,
+  a CLI-internal protection of the credential directories) emits the same refusal text: read the redacted history
+  record of run 5 before trusting a `rule` for item 6 (UNVERIFIED).
+- **The run-home pre-flight for items 4 and 6 (#430, review #429 P2-1).** Both items give the CLI the run home as a
+  readable scope, as item 1 does, so each now checks the run home before any run starts and before anything is
+  created: a real directory (no symlink) owned by the run user, not group- or world-writable, with HOME a real path
+  inside the tree (here the tree is the run home itself). A refusal is **FAIL** `why=preflight_failed` with **zero**
+  runs started (no `--add-dir` is ever given). The check is `claudecode.PreflightRunHome`, the helper `Preflight`
+  itself uses for item 1 (the same checks, the same wording), so the two cannot drift apart; item 1's behaviour is
+  unchanged. The line is `run_home item=<4|6> preflight=pass|fail` (never a path).
+
+**Expected lines for run 5 (`-items 4,6`; UNVERIFIED).** `run_home item=4 preflight=pass` and `run_home item=6
+preflight=pass` first (before any `run` line; `preflight=fail` ends the item with no run). Then three `run` lines (`label=signal_interrupt`,
+`label=signal_terminated`, `label=managed_only_read`), each with `tool_uses=1` or more; two `signal` lines with
+`wrapper_exited=true` and `child_gone=true` (`sent=interrupt`, plus `terminated` in the SIGINT run if the escalation
+fired before the wrapper exited); `verdict item=4 name=sudo_signal_relay result=PASS why=both_signals_relayed_child_gone`;
+`managed tool_use=true denial=true marker_shown=false denial_class=rule mcp_servers=0`; `verdict item=6
+name=managed_settings_in_p result=PASS why=managed_deny_applied_no_inline_rules`. **Whether `--add-dir <run home>` is
+honoured under `-p --permission-mode default --permission-prompts none`, whether the model calls the tool in a fresh
+session, the text of the refusals and the managed file's effect in these two items are all UNVERIFIED.** An INCOMPLETE
+with `signal_not_sent_no_tool_use` or `no_tool_use` means the model did not call the tool: repeat the run, do not
+read it as a product result. A `denial_not_rule_scope` means the scope was not granted for that read.
+
 **Preconditions (all operator steps; the author edited no host file):**
 1. The isolated test user, its HOME and the wrapper/sudo that makes the child run as that user with that HOME
    (see the command header of `cmd/hb-claude-acceptance`); the driver binary installed in a root-owned
-   directory and run once as root.
+   directory and run once as root. For items 1, 4 and 6 the `-run-home` (that HOME) must be a real directory owned
+   by `-run-uid` and not group- or world-writable: the driver checks it before any run and stops with `FAIL
+   preflight_failed` otherwise (items 4 and 6, #430).
 2. A dedicated history directory: `install -d -m 0700 -o root -g root <dir>` under a root-owned, not
    other-writable parent chain (for example below `/root`). It must be owned by the process running the
    driver and mode exactly 0700 (the store refuses anything else, and a symlink anywhere in the path).
