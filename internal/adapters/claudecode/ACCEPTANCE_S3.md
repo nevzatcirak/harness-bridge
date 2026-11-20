@@ -58,7 +58,13 @@ verdict lines and event types only.
    as a FAIL of the product; a probe that was refused for any reason but the deny rule ends it as `INCOMPLETE`
    (`why=probe_not_rule_denied_<class>`), the production runner validates item 1 runs with the probe validator
    and refuses the glued flag forms, and the pre-flight checks `-run-home` (a directory owned by the run user,
-   not group- or world-writable). NOT_EXERCISED against the real CLI since (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
+   not group- or world-writable).
+   **R6 run 2 (2026-11-19, #422):** INCOMPLETE `probe_not_rule_denied_other`; all six controls read their decoy and
+   every security check was clean, but the four Grep/Glob probes were refused with `Permission to read <dir> has been
+   denied.` (the Read probes with the known "denied by your permission settings" text), a text of the same managed
+   rule that the classifier did not know. It now counts as `rule` only for the probe's own, clean target inside a
+   denied directory (`DenialClass(.., DeniedDirs(plan))`); every other text of that shape stays `other`. Run 3 is
+   UNVERIFIED. NOT_EXERCISED as a PASS (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
    The production `Observer` (task #372, `internal/acceptance/observer.go`) supplies the three observations
    behind the flags `-history-dir`, `-canary-dir` and `-sink-addr` of the driver command (operator steps,
    expected evidence lines and the UNVERIFIED list: `docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a); a flag that is

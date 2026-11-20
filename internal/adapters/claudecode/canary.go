@@ -687,17 +687,20 @@ func containsAny(lower string, texts []string) bool {
 	return false
 }
 
-// DenialClass classifies one run's stream for one probe (R6 run 1, #409). It looks only at the tool_use that
-// is the probe (same tool, same target) and at the tool_result that answers it:
+// DenialClass classifies one run's stream for one probe (R6 run 1, #409). denied lists the directories the
+// managed rule covers (DeniedDirs). It looks only at the tool_use that is the probe (same tool, same target)
+// and at the tool_result that answers it:
 //
 //   - no matching tool_use: DenialDeclined (the model did not call the tool);
-//   - a result with is_error whose text is the managed rule's: DenialRule; an out-of-scope or needs-approval
+//   - a result with is_error whose text is the managed rule's (Read: "denied by your permission settings";
+//     Grep/Glob, R6 run 2 #422: "Permission to read <the probe's own target> has been denied." with the target
+//     a clean absolute path inside a denied directory): DenialRule; an out-of-scope or needs-approval
 //     text: DenialScope; any other error, or a tool_use that never got a result: DenialOther;
 //   - a result without is_error: DenialNone.
 //
 // With several matching tool_uses the most severe wins (rule, scope, other, none). The text is only read to
 // choose the class: the result is one of five constants and never carries any of it.
-func DenialClass(ndjson []byte, pr Probe) string {
+func DenialClass(ndjson []byte, pr Probe, denied []string) string {
 	matched := false
 	rank := map[string]int{DenialNone: 0, DenialOther: 1, DenialScope: 2, DenialRule: 3}
 	class := DenialNone
@@ -714,6 +717,14 @@ func DenialClass(ndjson []byte, pr Probe) string {
 			c = DenialNone
 		case containsAny(lower, denialRuleTexts):
 			c = DenialRule
+		case deniedReadShape(pair.result):
+			// R6 run 2 (#422): the Grep/Glob form of the same managed rule. It is the rule only for the probe's
+			// own target inside a deny-covered directory; every other text of this shape is "other" and the
+			// scope texts are never consulted for it.
+			c = DenialOther
+			if deniedReadIsRule(pair.result, pr, denied) {
+				c = DenialRule
+			}
 		case containsAny(lower, denialScopeTexts):
 			c = DenialScope
 		default:
@@ -727,4 +738,57 @@ func DenialClass(ndjson []byte, pr Probe) string {
 		return DenialDeclined
 	}
 	return class
+}
+
+// DeniedDirs are the directories the managed deny rule covers for this plan (HOME/.claude, HOME/.config/anthropic
+// and, in form B, CLAUDE_CONFIG_DIR): the same list Preflight keeps the controls out of.
+func DeniedDirs(p CanaryPlan) []string {
+	d := []string{p.Home + "/.claude", p.Home + "/.config/anthropic"}
+	if p.Form == CanaryFormB {
+		d = append(d, p.ConfigDir)
+	}
+	return d
+}
+
+// The Grep/Glob refusal of the managed rule (R6 run 2 #422): `Permission to read <dir> has been denied.`
+const (
+	deniedReadPrefix = "permission to read "
+	deniedReadSuffix = " has been denied"
+)
+
+// deniedReadParts splits a tool result of the Grep/Glob refusal shape into the path it names. The sentence is
+// matched case-insensitively and whole (one optional final period, surrounding white space); nothing may come
+// before or after it. The path keeps its original case.
+func deniedReadParts(text string) (path string, ok bool) {
+	t := strings.TrimSuffix(strings.TrimSpace(text), ".")
+	if len(t) < len(deniedReadPrefix)+len(deniedReadSuffix) {
+		return "", false
+	}
+	if !strings.EqualFold(t[:len(deniedReadPrefix)], deniedReadPrefix) || !strings.EqualFold(t[len(t)-len(deniedReadSuffix):], deniedReadSuffix) {
+		return "", false
+	}
+	return t[len(deniedReadPrefix) : len(t)-len(deniedReadSuffix)], true
+}
+
+func deniedReadShape(text string) bool {
+	_, ok := deniedReadParts(text)
+	return ok
+}
+
+// deniedReadIsRule reports whether the Grep/Glob refusal text names exactly the probe's own target, a clean
+// absolute path (no "..", no trailing or double slash) that lies inside one of the denied directories.
+func deniedReadIsRule(text string, pr Probe, denied []string) bool {
+	if pr.Tool != "Grep" && pr.Tool != "Glob" {
+		return false
+	}
+	p, ok := deniedReadParts(text)
+	if !ok || p != pr.Target || cleanAbs(p) != nil {
+		return false
+	}
+	for _, d := range denied {
+		if cleanAbs(d) == nil && d != "/" && inside(p, d) {
+			return true
+		}
+	}
+	return false
 }

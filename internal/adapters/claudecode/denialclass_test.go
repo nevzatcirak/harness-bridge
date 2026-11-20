@@ -26,6 +26,8 @@ func dcResult(id string, isErr bool, text string) string {
 	return dcLine(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "is_error": isErr, "content": text}}}})
 }
 
+var dcDenied = []string{"/h/.claude", "/h/.config/anthropic"}
+
 var dcReadProbe = Probe{ID: "read-decoy", Tool: "Read", Target: "/h/.claude/.credentials.decoy.json"}
 
 func dcReadUse(id string) string {
@@ -59,7 +61,7 @@ func TestDenialClassIsAClosedSetPerStream(t *testing.T) {
 	}
 	closed := map[string]bool{DenialRule: true, DenialScope: true, DenialDeclined: true, DenialNone: true, DenialOther: true}
 	for _, c := range cases {
-		got := DenialClass([]byte(c.stream), c.pr)
+		got := DenialClass([]byte(c.stream), c.pr, dcDenied)
 		if got != c.want {
 			t.Errorf("%s: class %q, want %q", c.name, got, c.want)
 		}
@@ -77,7 +79,7 @@ func TestDenialClassIsAClosedSetPerStream(t *testing.T) {
 func TestDenialClassReadsTheResultOfTheMatchingToolUseOnly(t *testing.T) {
 	s := dcUse("a", "Read", map[string]any{"file_path": "/h/other"}) + dcResult("a", true, dcRuleText) +
 		dcReadUse("t1") + dcResult("t1", false, "hbcanary-fedcba9876543210fedcba9876543210")
-	if got := DenialClass([]byte(s), dcReadProbe); got != DenialNone {
+	if got := DenialClass([]byte(s), dcReadProbe, dcDenied); got != DenialNone {
 		t.Fatalf("class %q, want none: the refusal belongs to another tool_use", got)
 	}
 }
@@ -101,7 +103,7 @@ func TestDenialClassMostSevereOfSeveralToolUsesWins(t *testing.T) {
 		"read then read":       {two(read, read), DenialNone},
 		"rule hidden by reads": {two(rule, two(read, read)), DenialRule},
 	} {
-		if got := DenialClass([]byte(c.stream), dcReadProbe); got != c.want {
+		if got := DenialClass([]byte(c.stream), dcReadProbe, dcDenied); got != c.want {
 			t.Errorf("%s: class %q, want %q", name, got, c.want)
 		}
 	}
