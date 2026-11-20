@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevzatcirak/harness-bridge/internal/bounded"
 	"github.com/nevzatcirak/harness-bridge/internal/security"
 )
 
@@ -293,6 +294,14 @@ func TestNonGitDirectoryAndTopLevelAboveTheRoot(t *testing.T) {
 	}
 }
 
+// TestAscentIsBounded proves the 128-LEVEL bound of the Git top level procedure, not the 2 s wall-clock bound of
+// one authorization (authBound). The walk itself is slow and grows faster than linearly with the depth (about 3 ms
+// at 16 levels, 95 ms at 64, 0.7 s at 130 on an idle 4-core machine, 1.1 s under -race), so with the production
+// bound the test failed with "bounded call did not complete in time" whenever the machine was busy (main CI run
+// 44823649508). The test therefore gives its authorizer a long wall-clock bound, so that the only way to the
+// asserted refusal is the level count. That a blocked filesystem call ends in ErrCheckUnavailable is pinned by
+// TestABlockedFilesystemIsUnavailableNotAuthorized (through the caller's deadline); no test asserts authBound's value.
+// The assertion is unchanged. (The cost of a legitimate deep walk against authBound is reported in task #444, not changed.)
 func TestAscentIsBounded(t *testing.T) {
 	root := mkdir(t, canonicalTemp(t), "lc")
 	repoAt(t, root) // a top level exists, but more than 128 levels up
@@ -302,9 +311,14 @@ func TestAscentIsBounded(t *testing.T) {
 	}
 	deep := mkdir(t, parts...)
 	a := newAuthorizer(t, cfgFor(root, ModeCreate))
+	a.group = bounded.NewGroup[authKey, authResult](16, ascentTestWallBound)
 	_, err := authz(a, deep, ModeCreate)
 	wantRefusal(t, err, CodeForbidden, ReasonNonGit, causeAscentBound)
 }
+
+// ascentTestWallBound is the wall-clock bound of TestAscentIsBounded's authorizer: far above any load a CI runner
+// can put on a 0.7 s walk, so a hang still ends the test (the go test timeout is longer).
+const ascentTestWallBound = 60 * time.Second
 
 func TestModesPerRoot(t *testing.T) {
 	base := canonicalTemp(t)
