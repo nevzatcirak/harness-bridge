@@ -86,3 +86,48 @@ func TestPreflightRunHomeChecksTheTreeAndHome(t *testing.T) {
 		t.Error("a HOME outside the tree was accepted")
 	}
 }
+
+// A symlink alias of the tree or of HOME is refused, and so is every unclean spelling of them, even when the
+// filesystem would accept the spelling as it stands (the fake below has an entry for each one): the check does
+// not lean on the filesystem to notice. (Mutation review: these three were not pinned before.)
+func TestPreflightRunHomeRefusesAliasesAndUncleanSpellings(t *testing.T) {
+	// HOME is a symlink to another directory inside the tree
+	f := goodFS(CanaryFormA)
+	f.info[cTree+"/real-home"] = dirInfo()
+	f.links[cHome] = cTree + "/real-home"
+	if err := PreflightRunHome(f, cTree, cHome, cRunUID); err == nil || !strings.Contains(err.Error(), "HOME is not a real path") {
+		t.Errorf("a HOME that is a symlink alias: %v", err)
+	}
+	// the tree is a symlink to another directory
+	g := goodFS(CanaryFormA)
+	g.info["/srv/canary/real-tree"] = dirInfo()
+	g.links[cTree] = "/srv/canary/real-tree"
+	if err := PreflightRunHome(g, cTree, cHome, cRunUID); err == nil || !strings.Contains(err.Error(), "throwaway tree is not a real path") {
+		t.Errorf("a tree that is a symlink alias: %v", err)
+	}
+	// unclean spellings that resolve to themselves in this filesystem
+	for _, c := range []struct{ name, tree, home string }{
+		{"trailing slash on the tree", cTree + "/", cHome},
+		{"trailing slash on HOME", cTree, cHome + "/"},
+		{"a dot-dot in the tree", cTree + "/../tree", cHome},
+		{"a dot-dot in HOME", cTree, cTree + "/home/../home"},
+		{"a double slash in HOME", cTree, cTree + "//home"},
+	} {
+		h := goodFS(CanaryFormA)
+		for _, p := range []string{c.tree, c.home} {
+			h.info[p] = dirInfo()
+		}
+		if err := PreflightRunHome(h, c.tree, c.home, cRunUID); err == nil || !strings.Contains(err.Error(), "not an absolute clean path") {
+			t.Errorf("%s: %v, want a refusal naming the clean path", c.name, err)
+		}
+	}
+	// the root is never the tree or HOME, even when it is a directory owned by the run user
+	r := goodFS(CanaryFormA)
+	r.info["/"] = dirInfo()
+	if err := PreflightRunHome(r, "/", "/", cRunUID); err == nil {
+		t.Error("the root was accepted as the tree and HOME")
+	}
+	if err := PreflightRunHome(r, "/", cHome, cRunUID); err == nil {
+		t.Error("the root was accepted as the tree")
+	}
+}
