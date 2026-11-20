@@ -92,7 +92,11 @@ func (m *Manager) ReleaseGuard(ctx context.Context, session, executionID string,
 		return ev, err
 	}
 	// 6-8. Re-take x.op, repeat the compare-and-swap and state checks, read
-	// again, compare, and commit, all without giving x.op back in between.
+	// again, compare, and commit, inside this one underOp call, so x.op is not
+	// handed back in between. That is a property of the single call: the tests
+	// pin only the second native read (TestReleaseSecondReadHoldsOp); the commit
+	// makes no native call a test could block on, so a refactor that split this
+	// call after the second read would not be caught (review #151 P3-2).
 	err = m.underOp(ctx, x, func(bounded context.Context) error {
 		if _, err := m.releaseHolder(session, executionID); err != nil {
 			return err
