@@ -52,7 +52,7 @@ re-checked against the freeze SHA.
 | `BRIDGE_TLS_CERT`, `BRIDGE_TLS_KEY` | remote mode only; both required, never a plaintext fallback | `cmd/bridge/ingress.go:23,38-41` |
 | `BRIDGE_ALLOWED_ROOTS` | path-list (`:`); the static ACL roots | `cmd/bridge/main.go:40`; `internal/security` |
 | `BRIDGE_ALLOWED_SESSIONS` | comma list of exact session IDs; **static**, read once at startup | `cmd/bridge/main.go:40` |
-| `BRIDGE_WRITER_LOCK_DIR` | the shared writer-lock directory (also used by the Claude adapter) | `cmd/bridge/main.go:51`; `cmd/bridge/claude.go:58` |
+| `BRIDGE_WRITER_LOCK_DIR` | the shared writer-lock directory (also used by the Claude adapter) | `cmd/bridge/main.go:51`; `cmd/bridge/claude.go:50` |
 | `BRIDGE_ADMIN_SOCKET` | writer-only admin socket; parent `0700`, service user; ignored under read-only | `cmd/bridge/admin.go:18-31` |
 | `BRIDGE_LIFECYCLE_CONFIG` | absolute path of the lifecycle JSON; unset = no lifecycle tool; invalid = startup error | `cmd/bridge/lifecycle.go:20,64-78`; `internal/lifecycle/config.go:24,141-148` |
 | `BRIDGE_OVERLAY_DIR` | overlay directory; needs `BRIDGE_LIFECYCLE_CONFIG`; absolute, real directory (no symlink in the final component), owned by the service user, mode exactly `0700`; set without lifecycle = startup error | `cmd/bridge/lifecycle.go:21,30,69-101`; `internal/overlay/overlay.go:163-233` |
@@ -114,14 +114,16 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ExecStart=/usr/local/libexec/harness-bridge-h5
    Environment=BRIDGE_READ_ONLY=0
    Environment=BRIDGE_TOKEN_MAX_LIFETIME=168h
+   Environment=BRIDGE_TOKEN_FILE=/etc/harness-bridge/h5-token
+   Environment=BRIDGE_TOKEN_EXPIRES=<RFC3339 expiry, at most +7 days>
    Environment=BRIDGE_PERMISSION_RELAY=off
    RuntimeDirectory=harness-bridge-admin
    RuntimeDirectoryMode=0700
    Environment=BRIDGE_ADMIN_SOCKET=/run/harness-bridge-admin/admin.sock
    ```
 
-   The H4 drop-in keeps the OpenCode/lock/ACL values; this one swaps the binary and adds the two
-   stage-1 settings. `BRIDGE_READ_ONLY` must be `0` or `1` (`cmd/bridge/ingress.go:24-30`); the
+   The H4 drop-in keeps the OpenCode/lock/ACL values; this one swaps the binary and adds the
+   stage-1 settings (token file/expiry and the relay off). `BRIDGE_READ_ONLY` must be `0` or `1` (`cmd/bridge/ingress.go:24-30`); the
    writer needs `0`. `BRIDGE_PERMISSION_RELAY=off` is D21 Q7 until ADR-024 A1 S7 is exercised live
    (`cmd/bridge/relay.go:17-28`). The admin socket is writer-only; its parent must be `0700` and
    owned by the service user (`cmd/bridge/admin.go:18-31`; ADR-020).
@@ -132,17 +134,24 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ```sh
    set +o history
    umask 077
-   openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64   # ≥43 chars; copy into the
-                                                                     # systemd environment, not into chat
+   install -d -m 0700 /etc/harness-bridge && chown <bridge-uid> /etc/harness-bridge
+   openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64 \
+     > /etc/harness-bridge/h5-token          # 64 chars, no stdout, no shell history
+   chown <bridge-uid> /etc/harness-bridge/h5-token && chmod 0600 /etc/harness-bridge/h5-token
+   date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ  # the RFC3339 expiry for BRIDGE_TOKEN_EXPIRES
    ```
 
-   - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; set an explicit `BRIDGE_TOKEN_EXPIRES` no more than
-     **+7 days** from the sitting and not past the maximum (`cmd/bridge/ingress.go:35-46`;
-     `internal/security/remote.go:26-33,39-66`). The ≥43-character rule applies above 24h.
+   - The token lives only in `/etc/harness-bridge/h5-token` (mode `0600`, owned by the Bridge UID);
+     `zzzz-h5.conf` carries its **path** (`BRIDGE_TOKEN_FILE`) and the expiry
+     (`BRIDGE_TOKEN_EXPIRES`), never the value, so the drop-in may stay `0644`. `BRIDGE_TOKEN` and
+     `BRIDGE_TOKEN_FILE` are mutually exclusive (`cmd/bridge/secret.go:13-43`).
+   - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; the explicit `BRIDGE_TOKEN_EXPIRES` must be RFC3339 and no
+     more than **+7 days** (168h) from the sitting (`cmd/bridge/ingress.go:35-46`;
+     `internal/security/remote.go:39-66`). The ≥43-character rule applies above 24h; the generated
+     value has 64.
    - `set +o history` before typing it; never paste it into chat, a screenshot, the PR or the
-     evidence file. Update the connector's request header in the same step.
-   - `BRIDGE_TOKEN` and `BRIDGE_TOKEN_FILE` are mutually exclusive; the file form must be a private
-     regular file, 1–16384 bytes (`cmd/bridge/secret.go:13-43`).
+     evidence file, and never let it reach stdout. Update the connector's request header in the same
+     step.
 
 4. **Fence before restart (ADR-010):** the target session is `idle`, no pending permission, no
    running child. The restart drops idempotency records, so old keys are never reused.
@@ -153,13 +162,17 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    - MainPID; `ls -l /proc/$P/exe` shows `harness-bridge-h5` **before** hashing;
    - the sha256 of `/usr/local/libexec/harness-bridge-h5` and `NRestarts`;
    - the startup slog lines: token expiry + max lifetime (never token material,
-     `cmd/bridge/startup.go`), `permission relay: ...` (`cmd/bridge/main.go:112-114`),
-     `lifecycle: not configured, no lifecycle tools registered (roots=0)`
-     (`cmd/bridge/lifecycle.go:203`);
+     `cmd/bridge/startup.go`), and `lifecycle: not configured, no lifecycle tools registered (roots=0)`
+     (`cmd/bridge/lifecycle.go:203`). With `BRIDGE_PERMISSION_RELAY=off` **no** `permission relay:`
+     line is written (`cmd/bridge/main.go:110-117` logs it only for `reject_only`); the 11-tool
+     precheck in stage 1 is the evidence, not a log line;
    - `journalctl --since -2min` shows no errors;
    - `/run/harness-bridge-admin` is `drwx------` (service user) and the socket `srw-------`;
-   - the admin smoke refuses (exit 1) and the journal shows exactly one `event=guard_release`
-     line with the refusal and its ticket (H4 "Step 1.6").
+   - the **H5** admin smoke refuses (exit 1) and the journal shows exactly one `event=guard_release`
+     line with the refusal and its ticket. Run the H5 binary (not H4's):
+     `sudo -u <service-user> /usr/local/libexec/harness-bridge-h5 admin release-guard --session
+     opencode:ses_<id> --execution <32 hex> --ticket h5-smoke --socket
+     /run/harness-bridge-admin/admin.sock`.
 
 7. **Connector and workspace:** add the H5 connector (Request header `Authorization: Bearer
    <token>`, per-call approval for `send_prompt` and `interrupt_execution`); pre-list
@@ -214,19 +227,21 @@ listener (`internal/dashboard/config.go:24-29`). The address must be exactly `12
 (`config.go:31-68`). The unix socket is recommended (D17 Q1).
 
 Setup:
-1. `install -d -m 0700 -o <service-user> /run/harness-bridge/dashboard` (mode exactly `0700`, no
-   symlink; `docs/deploy/DASHBOARD.md` "Enable it").
-2. Add `Environment=BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge/dashboard/dash.sock` to the drop-in.
+1. Let systemd create the socket directory: add `RuntimeDirectory=harness-bridge-dashboard` and
+   `RuntimeDirectoryMode=0700` to the drop-in (owned by the unit's `User=`, exactly `0700`, removed
+   on stop) instead of hand-making a `/run` directory; this matches the admin socket's pattern and
+   removes the unit-sandbox question.
+2. Add `Environment=BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge-dashboard/dash.sock` to the drop-in.
 3. Optional operator redaction: `BRIDGE_DASHBOARD_REDACT_EXTRA` is implemented and wired
    (`internal/dashboard/redact.go:89-108`; `cmd/bridge/dashboard.go:18-27`); the name is still
    marked provisional in `DASHBOARD.md`/BACKLOG. JSON array of ≤16 RE2 patterns, 1–256 bytes;
    invalid = startup error, never logged. It is a convenience, not a guarantee.
-4. Restart; `ls -ld /run/harness-bridge/dashboard` is `drwx------` (service user) and the socket
+4. Restart; `ls -ld /run/harness-bridge-dashboard` is `drwx------` (service user) and the socket
    `srw-------`.
 
 Dashboard script (from the workstation, loopback only):
 ```sh
-ssh -N -L 127.0.0.1:8765:/run/harness-bridge/dashboard/dash.sock <operator>@<bridge-host>
+ssh -N -L 127.0.0.1:8765:/run/harness-bridge-dashboard/dash.sock <operator>@<bridge-host>
 ```
 then open `http://127.0.0.1:8765/` and check:
 1. **Sessions view.** The list shows exactly the sessions in `BRIDGE_ALLOWED_SESSIONS` the Bridge
@@ -240,20 +255,23 @@ then open `http://127.0.0.1:8765/` and check:
    appears for the A turn, or the page says it is not computed.
 4. **Redaction check.** Put an obviously **fake** pattern in a file under `h5/` (for example
    `sk-ant-FAKE0000000000000000`), reload the diff: it renders `[redacted]`, and the page's
-   redaction count is ≥1 (`internal/dashboard/redact.go:7,66-76`). Delete the fake line afterwards.
+   redaction count is ≥1 (`internal/dashboard/redact.go:9,69-76,78`). Delete the fake line afterwards.
 5. **Archived filter.** After the R7 archive step, `/` hides the archived session and
    `/?archived=1` shows it with the `archived` badge (`internal/dashboard/handler.go:169-172`).
 6. **Audit.** `/audit` shows the ring: `guard_release`, `prompt_submission`, `interrupt`,
    `session_create` only (`internal/dashboard/audit.go:32`); the archive events stay journal-only
    until the allowlist is amended. No free text, no token material.
-7. **Read-only.** `curl -i -X POST http://127.0.0.1:8765/api/state` is 405; a foreign `Host` is 400
-   and a foreign `Origin` 403 on TCP (the unix socket needs neither; its directory is the fence);
-   a failing source is 503 with `Retry-After` (`internal/dashboard/handler.go`;
-   `docs/deploy/DASHBOARD.md`). There is no write route.
+7. **Read-only.** On the **unix socket** `curl -i -X POST http://127.0.0.1:8765/api/state` is 405
+   (every method but GET/HEAD) and a request carrying **any** `Origin` header is 403
+   (`internal/dashboard/handler.go:123-139,179-182`; the Host allowlist is empty on the socket,
+   `internal/dashboard/server.go:55-58,71-74`). The foreign-`Host` 400 path is **NOT_EXERCISED on the
+   socket**: it exists only with a temporary loopback `BRIDGE_DASHBOARD_ADDR` run, which this sitting
+   does not add. A failing source is 503 with `Retry-After`. There is no write route.
 
 Pass criterion: the list equals the ACL set, the detail shows path/state/lifecycle root, the diff is
 the session's working tree only, the fake pattern is `[redacted]`, the archived filter works after
-R7, `/audit` has no free text or token material, and every non-GET/HEAD is 405. A page that renders a
+R7, `/audit` has no free text or token material, on the socket every non-GET/HEAD is 405 and any
+`Origin` is 403 (the foreign-`Host` 400 is NOT_EXERCISED, never PASS). A page that renders a
 session outside the ACL is FAIL. Everything not observed is NOT_EXERCISED, never PASS.
 
 Rollback: remove `BRIDGE_DASHBOARD_SOCKET` (and any `BRIDGE_DASHBOARD_ADDR`), restart; the socket
@@ -270,10 +288,12 @@ lies inside it (the Bridge never creates directories; a directory without a Git 
 **Prepare (operator, before the restart):**
 ```sh
 ROOT=/opt/harness-bridge-test/workspace
-R7DIR="$ROOT/r7-$(head -c4 /dev/urandom | xxd -p)"     # max_depth 1: one level below the root
-# Create it exactly as the existing workspace is created (same owner and mode), then make it a
-# Git top level so the create target is not refused as non_git:
-install -d "$R7DIR" && sudo -u <the workspace owner> git -C "$R7DIR" init -q
+stat -c '%U %G %a' "$ROOT"                            # read the workspace's owner, group and mode
+R7DIR="$ROOT/r7-$(head -c4 /dev/urandom | xxd -p)"    # max_depth 1: one level below the root
+# Create it with the SAME owner, group and mode as the workspace (the agent must be able to write
+# in it), then make it a Git top level as that owner so the create target is not refused as non_git:
+install -d -o <owner> -g <group> -m <mode> "$R7DIR"
+sudo -u <owner> git -C "$R7DIR" init -q
 # lifecycle config: absolute canonical path, no symlink in any component, mode 0600, owned by the
 # Bridge process's UID (the unit's User=; root when User= is empty):
 cat > /etc/harness-bridge/lifecycle-h5.json <<'JSON'
@@ -343,7 +363,7 @@ R7.8. close_session: first send_prompt key r7-close-<random> "Using bash, run: s
       interrupt path and no extra interrupt line. The session is hidden from list_catalog.
 
 Report every tool result, each expected audit line, the native request log, the workspace diff
-(only r7/), and any state presented as success without evidence.
+(only `r7-<hex>/`: its `.git/` and `r7/NOTE.md`), and any state presented as success without evidence.
 ```
 
 **Expected audit lines** (one line per call, free-text-free; `internal/mcp/audit.go:211,272`):
@@ -356,8 +376,10 @@ Report every tool result, each expected audit line, the native request log, the 
   `outcome=already_archived`.
 - `event=session_unarchive tool=unarchive_session outcome=unarchived ...` (R7.7).
 - `event=session_close tool=close_session outcome=closed ... interrupt=interrupted ...` (R7.8).
-- `event=prompt_submission outcome=new` for R7.5 and the R7.8 prompt, `event=interrupt
-  outcome=accepted` for the close's interrupt.
+- `event=prompt_submission outcome=new` for R7.5 and the R7.8 prompt. The close's interrupt writes
+  **no** tool-layer `event=interrupt` line: `close_session` calls the manager's interrupt below the
+  tool layer (`internal/mcp/archive.go:327-330`), so its only line is the `session_close` line with
+  `interrupt=interrupted`.
 
 Pass criterion: R7.1–R7.8 as stated; `list_catalog` equals the ACL set; the replay creates nothing;
 the archive hides the session from the catalog, the dashboard and `send_prompt` while `get_session`
@@ -436,7 +458,8 @@ H5 passes only when all of the following are recorded:
    smoke refuses with exactly one `guard_release` line.
 3. Stage 1: the 11-tool precheck and A–E PASS with journal corroboration.
 4. Stage 2: the dashboard script PASS (sessions = ACL, path/state/lifecycle root, diff, redaction,
-   archived filter, audit, 405/400/403).
+   archived filter, audit, 405 and 403 observable on the socket; the foreign-`Host` 400 is
+   NOT_EXERCISED, never PASS).
 5. R7: the 16-tool precheck and R7.1–R7.8 PASS with the expected audit lines.
 6. Stage 5 is recorded **NOT_RUN** (relay off by D21 Q7); stage 6 is recorded **OFF** (R6 not
    passed). Recorded as such, never PASS.
@@ -463,10 +486,14 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
 1. Remove `zzzz-h5.conf`, `daemon-reload`, restart: `zzz-h4.conf` runs the H4 binary.
 2. Remove the dashboard and lifecycle/overlay variables (they do not exist on H4); leave the files
    on disk, unread.
-3. Rotate the token to the H4 constraints (H4 supports 168h; R5 `692992d` caps at 24h).
+3. Rotate the token to the H4 constraints (H4 supports 168h; R5 `692992d` caps at 24h). The new
+   token file and `BRIDGE_TOKEN_EXPIRES` live in `zzzz-h5.conf`, so removing it makes H4 start with
+   its own (superseded, possibly expired) token settings: copy the new `BRIDGE_TOKEN_FILE` and
+   `BRIDGE_TOKEN_EXPIRES` into `zzz-h4.conf` (H4 accepts the same 168h and ≥43 characters) or rotate
+   a fresh H4 token as part of the rollback.
 4. Re-add the H4 connector; remove the H5 one.
 5. If stage 5 was run in a later sitting, revert the OpenCode permission drop-in (R5B Step 4.1).
-6. Keep the workspace and native sessions; `h5/` and `r7/` are the only expected new trees.
+6. Keep the workspace and native sessions; `h5/` and `r7-<hex>/` are the only expected new trees.
 
 ## Open questions for the Planning Desk / maintainer
 

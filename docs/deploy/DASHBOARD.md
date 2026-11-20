@@ -26,8 +26,9 @@ response shapes are unverified against a live server.
 
 The alternative `BRIDGE_DASHBOARD_ADDR=127.0.0.1:8765` (host exactly `127.0.0.1` or `::1`) serves
 TCP on the loopback interface only; requests must carry a `Host` of `localhost`, `127.0.0.1` or
-`[::1]`, and an `Origin` header from any other host is refused. The unix socket needs neither check:
-its directory mode is the fence, and no browser can reach it.
+`[::1]`, and an `Origin` header from any other host is refused. The unix socket skips the Host
+allowlist (its `0700` directory is the fence and no browser can reach it), but it refuses **any**
+request that carries an `Origin` header with 403: there is no browser origin for the socket.
 
 ## Reach it from your workstation (SSH forwarding, D17 Q1)
 
