@@ -169,3 +169,28 @@ func TestServeErrorFilterHidesOnlyOurOwnShutdown(t *testing.T) {
 		}
 	}
 }
+
+// Shutdown returns the error of http.Server.Shutdown too: with a request still in flight (a connection that has
+// sent only part of its request line) and a context that ends first, the caller learns that the drain did not
+// finish. (Mutation review of the cleanup: dropping that error survived.)
+func TestShutdownReturnsTheDrainTimeout(t *testing.T) {
+	srv, err := Open(Config{Addr: "127.0.0.1:0"}, nil, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", srv.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n")); err != nil { // no blank line: still in flight
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := srv.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown returned %v, want context.DeadlineExceeded (the drain did not finish)", err)
+	}
+	_ = srv.srv.Close()
+}
