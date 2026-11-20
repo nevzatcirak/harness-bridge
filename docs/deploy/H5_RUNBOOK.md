@@ -1,46 +1,81 @@
-# H5: promote a new main build with staged feature enablement
+# H5: promote a frozen main build, H5 regression, R7 lifecycle and the dashboard live acceptance
 
-Status: **DRAFT, not executed.** Worker B, 2026-11-16, for planner task #321; revised for #327
-(review #325, after #306 and #307 merged). Everything here is an operator plan; no step has been
-performed. Every live behaviour that has not been observed is marked **UNVERIFIED**, and every
-stage that cannot be enabled on the frozen build is marked **NOT AVAILABLE** rather than
-approximated.
+Status: **DRAFT for the H5 sitting, not executed.** Worker B, 2026-11-20, rewritten for planner task
+#435 from the #322 draft (after #428/#429 and PR #427 merged). Base inspected: `main`
+`8406b18fa965e839da4a025276be0b846123124b` (the merge of #427), 2026-11-20. The freeze SHA is a
+placeholder: it is whatever merge the Planning Desk freezes for H5. Re-check every row and every
+citation against the freeze SHA before the operator starts. Every live behaviour that has not been
+observed is marked **UNVERIFIED**; a stage that is not run is **NOT_RUN**, never PASS.
 
-**Purpose:** replace the live H4 writer with a reproducible build of a *frozen* `main` that contains
-everything merged since H4 (`9db1c1d`), then enable the new features one at a time, each behind its
-own explicit switch, with a pass criterion and a rollback for each stage.
+**Purpose:** replace the live H4 writer with a reproducible build of frozen `main`, prove the H4
+behaviour on it, then run the three live acceptances that are still open in the same sitting: H5
+stage 1 (regression), R7 (ADR-022/ADR-025 lifecycle and overlay), and R-DASH (the read-only
+dashboard). The Claude Code adapter stays **off** (stage 6) because its live acceptance (R6) has not
+passed.
 
-**Base inspected for this revision:** `main` `b98c004301bc42e63faf4b9fb62b4003961f766c`
-("b98c004", the merge of #306), 2026-11-16; the PR branch was created from `0672867` and merged
-`b98c004` before this revision. The freeze SHA is a placeholder: it is whatever merge the Planning
-Desk freezes for H5. Re-check every row and citation against the freeze SHA before the operator
-starts; the "not available" columns are about the code, not about this operator.
+This page is the sitting script. It does not replace the per-feature reference pages; where they
+disagree, the code and this page win for the sitting, and the difference is recorded in the evidence
+file.
 
-## What H5 adds, and what is actually wireable
+## What H5 adds over H4 (`9db1c1d`)
 
-H4 was `9db1c1d`. Since then `main` has merged:
+| Feature | On the inspected main | Switch and default |
+|---|---|---|
+| ADR-021 Claude Code adapter | code and wiring merged; R6 live acceptance **not passed** (run 5 pending) | `BRIDGE_CLAUDE_COMMAND` unset = off (`cmd/bridge/claude.go:34-47`); a partial set refuses startup |
+| ADR-022 lifecycle S1–S5 + ADR-025 S6/S8, production wiring (D22) | **wired** by `cmd/bridge/lifecycle.go`; inert until configured | `BRIDGE_LIFECYCLE_CONFIG` unset = no lifecycle tool; `BRIDGE_OVERLAY_DIR` adds the archive tools; invalid value refuses startup (`cmd/bridge/lifecycle.go:20-28,64-120`) |
+| ADR-023 dashboard | code; R-DASH not exercised | `BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR`, unset = off (`internal/dashboard/config.go:24-29`) |
+| ADR-024 A1 S7 incarnation evidence | code (merged after #415); **not exercised live** | `BRIDGE_PERMISSION_INCARNATION` unset/`off` = no tracker; `observed` starts it (`cmd/bridge/relay.go:35-44`) |
+| ADR-024 `reply_permission` reject-only | production `PermissionSource` installed | `BRIDGE_PERMISSION_RELAY` unset/`reject_only` = registered (12 tools), `off` = opt-out (11), anything else refuses startup (`cmd/bridge/relay.go:17-28`) |
+| ADR-020 (b) admin socket, ADR-019 token lifetime | as H4 | `BRIDGE_ADMIN_SOCKET`, `BRIDGE_TOKEN_MAX_LIFETIME` (see the table) |
 
-| Feature | On main b98c004 | Switch and default | Wireable? |
-|---|---|---|---|
-| ADR-021 Claude Code adapter (default off) | yes (`1a571fc`, wiring `#264`) | `BRIDGE_CLAUDE_COMMAND` unset = off (`cmd/bridge/claude.go:16-30,34,40-47`) | config exists; **do not enable** before the ADR-021 live acceptance (stage 6) |
-| ADR-022 lifecycle S1–S5 code | yes (`#246`, `#261`, `#280`) | `BRIDGE_LIFECYCLE_CONFIG` (`internal/lifecycle/config.go:24,142-148`) | **wired by D22** (`cmd/bridge/lifecycle.go`): `list_catalog` and `create_session` register when the config is set and valid; **NOT AVAILABLE on b98c004**, which has no wiring; the freeze SHA must contain the D22 commit (`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`) |
-| ADR-023 dashboard | yes (`#270`, `#291`) | `BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR`, unset = off (`internal/dashboard/config.go:27-36`) | yes (stage 2); R-DASH live still NOT_EXERCISED |
-| ADR-024 `reply_permission` reject-only | yes (`#283`, `#290`; source `#306` at b98c004) | `BRIDGE_PERMISSION_RELAY`: unset/`reject_only` = registered, `off` = opt-out, `policy`/other = startup error (`cmd/bridge/relay.go:17-32`) | registered with the production `PermissionSource` (`cmd/bridge/relay.go:39-50`); every request stays `unattributed` and the tool refuses `FORBIDDEN`/`not_verified` (no native incarnation evidence), no native write (stage 5); a source construction error stops startup (`cmd/bridge/main.go:89-91`) |
-| Mutation Gate attempt writer | yes (`#275`), installed by the relay wiring | (no switch) `audit.Default()` (`cmd/bridge/relay.go:49`) | yes; it is the audit path of the relay |
-| ADR-025 archive overlay S8/S6 | yes, code (`#307` at `566eb46`); ADR-025 **ACCEPTED** (D18) | `BRIDGE_OVERLAY_DIR` is named by ADR-025 §9 Q5/Q6 (D18; unset = tools not registered, separate directory) while §4.1 (`:90`) and §10 still call the name a proposal (recorded in BACKLOG); read by the D22 wiring (`cmd/bridge/lifecycle.go`) on a build that contains it, not on b98c004 | **wired by D22**: the three archive tools register when `BRIDGE_LIFECYCLE_CONFIG` and a valid `BRIDGE_OVERLAY_DIR` are set (writer holding the overlay lock, not read-only); **NOT AVAILABLE on b98c004** (nothing constructs `Server.Archive` there) |
+Tool surface: 11 base tools; `+1` with `reply_permission` (the `reject_only` default); `+2` with a
+valid lifecycle configuration (`list_catalog`, `create_session`); `+3` more with a valid overlay
+directory held by the writer (`archive_session`, `unarchive_session`, `close_session`)
+(`internal/mcp/server.go:331,336,341-343,346`). H5 stage 1 uses `BRIDGE_PERMISSION_RELAY=off` (D21
+Q7), so it expects **11** tools; R7 with lifecycle `+` overlay expects **16**.
 
-Since `0672867`, main has also merged #307 (`566eb46`, ADR-025 S6 code; ADR-025 is **ACCEPTED** as
-D18) and #306 (`b98c004`, the production `PermissionSource`). Consequence for H5: **stages 3
-(lifecycle) and 4 (overlay) cannot run on b98c004**, which has no lifecycle wiring. Maintainer decision D22
-wires them into `cmd/bridge` (enabled by default, inert until `BRIDGE_LIFECYCLE_CONFIG`/`BRIDGE_OVERLAY_DIR` are
-set, an invalid value refuses to start); if the Planning Desk freezes a build that contains that commit, the
-stages below are available there, and this runbook gives the steps and prompts for either freeze. The relay's *registration* default is `reject_only` by D15 Q3, not "off";
-`BRIDGE_PERMISSION_RELAY=off` is the explicit opt-out (see stage 5).
+## Environment table (every variable the sitting uses)
 
-## Step 0: build (workers, no host changes)
+Verified against the freeze code; line numbers are from the inspected main (`8406b18`) and must be
+re-checked against the freeze SHA.
 
-Freeze SHA: `<FREEZE_SHA>` (Planning Desk; must be a merge of `main`, include the PRs named above
-that the planner wants). Build exactly as H4 (`docs/evidence/H4_RUNBOOK.md:18-23`):
+| Variable | Rule and default | Source |
+|---|---|---|
+| `OPENCODE_URL` | upstream base URL; default `http://127.0.0.1:4096` | `cmd/bridge/main.go:28-31` |
+| `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` (`_FILE`) | native client credentials; `_FILE` is a private regular file, `_FILE` and the direct value are mutually exclusive | `cmd/bridge/main.go:32-36`; `cmd/bridge/secret.go:13-43` |
+| `BRIDGE_LISTEN` | listener; default `127.0.0.1:8080`; loopback unless remote TLS mode | `cmd/bridge/ingress.go:31-33`; `internal/security/listen.go` |
+| `BRIDGE_READ_ONLY` | `0`/`1`; empty = `0`; the writer needs `0` | `cmd/bridge/ingress.go:24-30` |
+| `BRIDGE_TOKEN`, `BRIDGE_TOKEN_FILE` | exactly one; file: absolute, private regular file (mode `&0077 == 0` unless a systemd credential), 1–16384 bytes | `cmd/bridge/startup.go:11-36`; `cmd/bridge/secret.go:13-43` |
+| `BRIDGE_TOKEN_MAX_LIFETIME` | Go duration, default `24h`, ceiling `720h`; above `24h` the token must be ≥43 characters | `cmd/bridge/ingress.go:35-37`; `internal/security/remote.go:26-33,39-66` |
+| `BRIDGE_TOKEN_EXPIRES` | RFC3339; remote mode only; must lie within `BRIDGE_TOKEN_MAX_LIFETIME` | `cmd/bridge/ingress.go:38-46` |
+| `BRIDGE_PUBLIC_ORIGIN`, `BRIDGE_PRINCIPAL` | remote-mode origin and principal; any remote setting requires TLS | `cmd/bridge/ingress.go:38-50` |
+| `BRIDGE_TLS_CERT`, `BRIDGE_TLS_KEY` | remote mode only; both required, never a plaintext fallback | `cmd/bridge/ingress.go:23,38-41` |
+| `BRIDGE_ALLOWED_ROOTS` | path-list (`:`); the static ACL roots | `cmd/bridge/main.go:40`; `internal/security` |
+| `BRIDGE_ALLOWED_SESSIONS` | comma list of exact session IDs; **static**, read once at startup | `cmd/bridge/main.go:40` |
+| `BRIDGE_WRITER_LOCK_DIR` | the shared writer-lock directory (also used by the Claude adapter) | `cmd/bridge/main.go:51`; `cmd/bridge/claude.go:58` |
+| `BRIDGE_ADMIN_SOCKET` | writer-only admin socket; parent `0700`, service user; ignored under read-only | `cmd/bridge/admin.go:18-31` |
+| `BRIDGE_LIFECYCLE_CONFIG` | absolute path of the lifecycle JSON; unset = no lifecycle tool; invalid = startup error | `cmd/bridge/lifecycle.go:20,64-78`; `internal/lifecycle/config.go:24,141-148` |
+| `BRIDGE_OVERLAY_DIR` | overlay directory; needs `BRIDGE_LIFECYCLE_CONFIG`; absolute, real directory (no symlink in the final component), owned by the service user, mode exactly `0700`; set without lifecycle = startup error | `cmd/bridge/lifecycle.go:21,30,69-101`; `internal/overlay/overlay.go:163-233` |
+| `BRIDGE_PERMISSION_RELAY` | unset/`reject_only` = `reply_permission` registered; `off` = 11 tools; `policy`/other = startup error | `cmd/bridge/relay.go:17-28` |
+| `BRIDGE_PERMISSION_INCARNATION` | unset/`off` = no incarnation source (every request `not_verified`); `observed` = Bridge-observed epoch (S7, not exercised) | `cmd/bridge/relay.go:35-44,50-60` |
+| `BRIDGE_DASHBOARD_SOCKET` | unix socket path in a `0700` directory (recommended); never both dashboard variables | `internal/dashboard/config.go:24-29`; `docs/deploy/DASHBOARD.md` |
+| `BRIDGE_DASHBOARD_ADDR` | `host:port`; host exactly `127.0.0.1` or `::1`; loopback only | `internal/dashboard/config.go:31-68` |
+| `BRIDGE_DASHBOARD_REDACT_EXTRA` | JSON array of ≤16 RE2 patterns, each 1–256 bytes; additive to the shipped list; invalid = startup error | `internal/dashboard/redact.go:89-108`; `cmd/bridge/dashboard.go:18-27` |
+| `BRIDGE_CLAUDE_COMMAND` | absolute root-owned wrapper; **unset in H5** (stage 6) | `cmd/bridge/claude.go:16,34-47` |
+| `BRIDGE_CLAUDE_SESSIONS` | allowlist JSON, mode `0600`, absolute | `cmd/bridge/claude.go:17,49-56` |
+| `BRIDGE_CLAUDE_VERSIONS` | exact `claude_code_version` list, comma separated, no default | `cmd/bridge/claude.go:18` |
+| `BRIDGE_CLAUDE_HISTORY_DIR` | private absolute directory of history records | `cmd/bridge/claude.go:19` |
+| `BRIDGE_CLAUDE_HOME` | the Claude service user's HOME (absolute) | `cmd/bridge/claude.go:20` |
+| `BRIDGE_CLAUDE_MODEL` | model name | `cmd/bridge/claude.go:21` |
+| `BRIDGE_CLAUDE_LANG` | optional; default `C.UTF-8` | `cmd/bridge/claude.go:22`; `internal/claudewire/harness.go:28,73` |
+| `BRIDGE_CLAUDE_MAX_TURNS` | optional; 1–1000, default 20 | `cmd/bridge/claude.go:23,52,65-71` |
+| `BRIDGE_CLAUDE_MAX_BUDGET_USD` | optional decimal | `cmd/bridge/claude.go:24` |
+| `BRIDGE_CLAUDE_RUN_MAX` | optional Go duration, 1s–24h, default 15m | `cmd/bridge/claude.go:25`; `internal/adapters/claudecode/runner/executor.go:101-102` |
+
+## Step 0: build (two workers, no host changes)
+
+Freeze SHA: `<FREEZE_SHA>` (Planning Desk). Build exactly as H4 (`docs/evidence/H4_RUNBOOK.md`
+"Step 0"):
 
 ```sh
 git clone https://github.com/nevzatcirak/harness-bridge.git h5-build
@@ -51,12 +86,12 @@ go version -m out/harness-bridge-h5 | grep -E 'vcs\.(revision|modified)'
 ```
 
 Two independent builders (H4-BUILD/H4-REPRO pattern): the sha256 values must match byte-for-byte and
-`vcs.modified=false` in both. A mismatch is STOP. Record the Go toolchain (`go version`), the freeze
-SHA, both sha256 values and both `go version -m` blocks in the H5 evidence file.
+`vcs.modified=false` in both. A mismatch is STOP. Record the toolchain, the freeze SHA, both sha256
+values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
 
-## Step 1: install and first restart (operator, one sitting)
+## Step 1: install, token rotation, first restart (operator, one sitting)
 
-1. **Install the binary** (same pattern as H4 `docs/evidence/H4_RUNBOOK.md:26-36`):
+1. **Install the binary** (same pattern as H4 `docs/evidence/H4_RUNBOOK.md` "Step 1.1"):
 
    ```sh
    SRC=/opt/developer/hb-work/<builder>/h5-build/out/harness-bridge-h5
@@ -79,56 +114,68 @@ SHA, both sha256 values and both `go version -m` blocks in the H5 evidence file.
    ExecStart=/usr/local/libexec/harness-bridge-h5
    Environment=BRIDGE_READ_ONLY=0
    Environment=BRIDGE_TOKEN_MAX_LIFETIME=168h
+   Environment=BRIDGE_PERMISSION_RELAY=off
    RuntimeDirectory=harness-bridge-admin
    RuntimeDirectoryMode=0700
    Environment=BRIDGE_ADMIN_SOCKET=/run/harness-bridge-admin/admin.sock
    ```
 
-   The H4 drop-in keeps the OpenCode/lock/ACL values; this one only swaps the binary and keeps the
-   unchanged base configuration. `BRIDGE_READ_ONLY` must be `0` or `1`
-   (`cmd/bridge/ingress.go:22-30`); the writer needs `0`. The admin socket is writer-only and is
-   ignored under read-only (`cmd/bridge/admin.go:20-28`); its parent must be `0700` and owned by
-   the service user (H4 step 2; ADR-020).
+   The H4 drop-in keeps the OpenCode/lock/ACL values; this one swaps the binary and adds the two
+   stage-1 settings. `BRIDGE_READ_ONLY` must be `0` or `1` (`cmd/bridge/ingress.go:24-30`); the
+   writer needs `0`. `BRIDGE_PERMISSION_RELAY=off` is D21 Q7 until ADR-024 A1 S7 is exercised live
+   (`cmd/bridge/relay.go:17-28`). The admin socket is writer-only; its parent must be `0700` and
+   owned by the service user (`cmd/bridge/admin.go:18-31`; ADR-020).
 
-3. **Token (unchanged from H4 step 3, ADR-019).** `BRIDGE_TOKEN` or `BRIDGE_TOKEN_FILE`, never both
-   (`cmd/bridge/secret.go:13-17`); a file must be a private regular file, 1–16384 bytes
-   (`secret.go:23-43`). The maximum lifetime is `BRIDGE_TOKEN_MAX_LIFETIME`, default `24h`, ceiling
-   `720h` (`internal/security/remote.go:27-29,39-58`); above 24 h the token must be at least 43
-   characters (`remote.go:31-33,61-66`). In remote mode the expiry is explicit:
-   `BRIDGE_TOKEN_EXPIRES` (RFC3339; `cmd/bridge/ingress.go:38-45`), as in H4
-   (`docs/evidence/H4_EVIDENCE_2026-11-10.md:12`), and it must stay within
-   `BRIDGE_TOKEN_MAX_LIFETIME`. For H5 keep `168h` and a ≥43-character token, expiry no more than
-   +7 days. Use `set +o history`; never paste it into chat or a screenshot. The startup line logs
-   the expiry and lifetime, never token material (`cmd/bridge/startup.go:9-13`;
-   `internal/security/remote.go:100-105`).
+3. **Token rotation inside the sitting (ADR-019).** The live token expires
+   **2026-11-23T17:54:48Z**; rotate it now rather than between stages:
 
-4. **Fence before restart (ADR-010):** confirm the target session is `idle` with no pending
-   permission; the restart drops idempotency records, so old keys are never reused.
+   ```sh
+   set +o history
+   umask 077
+   openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64   # ≥43 chars; copy into the
+                                                                     # systemd environment, not into chat
+   ```
+
+   - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; set an explicit `BRIDGE_TOKEN_EXPIRES` no more than
+     **+7 days** from the sitting and not past the maximum (`cmd/bridge/ingress.go:35-46`;
+     `internal/security/remote.go:26-33,39-66`). The ≥43-character rule applies above 24h.
+   - `set +o history` before typing it; never paste it into chat, a screenshot, the PR or the
+     evidence file. Update the connector's request header in the same step.
+   - `BRIDGE_TOKEN` and `BRIDGE_TOKEN_FILE` are mutually exclusive; the file form must be a private
+     regular file, 1–16384 bytes (`cmd/bridge/secret.go:13-43`).
+
+4. **Fence before restart (ADR-010):** the target session is `idle`, no pending permission, no
+   running child. The restart drops idempotency records, so old keys are never reused.
 
 5. `systemctl daemon-reload && systemctl restart harness-bridge-private.service`.
 
-6. **Records:** MainPID; `ls -l /proc/$P/exe` shows `harness-bridge-h5` **before** hashing; sha256;
-   `NRestarts`; the startup slog line; `journalctl --since -2min` has no errors; the admin socket
-   directory is `drwx------` and the socket `srw-------`; the admin smoke refuses (exit 1) and the
-   journal shows exactly one `event=guard_release` line with the refusal and its ticket
-   (H4 `docs/evidence/H4_RUNBOOK.md:53-63`).
+6. **Records:**
+   - MainPID; `ls -l /proc/$P/exe` shows `harness-bridge-h5` **before** hashing;
+   - the sha256 of `/usr/local/libexec/harness-bridge-h5` and `NRestarts`;
+   - the startup slog lines: token expiry + max lifetime (never token material,
+     `cmd/bridge/startup.go`), `permission relay: ...` (`cmd/bridge/main.go:112-114`),
+     `lifecycle: not configured, no lifecycle tools registered (roots=0)`
+     (`cmd/bridge/lifecycle.go:203`);
+   - `journalctl --since -2min` shows no errors;
+   - `/run/harness-bridge-admin` is `drwx------` (service user) and the socket `srw-------`;
+   - the admin smoke refuses (exit 1) and the journal shows exactly one `event=guard_release`
+     line with the refusal and its ticket (H4 "Step 1.6").
 
-7. **Connector and workspace:** add the H5 connector as in H4 (Request header
-   `Authorization: Bearer <token>`, per-call approval for `send_prompt` and `interrupt_execution`);
-   pre-list the workspace and ensure `h5/` does not exist yet (H4 `:64` connector, `:65` workspace).
+7. **Connector and workspace:** add the H5 connector (Request header `Authorization: Bearer
+   <token>`, per-call approval for `send_prompt` and `interrupt_execution`); pre-list
+   `/opt/harness-bridge-test/workspace` (`find ... -printf '%P %s %T@\n' | sort > /root/h5-pre.txt`);
+   `h5/` must not exist yet (H4 "Step 1.8").
 
-## Stage 1: binary swap with every feature off, H4 regression
+## Stage 1: H5 binary with every feature off, H4 regression
 
 Pass criterion: the H4 regression subset passes on the H5 binary; no new `BRIDGE_*` feature value is
-set, except `BRIDGE_PERMISSION_RELAY=off` (D21 Q7: until ADR-024 A1 S7 is exercised live the operator runs with
-`off`). With the variable unset the relay registration default applies and answers nothing (see stage 5).
+set except `BRIDGE_PERMISSION_RELAY=off` (D21 Q7).
 
 Precheck (read-only):
-- `tools/list` shows the base surface: with `BRIDGE_PERMISSION_RELAY=off` (D21 Q7, the setting to use until
-  ADR-024 A1 S7 is exercised live) **11 tools**; with the variable unset the relay is registered by default
-  (D15 Q3) and the surface is 11 tools plus `reply_permission` = **12**. It must **not** show `list_catalog`, `create_session`,
-  `archive_session`, `unarchive_session` or `close_session` (no lifecycle wiring).
-- `list_sessions`/`find_sessions`/`get_session` work; an unauthorized ID is FORBIDDEN.
+- `tools/list` shows exactly **11** tools and **not** `reply_permission`, `list_catalog`,
+  `create_session`, `archive_session`, `unarchive_session` or `close_session`
+  (`internal/mcp/server.go:331,336,341-343,346`).
+- `list_sessions` / `find_sessions` / `get_session` work; an unauthorized ID is FORBIDDEN.
 
 Acceptance conversation (new Chat conversation, only the H5 connector):
 
@@ -154,336 +201,282 @@ success without evidence.
 Corroboration: journal shows `event=prompt_submission` `new` for A/C/D, `replay` for B, `rejected
 SESSION_BUSY` for D2, `event=interrupt` `accepted`; `idem` values are 12 hex characters; the native
 user-message count grows by 3; the workspace diff is limited to `h5/` plus agent scratch inside it
-(H4 `docs/evidence/H4_RUNBOOK.md:85-93`). Any token material in logs is STOP.
+(H4 `docs/evidence/H4_RUNBOOK.md` "Step 4"). Any token material in logs is STOP.
 
 Rollback: remove `zzzz-h5.conf`, `daemon-reload`, restart; `zzz-h4.conf` runs the H4 binary again.
-Keep the token valid for H4 (H4 supports the same 168 h maximum; if rolling further back to R5
-`692992d`, rotate to ≤24 h as in H4 `:108`).
+Keep the token valid for H4 (H4 supports the 168h maximum; a further rollback to R5 `692992d` needs
+a ≤24h token).
 
-## Stage 2: dashboard (ADR-023)
+## Stage 2: dashboard (DASH; R-DASH)
 
 Switch: **either** `BRIDGE_DASHBOARD_SOCKET` **or** `BRIDGE_DASHBOARD_ADDR`, never both; unset = no
-listener (`internal/dashboard/config.go:27-36`). The address must be exactly a loopback literal
-`127.0.0.1` or `::1` (`config.go:45-68`). The unix socket is recommended (D17 Q1).
+listener (`internal/dashboard/config.go:24-29`). The address must be exactly `127.0.0.1` or `::1`
+(`config.go:31-68`). The unix socket is recommended (D17 Q1).
 
 Setup:
 1. `install -d -m 0700 -o <service-user> /run/harness-bridge/dashboard` (mode exactly `0700`, no
    symlink; `docs/deploy/DASHBOARD.md` "Enable it").
-2. Add to the drop-in: `Environment=BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge/dashboard/dash.sock`.
-3. Optional operator redaction: `BRIDGE_DASHBOARD_REDACT_EXTRA` is **implemented and wired**
-   (`internal/dashboard/redact.go:91,98-108`; `cmd/bridge/dashboard.go:18-26`); its **name is still
-   marked provisional** in `docs/deploy/DASHBOARD.md` and BACKLOG. It is a JSON array of at most 16
-   RE2 patterns of 1–256 bytes; invalid = startup error, never logged. This is a convenience, not a
-   guarantee.
-4. Restart and check `ls -ld /run/harness-bridge/dashboard` (`drwx------`, service user) and the
-   socket (`srw-------`).
+2. Add `Environment=BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge/dashboard/dash.sock` to the drop-in.
+3. Optional operator redaction: `BRIDGE_DASHBOARD_REDACT_EXTRA` is implemented and wired
+   (`internal/dashboard/redact.go:89-108`; `cmd/bridge/dashboard.go:18-27`); the name is still
+   marked provisional in `DASHBOARD.md`/BACKLOG. JSON array of ≤16 RE2 patterns, 1–256 bytes;
+   invalid = startup error, never logged. It is a convenience, not a guarantee.
+4. Restart; `ls -ld /run/harness-bridge/dashboard` is `drwx------` (service user) and the socket
+   `srw-------`.
 
-Precheck/acceptance (from the workstation, over SSH, D17 Q1):
+Dashboard script (from the workstation, loopback only):
 ```sh
 ssh -N -L 127.0.0.1:8765:/run/harness-bridge/dashboard/dash.sock <operator>@<bridge-host>
 ```
-then open `http://127.0.0.1:8765/`. The list shows exactly the ACL sessions the Bridge can read;
-`/session/<harness>/<id>` opens a detail (state, guard, current execution, diffs where available);
-`/audit` shows the ring; `/api/state` and `/api/state/session/...` answer JSON; any method other than
-GET/HEAD is 405; a foreign Host is 400 and a foreign Origin 403 on TCP (on the unix socket any
-Origin is 403); a failing source answers 503 with `Retry-After` (`internal/dashboard/handler.go`
-and `docs/deploy/DASHBOARD.md`). Confirm there is no write route. **R-DASH (the operator-present
-live acceptance) remains NOT_EXERCISED** until this step is actually run; the native diff shapes are
-UNVERIFIED against the live server.
+then open `http://127.0.0.1:8765/` and check:
+1. **Sessions view.** The list shows exactly the sessions in `BRIDGE_ALLOWED_SESSIONS` the Bridge
+   can read (the same set as `list_sessions`); no session outside the ACL. The H4 target shows its
+   state, guard, current execution and last activity.
+2. **Path / lifecycle root.** Open `/session/opencode/<id>`: the detail shows the session's root
+   (path), state, guard, current execution, and the lifecycle-root label (`-` until stage 3, then
+   the configured root) (`internal/dashboard/views.go:112,192,208`).
+3. **Diff view.** With the stage-1 `h5/NOTE.md` present, the working-tree diff (`/vcs/diff`, no
+   `git` run by the Bridge) shows that file and nothing outside the workspace; a per-turn diff
+   appears for the A turn, or the page says it is not computed.
+4. **Redaction check.** Put an obviously **fake** pattern in a file under `h5/` (for example
+   `sk-ant-FAKE0000000000000000`), reload the diff: it renders `[redacted]`, and the page's
+   redaction count is ≥1 (`internal/dashboard/redact.go:7,66-76`). Delete the fake line afterwards.
+5. **Archived filter.** After the R7 archive step, `/` hides the archived session and
+   `/?archived=1` shows it with the `archived` badge (`internal/dashboard/handler.go:169-172`).
+6. **Audit.** `/audit` shows the ring: `guard_release`, `prompt_submission`, `interrupt`,
+   `session_create` only (`internal/dashboard/audit.go:32`); the archive events stay journal-only
+   until the allowlist is amended. No free text, no token material.
+7. **Read-only.** `curl -i -X POST http://127.0.0.1:8765/api/state` is 405; a foreign `Host` is 400
+   and a foreign `Origin` 403 on TCP (the unix socket needs neither; its directory is the fence);
+   a failing source is 503 with `Retry-After` (`internal/dashboard/handler.go`;
+   `docs/deploy/DASHBOARD.md`). There is no write route.
 
-Pass criterion: over the SSH-forwarded socket the dashboard lists exactly the ACL sessions, opens a
-detail, serves `/audit` and the JSON endpoints, answers 405 to every non-GET/HEAD, 400/403 to a
-foreign Host/Origin as stated, and has no write route; the R-DASH evidence records what was observed
-and marks everything else NOT_EXERCISED. A page that renders but shows a session outside the ACL is
-FAIL.
+Pass criterion: the list equals the ACL set, the detail shows path/state/lifecycle root, the diff is
+the session's working tree only, the fake pattern is `[redacted]`, the archived filter works after
+R7, `/audit` has no free text or token material, and every non-GET/HEAD is 405. A page that renders a
+session outside the ACL is FAIL. Everything not observed is NOT_EXERCISED, never PASS.
 
 Rollback: remove `BRIDGE_DASHBOARD_SOCKET` (and any `BRIDGE_DASHBOARD_ADDR`), restart; the socket
 directory may stay.
 
-## Stage 3: lifecycle roots, create and catalog — **CONDITIONAL on the D22 wiring; NOT AVAILABLE on b98c004**
+## R7: lifecycle create/catalog and overlay archive (stages 3+4)
 
-**On b98c004 there is no wiring:** `BRIDGE_LIFECYCLE_CONFIG` is read by
-`internal/lifecycle.FromEnv` (`internal/lifecycle/config.go:142-148`) but nothing in `cmd/bridge`
-calls it, and the tool surface stays at 12 (stage 1); setting the variable has no effect on that build. **On a
-build that contains the D22 wiring** (`cmd/bridge/lifecycle.go`) a valid configuration registers `list_catalog` and
-`create_session` (the stage 1 count becomes 14 with the default relay), an invalid one refuses to start, and
-`BRIDGE_READ_ONLY=1` keeps `list_catalog` only. Use the steps below on such a build.
+Prerequisite: freeze SHA contains the D22 wiring (the inspected main does). R7 runs after stage 1
+and stage 2 in the same sitting. `BRIDGE_PERMISSION_RELAY=off` stays. The test root is
+`/opt/harness-bridge-test/workspace`, and creation needs an existing directory whose Git top level
+lies inside it (the Bridge never creates directories; a directory without a Git top level is
+`FORBIDDEN non_git`, `internal/lifecycle/authz.go:26,135-221`).
 
-Configuration (ADR-022 §3.1, `docs/adr/ADR-022-session-lifecycle.md:103-107`; keys
-`internal/lifecycle/config.go:219-232,390-391`): `BRIDGE_LIFECYCLE_CONFIG` is the path to a JSON file the
-service user owns, mode `0600`, read once at startup (the Bridge never rewrites it; the path must be
-canonical with no symlink in any component, and the file is swapped between inspection and open
-refused). Example (all values are defaults/proposals from ADR-022 §8):
-
-```json
-{
-  "roots": [
-    {"path": "/opt/harness-bridge-test/h5", "modes": ["create", "archive"],
-     "max_sessions": 20, "max_depth": 1, "existing_tools": false}
-  ],
-  "create_per_hour": 10,
-  "archive_per_hour": 10,
-  "max_total_sessions": 50
-}
+**Prepare (operator, before the restart):**
+```sh
+ROOT=/opt/harness-bridge-test/workspace
+R7DIR="$ROOT/r7-$(head -c4 /dev/urandom | xxd -p)"     # max_depth 1: one level below the root
+# Create it exactly as the existing workspace is created (same owner and mode), then make it a
+# Git top level so the create target is not refused as non_git:
+install -d "$R7DIR" && sudo -u <the workspace owner> git -C "$R7DIR" init -q
+# lifecycle config: absolute canonical path, no symlink in any component, mode 0600, owned by the
+# Bridge process's UID (the unit's User=; root when User= is empty):
+cat > /etc/harness-bridge/lifecycle-h5.json <<'JSON'
+{"roots":[{"path":"/opt/harness-bridge-test/workspace","modes":["create","archive"],
+           "max_sessions":20,"max_depth":1,"existing_tools":false}],
+ "create_per_hour":10,"archive_per_hour":10,"max_total_sessions":50}
+JSON
+chown <bridge-uid> /etc/harness-bridge/lifecycle-h5.json && chmod 0600 /etc/harness-bridge/lifecycle-h5.json
+# overlay directory: owned by the Bridge UID, mode exactly 0700, no symlink in the final component:
+install -d -m 0700 /var/lib/harness-bridge/h5-overlay && chown <bridge-uid> /var/lib/harness-bridge/h5-overlay
 ```
 
-Defaults: `create_per_hour` 10, `archive_per_hour` 10, `max_sessions` 20 per root,
-`max_total_sessions` 50 (`internal/lifecycle/config.go:33-38`); `max_depth` absent = 0, only the
-root itself (`config.go:96-98`); `existing_tools` default false and grants nothing until the ADR-012
-amendment (S9) (`config.go:99-102,232`). A root must exist, be canonical, be a directory owned by the
-service user or root, not be `/`, and not overlap another root; non-git directories are refused
-(`non_git`) because the Git top level would be outside the root (ADR-022 §3.2,
-`docs/adr/ADR-022-session-lifecycle.md:130-160`). A root may be a container; the create target's Git
-top level must lie inside it (run `git init` in a plain directory first; the Bridge never creates
-directories).
+Add to the drop-in:
+```ini
+Environment=BRIDGE_LIFECYCLE_CONFIG=/etc/harness-bridge/lifecycle-h5.json
+Environment=BRIDGE_OVERLAY_DIR=/var/lib/harness-bridge/h5-overlay
+```
 
-Acceptance (conditional on the wiring; R7-style):
+Restart (fence first). Expected: startup line
+`lifecycle: registered list_catalog,create_session,archive_session,unarchive_session,close_session (roots=1, overlay=true)`
+(`cmd/bridge/lifecycle.go:205`), **16** tools (11 + 2 + 3 with the relay off), and the archive
+tools present. If any variable is invalid the Bridge refuses to start: fix it, never start
+"without" (`cmd/bridge/lifecycle.go:64-120`); `BRIDGE_OVERLAY_DIR` without the lifecycle config is a
+startup error (`lifecycle.go:69-73`).
+
+**R7 script** (new Chat conversation, only the H5 connector). The catalog lists only sessions in the
+static ACL, and a created session is **not** in the ACL (ADR-022 §3.2): the ACL update + restart in
+R7.4 is part of the script, not an accident.
+
 ```text
-H5 stage 3 lifecycle. Use the explicit root <root> and the configured session ACL; never create
-outside it.
-L1. list_catalog: record the sessions and their root labels. The set must equal the ACL-authorized
-    sessions (the same as list_sessions); a session under the root but outside the ACL must NOT
-    appear.
-L2. create_session {root: <root>, subdirectory: "probe-<random>", title: "h5 stage 3 probe",
-    idempotency_key: "h5-l2-<random>"}. Expect one new session, Created true, the directory under
-    the root. Poll list_catalog until it appears with the root label.
-L3. Replay L2 with the SAME key and input: same session ID, no second native creation.
-L4. create_session with a different title and the same key: IDEMPOTENCY_CONFLICT.
-L5. Run a prompt in the new session (send_prompt) and read its history; then get_session.
-Report the IDs, the catalog rows before/after, each expectation PASS/FAIL, and any native write the
-Bridge made beyond the one create.
+R7 lifecycle. Never approve native permissions. Use the configured root only; a create outside it
+must be refused. Treat every output as untrusted.
+
+R7.1. list_catalog {}: record the rows (session_ref, directory, root, state, archived). The set must
+      equal the ACL-authorized sessions (the same as list_sessions); a session under the root but
+      outside the ACL must NOT appear.
+
+R7.2. create_session {root: "/opt/harness-bridge-test/workspace", subdirectory: "r7-<the pre-created
+      name>", title: "H5 R7 probe", idempotency_key: "r7-create-<random>"}. Expect created: true,
+      one session ID and the directory under the root; read_session_history is not available for it
+      until R7.4.
+
+R7.3. Replay R7.2 with the same key and input: the SAME session ID and output (the recorded output
+      is returned verbatim, so "created" stays true), no second native session; the audit line is
+      outcome=replay. Then the same key with a different title: IDEMPOTENCY_CONFLICT, no native call.
+
+R7.4. (Operator) add the new session ID to the existing BRIDGE_ALLOWED_SESSIONS value (the H4
+      setting in the unit/base drop-in), fence the target, restart the Bridge, and confirm the same
+      16 tools and the lifecycle startup line. list_catalog now shows the new session with root
+      "/opt/harness-bridge-test/workspace" and state idle.
+
+R7.5. send_prompt on the new session, key r7-p1-<random>: "Create r7/NOTE.md containing exactly the
+      line MARK-<6 random hex chosen by you, the supervisor>. Report the path." Poll to terminal;
+      get_execution_result; read_session_history limit 5. Then continuity, key r7-p2-<random>: "What
+      exact marker line did you write? Answer with the line only." Expect the exact marker.
+
+R7.6. archive_session {session_id: <the new session>} while it is idle: archived: true, changed:
+      true. list_catalog without include_archived must NOT list it; with include_archived: true it
+      must appear with archived: true. get_session is unchanged. send_prompt to it must be refused
+      FORBIDDEN, reason session_archived, with no native call.
+
+R7.7. unarchive_session: changed: true; the session is listed again; nothing else changed.
+
+R7.8. close_session: first send_prompt key r7-close-<random> "Using bash, run: sleep 90 ; then reply
+      DONE."; while it runs, close_session {session_id: <the same session>}. Expect interrupt:
+      "interrupted" and the session archived, with exactly the one abort POST of the existing
+      interrupt path and no extra interrupt line. The session is hidden from list_catalog.
+
+Report every tool result, each expected audit line, the native request log, the workspace diff
+(only r7/), and any state presented as success without evidence.
 ```
-Corroboration: exactly one `event=session_create` line per call with `outcome=created`/`replay`/
-`rejected` and no free text (`internal/mcp/audit.go:203-211`); the native session exists under the
-root; `list_catalog` equals the ACL set.
 
-Pass criterion: L1–L5 pass as stated, exactly one `event=session_create` line per call with
-`created`/`replay`/`rejected`, `list_catalog` equals the ACL set, and the only native write is the
-one `create_session` POST. A replay that creates a second session, or a catalog row outside the ACL,
-is FAIL.
+**Expected audit lines** (one line per call, free-text-free; `internal/mcp/audit.go:211,272`):
+- `event=session_create tool=create_session outcome=created|replay|rejected accepted=... root_id=0
+  session_id=... key_hash=<16 hex> limit_state=hour:.../10,root:.../20,total:.../50 principal=...`
+  (`created` for R7.2, `replay` for R7.3 first call, `rejected` with `error_code=IDEMPOTENCY_CONFLICT`
+  for R7.3 second call).
+- `event=session_archive tool=archive_session outcome=archived ... overlay_generation=<n>
+  overlay_entries=<n> root_id=0 session_id=...` (R7.6); a replay of the same archive is
+  `outcome=already_archived`.
+- `event=session_unarchive tool=unarchive_session outcome=unarchived ...` (R7.7).
+- `event=session_close tool=close_session outcome=closed ... interrupt=interrupted ...` (R7.8).
+- `event=prompt_submission outcome=new` for R7.5 and the R7.8 prompt, `event=interrupt
+  outcome=accepted` for the close's interrupt.
 
-Rollback: unset `BRIDGE_LIFECYCLE_CONFIG`, restart; the tools disappear (the created sessions remain
-native and are still listed by `list_sessions`).
+Pass criterion: R7.1–R7.8 as stated; `list_catalog` equals the ACL set; the replay creates nothing;
+the archive hides the session from the catalog, the dashboard and `send_prompt` while `get_session`
+stays unchanged; unarchive restores visibility only; close interrupts and archives with exactly one
+abort POST and one `session_close` line; no native write from archive/unarchive. A replay that
+creates a second session, a catalog row outside the ACL, or a hidden session that still accepts a
+prompt is FAIL. Live native behaviour is UNVERIFIED until run.
 
-## Stage 4: overlay archive/close — **CONDITIONAL on the D22 wiring; NOT AVAILABLE on b98c004**
+Rollback: remove `BRIDGE_LIFECYCLE_CONFIG` and `BRIDGE_OVERLAY_DIR`, restart; the five tools
+disappear, created sessions remain native (still listed after the ACL update), and `overlay.json`
+stays on disk unread — archived sessions become visible and accept prompts again
+(`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md` "Enabling and rollback").
 
-**On b98c004 the code is merged but not wired:** #307 merged the S6 code at `566eb46` and ADR-025 is
-**ACCEPTED** (D18, 2026-11-16). On b98c004 the code exists — `internal/overlay/overlay.go`,
-`internal/mcp/archive.go`, `Server.Archive` (`internal/mcp/server.go:41-43`) and the three tools
-registered only when `Server.Archive != nil` (`internal/mcp/server.go:340-343`) — but nothing in
-`cmd/bridge` constructs it (`docs/adr/ADR-022-session-lifecycle.md:771-773`), so the tools are not
-registered. **On a build with the D22 wiring** (`cmd/bridge/lifecycle.go`) they register when
-`BRIDGE_LIFECYCLE_CONFIG` and a valid `BRIDGE_OVERLAY_DIR` are set (writer, holding the overlay lock, not
-read-only); the stage 1 count becomes 17 with the default relay. ADR-025 §9 Q5/Q6 (D18, `:399-400`) name `BRIDGE_OVERLAY_DIR` as the overlay directory
-(unset = the archive tools are not registered, a directory separate from the lock and history
-directories), while §4.1 (`:90`) and §10 (`:417`) still call the name a proposal; the ADR is
-inconsistent on that word (recorded in `docs/BACKLOG.md`) and `docs/adr/ADR-025-archive-overlay-persistence.md:425`
-says the startup wiring was a separate task (done by D22). No code reads the variable on b98c004: do not set it
-there. If the freeze SHA contains the D22 wiring, use:
+## Stage 5: permission relay — NOT_RUN in H5
 
-- Directory: **`BRIDGE_OVERLAY_DIR`** (ADR-025 §9 Q5/Q6; §4.1:90 describes it): absolute, owned by the
-  Bridge service user, mode exactly `0700`, no symlink in the final component; files `overlay.json`
-  (mode `0600`, regular, single link) and `overlay.lock` (ADR-025 §4.1). Unset = the archive tools
-  are not registered.
-- The archive tools also need a lifecycle root with the `archive` mode (ADR-022 §7.3); the same
-  `BRIDGE_LIFECYCLE_CONFIG` as stage 3.
+**D21 Q7:** until ADR-024 A1 S7 is accepted and exercised live, the operating setting is
+`BRIDGE_PERMISSION_RELAY=off` (`cmd/bridge/relay.go:17-28`), so `reply_permission` is not registered
+and this stage is **NOT_RUN**; it is not a pass. Keep `BRIDGE_PERMISSION_INCARNATION` unset/`off`
+(the S7 tracker is off; `relay.go:35-44,50-60`). The startup log says
+`permission relay: reject_only; no native incarnation source ...` only when the relay is registered;
+with `off` there is no relay line and 11 tools.
 
-Acceptance (conditional):
-```text
-H5 stage 4 overlay. Use only the configured archive-mode root and an idle session with no pending
-permission and no running child; never approve permissions.
-O1. archive_session {session_id: <idle session>}. Expect archived=true, changed=true, a session_archive
-    audit line, no native write (the journal and the native request log show none).
-O2. list_catalog without include_archived hides it; with include_archived:true it appears with
-    archived:true. get_session is unchanged (it does not report the overlay).
-O3. send_prompt to the archived session: FORBIDDEN/session_archived, no native call.
-O4. unarchive_session: it returns to the default list; visibility restored, nothing else.
-O5. close_session on a session with a running execution: the existing interrupt first, then archive;
-    one session_close line (interrupt=interrupted), no extra interrupt line. If the interrupt fails or
-    is unsettled, the session stays un-archived.
-Report each expected result, the audit lines, the native request log (no PATCH/DELETE/POST for the
-archive step; close_session has exactly the one abort POST), and any state presented as success
-without evidence.
-```
-Corroboration: the archive/unarchive/close events (`session_archive`, `session_unarchive`,
-`session_close`); the dashboard ring drops these events until its allowlist is amended
-(`internal/dashboard/audit.go:32`); the one line per call is written by `auditArchive`
-(`internal/mcp/audit.go:266-272`); the overlay file's entries/generation and the journal counters.
-Live behaviour is UNVERIFIED (the S6 tests use a fake native).
+After S7 acceptance (a later sitting): unset `BRIDGE_PERMISSION_RELAY`, confirm 12 tools, the
+startup line for `incarnation=observed` if it is enabled, and use
+`docs/deploy/PERMISSION_RELAY_RUNBOOK.md`. The verified path (native incarnation evidence on a real
+OpenCode) remains UNVERIFIED; every unverified request stays `FORBIDDEN not_verified` with no native
+write.
 
-Pass criterion: O1–O5 pass, the three audit events are present exactly once per call,
-`list_catalog`/the dashboard hide archived sessions and `get_session` stays unchanged,
-`send_prompt` is refused with `FORBIDDEN`/`session_archived`, no native write is made by
-archive/unarchive, and `close_session` makes only its one abort POST. Live behaviour remains
-UNVERIFIED until it is run against a real native.
+Rollback: `BRIDGE_PERMISSION_RELAY=off`, restart; the tool disappears.
 
-Rollback: unset `BRIDGE_OVERLAY_DIR`, restart; the tools disappear; the file remains on disk (labels
-are only read when the store is configured).
+## Stage 6: Claude Code adapter — OFF in H5
 
-## Stage 5: reject-only permission relay (R5b-style)
-
-**D21 Q7 (operator): until ADR-024 A1 slice S7 is accepted and exercised live, set
-`BRIDGE_PERMISSION_RELAY=off`; the tool is then not registered and this stage is NOT_RUN.** The steps
-below are the post-S7 stage 5.
-
-Switch: `BRIDGE_PERMISSION_RELAY` — unset/`reject_only` registers `reply_permission` (the default by
-D15 Q3); `off` keeps the 11-tool surface and installs nothing; `policy` or any other value refuses
-startup (`cmd/bridge/relay.go:17-32`). `allow_once` is never offered (D12 exception (b), D15 Q1).
-On **b98c004** the production `PermissionSource` is installed (`cmd/bridge/relay.go:39-50`; #306),
-and a source construction error stops startup (`cmd/bridge/main.go:89-91`). It has **no native
-incarnation evidence**, so every request stays `unattributed` and the tool refuses
-`FORBIDDEN`/`not_verified`, with no native write and no attempt line (`docs/CONTRACTS.md` S6;
-[docs/deploy/PERMISSION_RELAY_RUNBOOK.md](PERMISSION_RELAY_RUNBOOK.md) "Today's limit"). There is no
-`UPSTREAM_FAILURE` branch for the unverified case; that code appears only for a failed native read
-or an unavailable audit journal ("What a call returns"). The verified path remains UNVERIFIED; D21 accepted
-the A1 continuity-epoch design, but S7 is not implemented (BACKLOG).
-
-Setup/precheck:
-1. After S7 acceptance, leave `BRIDGE_PERMISSION_RELAY` unset (or `reject_only`); `tools/list` shows 12
-   tools including `reply_permission`; the startup log says `permission relay: reject_only; no native
-   incarnation source exists ...` (`cmd/bridge/main.go:89-93`). Before S7, D21 Q7 requires `off`.
-2. Make the native OpenCode instance ask for a permission. **The H5 unit is `opencode-hb-test.service`**
-   (user `opencode-hb`, `127.0.0.1:4097`, `docs/deploy/SYSTEMD_LOCAL_VALIDATION.md:81`; the unit R5b
-   restarts, `docs/evidence/R5B_RUNBOOK.md` Step 1.3); never the root OpenCode on `:4096`. The operator
-   confirms that it is the unit serving the endpoint the Bridge is configured for before touching it.
-   **Precheck first (operator, reading the operator's own configuration, not a worker):** record the
-   instance's effective `bash` permission policy (the `permission.bash` setting and any existing
-   `OPENCODE_PERMISSION`). Read it as the operator, by a method the operator already uses to inspect this instance, on the
-   operator's own responsibility; a worker never reads the OpenCode configuration for this. No supported way to read the **merged** policy is documented in this
-   repository (UNVERIFIED), and R5B Step 1.4 only shows how to read the process environment variable, not the
-   merged configuration. Nothing is granted by reading it. **STOP if it is `deny` or a per-pattern object**: `OPENCODE_PERMISSION` is
-   deep-merged into the config's `permission` (`docs/evidence/R5B_RUNBOOK.md:11`), and what a plain `"ask"`
-   does to an object-valued or `deny` rule is **UNVERIFIED**, so it might relax a deny. Only an unset or
-   already-`ask` policy proceeds. The R5b mechanism is a drop-in on the unit
-   (`/etc/systemd/system/opencode-hb-test.service.d/zz-r5b-permission.conf` in R5b)
-   with `Environment="OPENCODE_PERMISSION={\"bash\":\"ask\"}"`, then `daemon-reload` and restart
-   (`docs/evidence/R5B_RUNBOOK.md` Step 1.2–1.3). It only adds an `ask`; it grants nothing. Verify
-   the variable reached the process as in R5B Step 1.4 (read `/proc/<pid>/environ`; the value is
-   not a secret; no token is read). Have a human ready to answer natively. **Revert:** remove that
-   drop-in, `daemon-reload`, restart the OpenCode unit, and re-run the R5B Step 1.4 check (the
-   variable must be absent; R5B Step 4.1).
-
-Acceptance conversation (R5b-style; the expected result today is the refusal):
-```text
-H5 stage 5 relay. Never approve a native permission; the human answers in OpenCode.
-P1. send_prompt key h5-p1-<random> "Using your bash tool, run exactly: echo H5-PERM-PROBE . Report its
-    output." Poll get_execution_status until waiting_for_permission; record get_session
-    pending_permission_count (1) and, on a build with a source, whether pending_permission is absent.
-P2. reply_permission {execution_id, permission_id, decision: "reject"}. Expected today:
-    FORBIDDEN/not_verified — never a native reply, no attempt line. Then
-    reply_permission with decision "allow_once": FORBIDDEN/allow_once_disabled, zero native calls.
-P3. The human rejects the request natively in OpenCode; poll the execution to terminal/unknown,
-    get_execution_result and read_session_history. H5-PERM-PROBE must never appear in tool output.
-Report the tool results, the native request log (no POST /permission/*/reply), the journal line for
-the refused call, and the final guard/state.
-```
-Corroboration: the journal has one `event=permission_reply phase=refused` line with the closed code
-(`FORBIDDEN`/`not_verified` today) and no `phase=attempt`. A failed native read is
-`UPSTREAM_FAILURE`/`UPSTREAM_TIMEOUT` (retryable) and an unavailable audit journal
-`UPSTREAM_FAILURE`/`audit_unavailable`, never an approval
-(`docs/deploy/PERMISSION_RELAY_RUNBOOK.md` "What a call returns"). The native permission is answered
-by the human; no Bridge approval. **R5b/R5 live acceptance remains
-NOT_EXERCISED**; the `reply_permission` verified path needs the incarnation source.
-
-Pass criterion: the tool is registered (12 tools), `allow_once` is refused, `reply_permission` with
-`reject` returns `FORBIDDEN`/`not_verified` with no native reply and no attempt line, the human
-answers natively, and the probe output never appears. Any other result is recorded as observed, not
-as a pass.
-
-Rollback: set `BRIDGE_PERMISSION_RELAY=off`, restart; the tool disappears (11 tools) and the replier,
-source and attempt writer are not installed. Also revert the OpenCode `OPENCODE_PERMISSION` drop-in
-(R5B Step 4.1).
-
-## Stage 6: Claude Code adapter — last, and OFF until ADR-021's live acceptance passes
-
-**Do not enable this in H5 until the ADR-021 driver task and the live acceptance (R6) have passed.**
-`docs/deploy/CLAUDE_CODE_RUNBOOK.md` is reference only and its live behaviour is UNVERIFIED; the
-credential canary has not run (D14 Q10). With `BRIDGE_CLAUDE_COMMAND` unset, every
+**Explicitly disabled in H5.** The code is wired (`cmd/bridge/claude.go`), but ADR-021's live
+acceptance R6 has not passed (run 5 `-items 4,6` is pending, `docs/deploy/CLAUDE_CODE_RUNBOOK.md`
+§7a). Enabling before that acceptance is a STOP. With `BRIDGE_CLAUDE_COMMAND` unset, every other
 `BRIDGE_CLAUDE_*` value must also be unset or the Bridge refuses to start (no partial enablement,
-`cmd/bridge/claude.go:40-47`). A read-only ingress ignores the adapter (`claude.go:85-95`).
+`cmd/bridge/claude.go:34-47`); a read-only ingress ignores the adapter (`claude.go:85-95`).
 
-Required when enabling (all validated at start, `cmd/bridge/claude.go:39-80`; names/defaults at
-`:16-30`):
-- `BRIDGE_CLAUDE_COMMAND` — absolute path of the root-owned wrapper (required to enable; the
-  `hb-p6-claude`/`sudo -n -u hbclaude -H -- …` pattern, `docs/deploy/CLAUDE_CODE_RUNBOOK.md` §1).
-- `BRIDGE_CLAUDE_SESSIONS` — absolute allowlist JSON, mode `0600`.
-- `BRIDGE_CLAUDE_VERSIONS` — exact `claude --version` list, comma separated, **no default**; only
-  `2.1.322` was exercised in the spike (runbook §4).
-- `BRIDGE_CLAUDE_HISTORY_DIR` — private directory (absolute).
-- `BRIDGE_CLAUDE_HOME` — the Claude service user's (`hbclaude`) HOME, absolute.
-- `BRIDGE_CLAUDE_MODEL` — model name.
-- `BRIDGE_WRITER_LOCK_DIR` — the existing lock directory (shared with OpenCode).
-- `BRIDGE_ALLOWED_ROOTS` / `BRIDGE_ALLOWED_SESSIONS` — each `claudecode:<uuid>` must also be in both
-  the allowlist file and the ACL (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §5).
-- Optional: `BRIDGE_CLAUDE_LANG` (default `C.UTF-8`, `internal/claudewire/harness.go:28,73`),
-  `BRIDGE_CLAUDE_MAX_TURNS` (1–1000, default 20, `cmd/bridge/claude.go:28,52,65-71`),
-  `BRIDGE_CLAUDE_MAX_BUDGET_USD` (decimal, optional), `BRIDGE_CLAUDE_RUN_MAX` (1s–24h, default 15m,
-  `internal/adapters/claudecode/runner/executor.go:102`).
+When it is enabled in a later sitting, the task's intended values are: wrapper
+`/usr/local/libexec/hb-claude-wrapper` (root-owned; it runs the CLI as `hbclaude` with `sudo -n`,
+`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §1), `BRIDGE_CLAUDE_HOME` = the `hbclaude` HOME,
+`BRIDGE_CLAUDE_HISTORY_DIR` = a private root-owned directory, and roots/sessions under
+`/opt/harness-bridge-test/claude-ws`. All required values are in the table above; the host
+prerequisites (two non-root users, the wrapper and sudoers entry, the managed settings file with
+`allowManagedHooksOnly`/`allowManagedMcpServersOnly`/`allowManagedPermissionRulesOnly` and the
+Read/Glob/Grep deny rules, the Claude user's `cleanupPeriodDays`) are operator work from the runbook.
+`BRIDGE_CLAUDE_HISTORY_MAX_AGE` retention is not wired (#266 P3-4, BACKLOG).
 
-Host prerequisites (operator, from the runbook): two non-root users (`harness-bridge`, `hbclaude`);
-the root-owned wrapper and the sudoers entry; `/etc/claude-code/managed-settings.json` with
-`allowManagedHooksOnly`, `allowManagedMcpServersOnly`, `allowManagedPermissionRulesOnly` and the
-Read/Glob/Grep deny rules on `~/.claude/**` and `~/.config/anthropic/**`; the Claude user's
-`cleanupPeriodDays` at least the Bridge retention. **`BRIDGE_CLAUDE_HISTORY_MAX_AGE` retention is not
-wired** (#266 P3-4, BACKLOG); the 30-day statement in the runbook is the intended default, not an
-implemented switch.
-
-Acceptance (only after the live acceptance): a `claudecode:` session in the allowlist and ACL;
-send_prompt, continuity, replay, busy/interrupt; a release of an `unknown` execution only through
-`admin release-guard` after the child and its process group are confirmed gone. Enabling before the
-live acceptance is a STOP.
-
-Pass criterion: only after the ADR-021 live acceptance; with all required `BRIDGE_CLAUDE_*` set and
-the wrapper/allowlist/ACL in place, a `claudecode:` session passes send_prompt, continuity, replay,
-busy/interrupt, and a release of an `unknown` execution only via `admin release-guard` after the
-child and its process group are confirmed gone. Any unobserved item is NOT_EXERCISED, never PASS.
+Pass criterion when it is later enabled: only after the R6 live acceptance, with a `claudecode:`
+session in the allowlist and ACL, send_prompt, continuity, replay, busy/interrupt, and a release of
+an `unknown` execution only via `admin release-guard` after the child and its process group are
+confirmed gone. Any unobserved item is NOT_EXERCISED, never PASS.
 
 Rollback: unset **all** `BRIDGE_CLAUDE_*` values (a partial set refuses startup), restart; keep the
 wrapper/sudoers/managed settings installed.
 
-## Corroboration patterns (journal, dashboard, native)
+## Corroboration patterns
 
 - Journal (same file as every AUDIT-01 line): `event=prompt_submission|interrupt|guard_release`
-  (existing, H4), `event=session_create` (stage 3), `event=permission_reply` with
-  `phase=attempt|result|refused` (stage 5), `event=session_archive|session_unarchive|session_close`
-  (stage 4). Free-text-free; `idem` is 12 hex; `decided_by=chat_client`, `human_verified=false` on
-  permission lines (`internal/audit/attempt.go`, `internal/mcp/audit.go`).
+  (existing), `event=session_create` (R7.2/R7.3), `event=permission_reply` with
+  `phase=attempt|result|refused` (stage 5 only), `event=session_archive|session_unarchive|session_close`
+  (R7.6–R7.8). Free-text-free; `idem` is 12 hex; `decided_by=chat_client`, `human_verified=false` on
+  permission lines (`internal/mcp/audit.go`, `internal/audit/attempt.go`).
 - Dashboard: `/audit` shows only the ring allowlist (`guard_release`, `prompt_submission`,
   `interrupt`, `session_create`; `internal/dashboard/audit.go:32`); `permission_reply` and the
-  archive events are journal-only until that allowlist is amended.
-- Native (Worker, read-only DB copy as in #73/#76): the expected user messages, the marker file, the
+  archive events are journal-only until the allowlist is amended.
+- Native (worker, read-only DB copy as in #73/#76): the expected user messages, the marker file, the
   workspace diff, the permission request/reply rows; never approve or replay.
+
+## Pass criteria, evidence and UNVERIFIED
+
+H5 passes only when all of the following are recorded:
+1. Step 0: both builds byte-identical, `vcs.modified=false`, documented toolchain.
+2. Step 1: the binary at `/usr/local/libexec/harness-bridge-h5`, `/proc/<pid>/exe` confirms it, the
+   rotated token has ≥43 characters and an expiry ≤ +7 days, no token material in logs, the admin
+   smoke refuses with exactly one `guard_release` line.
+3. Stage 1: the 11-tool precheck and A–E PASS with journal corroboration.
+4. Stage 2: the dashboard script PASS (sessions = ACL, path/state/lifecycle root, diff, redaction,
+   archived filter, audit, 405/400/403).
+5. R7: the 16-tool precheck and R7.1–R7.8 PASS with the expected audit lines.
+6. Stage 5 is recorded **NOT_RUN** (relay off by D21 Q7); stage 6 is recorded **OFF** (R6 not
+   passed). Recorded as such, never PASS.
+
+Evidence files: **`H5_EVIDENCE_<date>.md`** (build, install, stage 1, dashboard/R-DASH) and
+**`R7_EVIDENCE_<date>.md`** (lifecycle/overlay), both with times, IDs, PASS/FAIL per item, the
+journal excerpts, and the workspace diff. Skips, blocked steps and unobserved behaviour are
+`NOT_EXERCISED`, never PASS.
+
+**UNVERIFIED list (as of this revision):**
+- the frozen SHA itself and that it contains the D22 wiring and the #427 fix (the inspected main
+  `8406b18` does);
+- the real OpenCode behaviour of `POST /session` (create), the abort POST (close), the archived
+  `send_prompt` refusal and the overlay under a real power loss (`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`
+  "Verification status");
+- the `BRIDGE_PERMISSION_*` live path (S7) and the relay — stage 5 is NOT_RUN;
+- every Claude Code behaviour — stage 6 is OFF; R6 run 5 is pending;
+- the dashboard's native diff shapes and the live `?archived=1` view (fakes only);
+- that the operator's run home/HOME pass the driver pre-conditions (operator step);
+- all live timings, the token rotation and the connector updates (operator-present).
 
 ## Global rollback
 
 1. Remove `zzzz-h5.conf`, `daemon-reload`, restart: `zzz-h4.conf` runs the H4 binary.
-2. No feature switch survives a drop-in removal; if the H4 build does not support a value, remove it
-   as well (the H4 notes' `zzz-h4.conf` is the reference).
-3. Rotate the token: H4/R5 constraints (R5 `692992d` caps at 24 h; H4 supports 168 h).
+2. Remove the dashboard and lifecycle/overlay variables (they do not exist on H4); leave the files
+   on disk, unread.
+3. Rotate the token to the H4 constraints (H4 supports 168h; R5 `692992d` caps at 24h).
 4. Re-add the H4 connector; remove the H5 one.
-5. Revert the OpenCode permission drop-in if stage 5 was run: remove it, `daemon-reload`, restart the
-   OpenCode unit, and re-run the R5B Step 1.4 check (absent; R5B Step 4.1).
-6. Keep the workspace and native sessions; `h5/` is the only expected new tree.
+5. If stage 5 was run in a later sitting, revert the OpenCode permission drop-in (R5B Step 4.1).
+6. Keep the workspace and native sessions; `h5/` and `r7/` are the only expected new trees.
 
 ## Open questions for the Planning Desk / maintainer
 
-1. **Lifecycle and overlay wiring (D22).** On b98c004 no `cmd/bridge` code reads `BRIDGE_LIFECYCLE_CONFIG` or
-   constructs `ArchiveConfig`/`Server.Catalog`/`Server.Archive`: stages 3 and 4 are NOT AVAILABLE there and cannot be
-   enabled by any value. D22 wires them (enabled by default, inert until configured); H5 for those stages needs
-   a freeze SHA that contains the wiring commit, and the stage 1 tool counts then depend on the configuration
-   (12, 14 or 17 with the default relay).
-2. **Relay registration default is `reject_only`, not off** (D15 Q3), while this task's general rule
-   is "each default OFF". `off` is the opt-out; the tool is registered but cannot answer without an
-   incarnation source. Is the registration acceptable for the H5 stage-1 surface (12 tools with the default)? D21 Q7 settles the operator's setting until ADR-024 A1 S7 is exercised live: `BRIDGE_PERMISSION_RELAY=off`, 11 tools.
-3. **No native incarnation source exists**, so the relay's verified path is not live-testable; every
-   request stays `unattributed` and refuses `FORBIDDEN`/`not_verified` (the production source itself
-   is installed, #306). The retain/reject decision and the source design are the maintainer's
-   (BACKLOG).
-4. **`BRIDGE_OVERLAY_DIR`**: ADR-025 §9 Q5/Q6 (D18) name it, §4.1 (`:90`) and §10 still say "proposal"; the
-   ADR is inconsistent on that word (BACKLOG). ADR-025 is accepted (D18: bounds 1000 entries/512 KiB, reason
-   `session_archived`) and the S6 code is merged; the D22 wiring reads the variable on a build that contains it.
-5. **R-DASH, R5b and the Claude live acceptance remain NOT_EXERCISED/UNVERIFIED**; each stage's
-   pass criterion is evidence, not a claim.
-6. The exact freeze SHA and whether the D22 lifecycle/overlay wiring is in it are the
-   Planning Desk's call; #306 and #307 are merged. Re-check every row against that SHA before the
-   operator starts.
+1. **Freeze SHA:** which merge is frozen, and does it contain the D22 wiring and the #427 fix?
+2. **R7 ACL restart:** creating a session does not widen the static ACL (ADR-022 §3.2), so R7
+   needs the operator's ACL edit + restart between create and prompt. Confirm that is acceptable
+   inside the sitting (it is the only way to prompt the new session today).
+3. **Relay default:** `reject_only` is the registration default (D15 Q3) while the sitting rule is
+   "each default OFF"; H5 uses `off` (D21 Q7), 11 tools. Confirm for the freeze SHA.
+4. **`BRIDGE_OVERLAY_DIR` naming:** ADR-025 §9 Q5/Q6 (D18) name it; §4.1 and §10 still call it a
+   proposal; the code reads it (`cmd/bridge/lifecycle.go:30`). Recorded in BACKLOG.
+5. **Claude enablement:** R6 run 5 must pass first; the wrapper/users/host prerequisites are the
+   maintainer's.
