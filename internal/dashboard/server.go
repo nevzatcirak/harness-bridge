@@ -81,11 +81,18 @@ func OpenWithOptions(cfg Config, src Source, uid int, opts Options) (*Server, er
 	go func() {
 		// A Serve error caused by our own Shutdown (the listener closed under it)
 		// is expected and not logged.
-		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed && !(s.closing.Load() && errors.Is(err, net.ErrClosed)) {
+		if err := s.srv.Serve(ln); serveErrorIsLogged(err, s.closing.Load()) {
 			log.Printf("dashboard stopped: %v", err)
 		}
 	}()
 	return s, nil
+}
+
+// serveErrorIsLogged reports whether an error returned by http.Server.Serve is a real failure to log: not nil, not
+// http.ErrServerClosed, and not the closed-listener error our own Shutdown causes (cleanup sweep C, #198 P3-2:
+// extracted so that the filter has a test).
+func serveErrorIsLogged(err error, closing bool) bool {
+	return err != nil && err != http.ErrServerClosed && !(closing && errors.Is(err, net.ErrClosed))
 }
 
 // Addr returns the listener address.
@@ -99,12 +106,18 @@ func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 // is safe to call more than once.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.closing.Store(true)
+	// Both steps are always attempted and their errors are joined (cleanup sweep C, #199 P3-3 / #198 P3-5): a
+	// failed listener close (a unix socket that cannot be unlinked) must not leave the http.Server running and
+	// in-flight requests undrained.
+	var errs []error
 	if err := s.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		return err
+		errs = append(errs, err)
 	}
 	// http.Server.Shutdown closes the listeners it tracks too and reports the
 	// error of closing the one we already closed: that is expected, not a failure.
-	err := s.srv.Shutdown(ctx)
+	if err := s.srv.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+		errs = append(errs, err)
+	}
 	s.mu.Lock()
 	cleanup := s.cleanup
 	s.cleanup = nil
@@ -112,8 +125,5 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for _, f := range cleanup {
 		f()
 	}
-	if err != nil && !errors.Is(err, net.ErrClosed) {
-		return err
-	}
-	return nil
+	return errors.Join(errs...)
 }

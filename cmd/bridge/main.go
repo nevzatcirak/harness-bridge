@@ -124,7 +124,9 @@ func main() {
 	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -142,5 +144,11 @@ func main() {
 	}
 	if err := serveErr; err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+	// ListenAndServe returns http.ErrServerClosed as soon as srv.Shutdown BEGINS, not when it ends: wait for the
+	// shutdown goroutine, so that dash.Shutdown (it closes the dashboard listener and removes its unix socket) is
+	// not cut off by main returning (review #198 P3-1; pinned by TestMainWaitsForTheShutdownGoroutine).
+	if serveErr == http.ErrServerClosed {
+		<-shutdownDone
 	}
 }

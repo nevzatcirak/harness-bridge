@@ -81,7 +81,9 @@ func listenUnix(path string, uid int) (net.Listener, error) {
 
 // postBindHook is a test seam, called between the bind and the identity
 // re-check. It is nil in production. It is package-level because the window it
-// opens is inside listenUnix; a test that sets it must restore it.
+// opens is inside listenUnix; a test that sets it must restore it. It is not
+// synchronized: a test that sets it must not call t.Parallel, and no other test
+// of the package may open a unix socket while it is set (review #198 P3-5).
 var postBindHook func()
 
 // setPostBindHookForTesting installs hook and returns the function that

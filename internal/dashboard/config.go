@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 )
 
 // Config selects the dashboard transport. The zero value is "disabled".
@@ -56,6 +57,11 @@ func ValidateAddr(addr string) error {
 	}
 	if ip.IsUnspecified() || !ip.IsLoopback() {
 		return fmt.Errorf("BRIDGE_DASHBOARD_ADDR host %q is not loopback: the dashboard never binds a non-loopback address", host)
+	}
+	// An IPv4-mapped literal (::ffff:127.0.0.1, ::ffff:7f00:1) is the same address as 127.0.0.1 to net.IP.Equal, but
+	// the Host allowlist does not name it: it would bind and then answer 400 to every request (review #199 P3-1).
+	if strings.Contains(host, ":") && ip.To4() != nil {
+		return fmt.Errorf("BRIDGE_DASHBOARD_ADDR host %q is an IPv4-mapped literal: use 127.0.0.1 or ::1", host)
 	}
 	if !ip.Equal(net.IPv4(127, 0, 0, 1)) && !ip.Equal(net.IPv6loopback) {
 		return fmt.Errorf("BRIDGE_DASHBOARD_ADDR host %q must be exactly 127.0.0.1 or ::1 (the Host allowlist names only those)", host)
