@@ -1,3 +1,8 @@
+//go:build !windows
+
+// This file signals processes with syscall.Kill, which Windows does not have; the ExecRunner it tests runs
+// only where the wrapper and sudo exist (review #386 P3-3: `GOOS=windows go vet` failed here).
+
 package acceptance
 
 import (

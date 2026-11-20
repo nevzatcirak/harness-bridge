@@ -435,7 +435,15 @@ Unset variable: no socket, no release path.
 **Trust boundary.** The client (`bridge admin release-guard`) does not check who
 owns the server end of the socket; it relies on the `0700` directory. A
 same-UID attacker (another process running as the service user) is out of scope:
-it can already read the service's secrets and drive the Bridge directly.
+it can already read the service's secrets and drive the Bridge directly. Two
+consequences of the same boundary are accepted, not defended: such a peer can
+hold all 4 slots (each until the 5 s read bound) and reopen them indefinitely,
+so the operator can be locked out of the admin socket while it does; and every
+refusal writes one audit line, so a flood of connections grows the journal at
+the rate of connections. The cap is checked before the UID check, so a peer of
+another UID that could reach the socket (the `0700` directory prevents that)
+would be answered `TOO_MANY_CONNECTIONS` rather than `FORBIDDEN` while the
+server is full; either way nothing is read from it and no release is attempted.
 
 **CLI** (same binary, runs as a client and needs none of the server's secrets):
 
