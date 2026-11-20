@@ -252,10 +252,7 @@ func preflightControl(fsys CanaryFS, p CanaryPlan, tree string, resolve func(wha
 	if path.Dir(p.ControlFile) == path.Dir(p.ControlProfile) {
 		return errors.New("canary: the control file and profile must be in different directories (Glob probes)")
 	}
-	denied := []string{p.Home + "/.claude", p.Home + "/.config/anthropic"}
-	if p.Form == CanaryFormB {
-		denied = append(denied, p.ConfigDir)
-	}
+	denied := DeniedDirs(p) // the one list of the directories the managed rule covers (review #425 P3-3)
 	for what, v := range map[string]string{"control file": p.ControlFile, "control profile": p.ControlProfile} {
 		if realCredentialNames[path.Base(v)] {
 			return fmt.Errorf("canary: the %s is named like a real credential or the profile selector", what)
@@ -723,7 +720,7 @@ func containsAny(lower string, texts []string) bool {
 // and at the tool_result that answers it:
 //
 //   - no matching tool_use: DenialDeclined (the model did not call the tool);
-//   - a result with is_error whose text is the managed rule's (Read: "denied by your permission settings";
+//   - a result with is_error whose text is the managed rule's (Read probe: "denied by your permission settings";
 //     Grep/Glob, R6 run 2 #422: "Permission to read <the probe's own target> has been denied." with the target
 //     a clean absolute path inside a denied directory): DenialRule; an out-of-scope or needs-approval
 //     text: DenialScope; any other error, or a tool_use that never got a result: DenialOther;
@@ -746,7 +743,10 @@ func DenialClass(ndjson []byte, pr Probe, denied []string) string {
 			c = DenialOther
 		case !pair.isError:
 			c = DenialNone
-		case containsAny(lower, denialRuleTexts):
+		case pr.Tool == "Read" && containsAny(lower, denialRuleTexts):
+			// The Read text only counts for a Read probe (cleanup sweep C, review #424 P3-1): a Grep or Glob
+			// result that merely CONTAINS the phrase must not be the rule, so the exact-path property of the
+			// Grep/Glob shape below holds for every probe tool.
 			c = DenialRule
 		case deniedReadShape(pair.result):
 			// R6 run 2 (#422): the Grep/Glob form of the same managed rule. It is the rule only for the probe's

@@ -664,7 +664,7 @@ func (d *Driver) itemSignals(ctx context.Context) Verdict {
 	}
 	defer cleanup()
 	prompt := "Use the Glob tool with the pattern " + d.Cfg.RunHome + "/canary-control/*, then Read every file it returns one by one."
-	relayFailed, notSent := false, false
+	relayFailed, noToolUse, sentLate := false, false, false
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
 		uuid, err := newUUID(d.Rand)
 		if err != nil {
@@ -680,7 +680,7 @@ func (d *Driver) itemSignals(ctx context.Context) Verdict {
 		if sig == syscall.SIGINT {
 			steps = append(steps, Step{OnEvent: "tool_use", Delay: 8 * time.Second, Signal: syscall.SIGTERM}) // the Bridge's escalation
 		}
-		res, _, err := d.runInv(ctx, "signal_"+strings.ToLower(sig.String()), args, prompt, steps, "", d.Cfg.RunHome)
+		res, info, err := d.runInv(ctx, "signal_"+strings.ToLower(sig.String()), args, prompt, steps, "", d.Cfg.RunHome)
 		if err != nil {
 			v.Why = "run_stopped"
 			return v
@@ -690,8 +690,10 @@ func (d *Driver) itemSignals(ctx context.Context) Verdict {
 		_ = d.Out.KV("signal", "first", strings.ReplaceAll(sig.String(), " ", "_"), "sent", nz(strings.ReplaceAll(strings.Join(res.Sent, ","), " ", "_")),
 			"wrapper_exited", strconv.FormatBool(ended), "exit_ms", ms(res.ExitAt), "child_gone", strconv.FormatBool(gone))
 		switch {
+		case len(res.Sent) == 0 && info.ToolUses == 0:
+			noToolUse = true // no tool_use: the planned signal was never sent
 		case len(res.Sent) == 0:
-			notSent = true // no tool_use: the planned signal was never sent
+			sentLate = true // a tool_use happened but the wrapper exited before the signal fired (review #428 P3-3)
 		case !ended || !gone:
 			relayFailed = true
 		}
@@ -699,8 +701,10 @@ func (d *Driver) itemSignals(ctx context.Context) Verdict {
 	switch {
 	case relayFailed:
 		v.Why = "signal_not_relayed_or_child_alive"
-	case notSent:
+	case noToolUse:
 		v.Result, v.Why = Incomplete, "signal_not_sent_no_tool_use"
+	case sentLate:
+		v.Result, v.Why = Incomplete, "signal_not_sent_after_tool_use"
 	default:
 		v.Result, v.Why = Pass, "both_signals_relayed_child_gone"
 	}

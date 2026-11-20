@@ -205,3 +205,84 @@ func TestGrepGlobDeniedShapeForAnotherPathIsNeverScope(t *testing.T) {
 		}
 	}
 }
+
+// ---- cleanup sweep C (#434): reviews #424 and #425 ----
+
+// #424 P3-1: the Read rule text counts only for a Read probe. A Grep or Glob result that merely CONTAINS the
+// phrase is not the rule, so the exact-path property of the Grep/Glob shape holds for every probe tool.
+func TestReadRuleTextIsNoRuleForGrepOrGlob(t *testing.T) {
+	g, gu := gdGrep(gdFileDir)
+	l, lu := gdGlob(gdFileDir)
+	for name, c := range map[string]struct {
+		pr  Probe
+		use string
+		id  string
+	}{"grep": {g, gu, "g1"}, "glob": {l, lu, "l1"}} {
+		for tname, text := range map[string]string{
+			"the bare Read text":                      dcRuleText,
+			"the Grep/Glob sentence for another path": gdText("/h/.claude/other") + " " + dcRuleText,
+			"the phrase inside other prose":           "Error: this is denied by your permission settings, sorry",
+		} {
+			if got := DenialClass([]byte(c.use+dcResult(c.id, true, text)), c.pr, dcDenied); got != DenialOther {
+				t.Errorf("%s probe, %s: class %s, want other", name, tname, got)
+			}
+		}
+		// the probe's own Grep/Glob sentence is still the rule
+		if got := DenialClass([]byte(c.use+dcResult(c.id, true, gdText(gdFileDir))), c.pr, dcDenied); got != DenialRule {
+			t.Errorf("%s probe, its own sentence: class %s, want rule", name, got)
+		}
+	}
+	// a Read probe still takes the Read text, including inside other prose (unchanged)
+	if got := DenialClass([]byte(dcReadUse("t1")+dcResult("t1", true, dcRuleText)), dcReadProbe, nil); got != DenialRule {
+		t.Errorf("read probe: class %s, want rule", got)
+	}
+}
+
+// #425 P3-1: "one optional final period" is a boundary: a second period, or a period after white space, is not it.
+func TestFinalPeriodBoundaryOfTheGrepGlobSentence(t *testing.T) {
+	pr, use := gdGrep(gdFileDir)
+	for text, want := range map[string]string{
+		"Permission to read " + gdFileDir + " has been denied.":   DenialRule,
+		"Permission to read " + gdFileDir + " has been denied":    DenialRule,
+		"Permission to read " + gdFileDir + " has been denied..":  DenialOther,
+		"Permission to read " + gdFileDir + " has been denied. .": DenialOther,
+		"Permission to read " + gdFileDir + " has been denied...": DenialOther,
+	} {
+		if got := DenialClass([]byte(use+dcResult("g1", true, text)), pr, dcDenied); got != want {
+			t.Errorf("%q: class %s, want %s", text, got, want)
+		}
+	}
+}
+
+// #425 P3-2: "surrounding white space" is whatever strings.TrimSpace trims, i.e. Unicode white space too (a no-break
+// space around the sentence still counts). Pinned so that the wording of the runbook stays true; the path itself
+// still has to be the probe's own, so no leak or false PASS can come from the white space.
+func TestUnicodeWhiteSpaceAroundTheSentenceIsAccepted(t *testing.T) {
+	pr, use := gdGrep(gdFileDir)
+	for name, text := range map[string]string{
+		"no-break space":    " " + gdText(gdFileDir) + " ",
+		"em space":          " " + gdText(gdFileDir),
+		"tab and new lines": "\t\n" + gdText(gdFileDir) + "\r\n",
+	} {
+		if got := DenialClass([]byte(use+dcResult("g1", true, text)), pr, dcDenied); got != DenialRule {
+			t.Errorf("%s: class %s, want rule", name, got)
+		}
+	}
+	// white space INSIDE the path or the sentence is not trimmed: another path, so other
+	if got := DenialClass([]byte(use+dcResult("g1", true, "Permission to read  "+gdFileDir+" has been denied.")), pr, dcDenied); got != DenialOther {
+		t.Errorf("a no-break space inside the sentence: class %s, want other", got)
+	}
+}
+
+// #424 P3-3: DeniedDirs does not normalise, and does not need to: an entry made from an unclean Home is skipped by
+// deniedReadIsRule (cleanAbs), so the text stays `other` (fail closed), and the pre-flight refuses such a plan
+// before any run. Pinned here so that the fail-closed property cannot be lost by a later change to DeniedDirs.
+func TestDeniedDirsOfAnUncleanPlanNeverCoverAProbe(t *testing.T) {
+	for _, home := range []string{"/h/", "/h/../h", "/h//", "h", ""} {
+		denied := DeniedDirs(CanaryPlan{Form: CanaryFormA, Home: home})
+		pr, use := gdGrep(gdFileDir)
+		if got := DenialClass([]byte(use+dcResult("g1", true, gdText(gdFileDir))), pr, denied); got != DenialOther {
+			t.Errorf("Home %q (denied %v): class %s, want other", home, denied, got)
+		}
+	}
+}

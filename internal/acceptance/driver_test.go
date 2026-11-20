@@ -187,11 +187,17 @@ type sim struct {
 	// R6 run 2 (#422): Claude Code 2.1.325 answers a Grep/Glob under a deny rule with "Permission to read <dir> has
 	// been denied." (not the Read text). 1 = the probe's own target; 2 = another path (the target's parent).
 	grepGlobText int
+	// Cleanup sweep C (#434, review #424 P3-1): the Grep/Glob probes are refused with the Grep/Glob text by default
+	// (what runs 2 and 3 saw); true gives them the Read text instead (a CLI that would answer the other tools like Read).
+	grepGlobReadText bool
 	// R6 run 4 (#426). All opt-in.
 	scopeAll      bool            // every tool call is refused for a SCOPE reason (nothing under the deny rule, nothing read)
 	otherAll      bool            // every tool call is refused with a text that is neither the rule nor a scope text
 	declineLabels map[string]bool // the model makes no tool_use in the runs with these labels
 	timeoutLabels map[string]bool // the wrapper does not exit in the runs with these labels
+	// Cleanup sweep C (#434, review #428 P3-3): the run made a tool_use but the wrapper exited before the signal
+	// fired, so nothing was sent although a tool_use happened.
+	exitEarlyLabels map[string]bool
 }
 
 // sessionOf returns the session uuid of an argv and whether it resumes it (--resume) or creates it (--session-id).
@@ -294,7 +300,7 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 			refuse("The operation could not be performed.")
 		} else if s.ruleAll || (s.denied != nil && s.denied(target) && underDeny(target)) {
 			switch {
-			case s.grepGlobText != 0 && tool != "Read":
+			case tool != "Read" && !s.grepGlobReadText:
 				named := target
 				if s.grepGlobText == 2 {
 					named = path.Dir(target)
@@ -337,6 +343,9 @@ func (s *sim) Run(_ context.Context, inv Invocation) (Result, error) {
 		out.WriteString(ev(map[string]any{"type": s.trailing}))
 	}
 	sent := sentFor(inv, tool != "")
+	if s.exitEarlyLabels[inv.Label] {
+		sent = nil
+	}
 	if len(sent) > 0 {
 		s.refused[uuid] = true // an interrupted run: a session resumed after it cites it and declines (R6 run 4)
 	}
