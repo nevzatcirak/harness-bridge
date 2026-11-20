@@ -114,7 +114,11 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ExecStart=/usr/local/libexec/harness-bridge-h5
    Environment=BRIDGE_READ_ONLY=0
    Environment=BRIDGE_TOKEN_MAX_LIFETIME=168h
-   Environment=BRIDGE_TOKEN_FILE=/etc/harness-bridge/h5-token
+   # Empty on purpose: neutralise an inherited BRIDGE_TOKEN; readSecret refuses BOTH forms set and
+   # treats an empty value as unset (cmd/bridge/secret.go:15-23). An inherited non-empty value would
+   # otherwise make the H5 start fail with "BRIDGE_TOKEN and BRIDGE_TOKEN_FILE are mutually exclusive".
+   Environment=BRIDGE_TOKEN=
+   Environment=BRIDGE_TOKEN_FILE=/etc/harness-bridge/h5/token
    Environment=BRIDGE_TOKEN_EXPIRES=<RFC3339 expiry, at most +7 days>
    Environment=BRIDGE_PERMISSION_RELAY=off
    RuntimeDirectory=harness-bridge-admin
@@ -134,17 +138,24 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ```sh
    set +o history
    umask 077
-   install -d -m 0700 /etc/harness-bridge && chown <bridge-uid> /etc/harness-bridge
+   # Create only the h5 subdirectory; never chmod or chown an existing /etc/harness-bridge:
+   test -d /etc/harness-bridge || install -d -m 0755 /etc/harness-bridge
+   install -d -m 0700 -o <bridge-uid> -g <bridge-group> /etc/harness-bridge/h5
    openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64 \
-     > /etc/harness-bridge/h5-token          # 64 chars, no stdout, no shell history
-   chown <bridge-uid> /etc/harness-bridge/h5-token && chmod 0600 /etc/harness-bridge/h5-token
+     > /etc/harness-bridge/h5/token          # 64 chars, no stdout, no shell history
+   chown <bridge-uid> /etc/harness-bridge/h5/token && chmod 0600 /etc/harness-bridge/h5/token
    date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ  # the RFC3339 expiry for BRIDGE_TOKEN_EXPIRES
    ```
 
-   - The token lives only in `/etc/harness-bridge/h5-token` (mode `0600`, owned by the Bridge UID);
+   - The token lives only in `/etc/harness-bridge/h5/token` (mode `0600`, owned by the Bridge UID);
      `zzzz-h5.conf` carries its **path** (`BRIDGE_TOKEN_FILE`) and the expiry
      (`BRIDGE_TOKEN_EXPIRES`), never the value, so the drop-in may stay `0644`. `BRIDGE_TOKEN` and
-     `BRIDGE_TOKEN_FILE` are mutually exclusive (`cmd/bridge/secret.go:13-43`).
+     `BRIDGE_TOKEN_FILE` are **mutually exclusive**, and an empty value counts as unset
+     (`cmd/bridge/secret.go:15-23`): the `Environment=BRIDGE_TOKEN=` line above is what neutralises a
+     value inherited from the H4 drop-in/base unit. The host's current form is **UNVERIFIED**; before
+     the restart, `systemctl show -p Environment harness-bridge-private.service` shows what the unit
+     carries — a non-empty `BRIDGE_TOKEN` there is neutralised by the empty line in `zzzz-h5.conf`
+     (and by nothing else).
    - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; the explicit `BRIDGE_TOKEN_EXPIRES` must be RFC3339 and no
      more than **+7 days** (168h) from the sitting (`cmd/bridge/ingress.go:35-46`;
      `internal/security/remote.go:39-66`). The ≥43-character rule applies above 24h; the generated
@@ -274,8 +285,8 @@ R7, `/audit` has no free text or token material, on the socket every non-GET/HEA
 `Origin` is 403 (the foreign-`Host` 400 is NOT_EXERCISED, never PASS). A page that renders a
 session outside the ACL is FAIL. Everything not observed is NOT_EXERCISED, never PASS.
 
-Rollback: remove `BRIDGE_DASHBOARD_SOCKET` (and any `BRIDGE_DASHBOARD_ADDR`), restart; the socket
-directory may stay.
+Rollback: remove `BRIDGE_DASHBOARD_SOCKET`, the `RuntimeDirectory=harness-bridge-dashboard` line
+(and any `BRIDGE_DASHBOARD_ADDR`), restart; systemd removes the runtime directory with the unit.
 
 ## R7: lifecycle create/catalog and overlay archive (stages 3+4)
 
@@ -295,20 +306,21 @@ R7DIR="$ROOT/r7-$(head -c4 /dev/urandom | xxd -p)"    # max_depth 1: one level b
 install -d -o <owner> -g <group> -m <mode> "$R7DIR"
 sudo -u <owner> git -C "$R7DIR" init -q
 # lifecycle config: absolute canonical path, no symlink in any component, mode 0600, owned by the
-# Bridge process's UID (the unit's User=; root when User= is empty):
-cat > /etc/harness-bridge/lifecycle-h5.json <<'JSON'
+# Bridge process's UID (the unit's User=; root when User= is empty). It lives in the same new
+# /etc/harness-bridge/h5 subdirectory (created above; do not reset an existing /etc/harness-bridge):
+cat > /etc/harness-bridge/h5/lifecycle.json <<'JSON'
 {"roots":[{"path":"/opt/harness-bridge-test/workspace","modes":["create","archive"],
            "max_sessions":20,"max_depth":1,"existing_tools":false}],
  "create_per_hour":10,"archive_per_hour":10,"max_total_sessions":50}
 JSON
-chown <bridge-uid> /etc/harness-bridge/lifecycle-h5.json && chmod 0600 /etc/harness-bridge/lifecycle-h5.json
+chown <bridge-uid> /etc/harness-bridge/h5/lifecycle.json && chmod 0600 /etc/harness-bridge/h5/lifecycle.json
 # overlay directory: owned by the Bridge UID, mode exactly 0700, no symlink in the final component:
 install -d -m 0700 /var/lib/harness-bridge/h5-overlay && chown <bridge-uid> /var/lib/harness-bridge/h5-overlay
 ```
 
 Add to the drop-in:
 ```ini
-Environment=BRIDGE_LIFECYCLE_CONFIG=/etc/harness-bridge/lifecycle-h5.json
+Environment=BRIDGE_LIFECYCLE_CONFIG=/etc/harness-bridge/h5/lifecycle.json
 Environment=BRIDGE_OVERLAY_DIR=/var/lib/harness-bridge/h5-overlay
 ```
 
@@ -488,9 +500,12 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
    on disk, unread.
 3. Rotate the token to the H4 constraints (H4 supports 168h; R5 `692992d` caps at 24h). The new
    token file and `BRIDGE_TOKEN_EXPIRES` live in `zzzz-h5.conf`, so removing it makes H4 start with
-   its own (superseded, possibly expired) token settings: copy the new `BRIDGE_TOKEN_FILE` and
-   `BRIDGE_TOKEN_EXPIRES` into `zzz-h4.conf` (H4 accepts the same 168h and ≥43 characters) or rotate
-   a fresh H4 token as part of the rollback.
+   its own (superseded, possibly expired) token settings: copy the new `BRIDGE_TOKEN_FILE`
+   (`/etc/harness-bridge/h5/token`) and `BRIDGE_TOKEN_EXPIRES` into `zzz-h4.conf` (H4 accepts the
+   same 168h and ≥43 characters) or rotate a fresh H4 token as part of the rollback. In either case
+   also put **`Environment=BRIDGE_TOKEN=`** (empty) into `zzz-h4.conf` beside them: the H4/base unit
+   may still carry a `BRIDGE_TOKEN`, and `readSecret` refuses both forms while an empty value counts
+   as unset (`cmd/bridge/secret.go:15-23`).
 4. Re-add the H4 connector; remove the H5 one.
 5. If stage 5 was run in a later sitting, revert the OpenCode permission drop-in (R5B Step 4.1).
 6. Keep the workspace and native sessions; `h5/` and `r7-<hex>/` are the only expected new trees.
