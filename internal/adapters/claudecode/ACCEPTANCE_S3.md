@@ -66,7 +66,7 @@ verdict lines and event types only.
    denied directory (`DenialClass(.., DeniedDirs(plan))`); every other text of that shape stays `other`.
    **R6 run 3 (2026-11-20, relayed from the Planning Desk's log #117, not reproduced here): item 1 PASS**
    (`why=all_probes_denied_controls_read`, 6/6 probes `denial_class=rule`, 6/6 controls `none`, no leak, no file
-   canary, no sink request, `mcp_servers=0` and `apiKeySource` `none` on 12/12 runs). The only live PASS so far; a
+   canary, no sink request, `mcp_servers=0` and `apiKeySource` `none` on 12/12 runs). The only live PASS of item 1 so far; a
    single run, never repeated (`docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a).
    The production `Observer` (task #372, `internal/acceptance/observer.go`) supplies the three observations
    behind the flags `-history-dir`, `-canary-dir` and `-sink-addr` of the driver command (operator steps,

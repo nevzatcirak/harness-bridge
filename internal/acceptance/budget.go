@@ -80,7 +80,7 @@ func ValidateArgv(args []string) error {
 		case strings.HasPrefix(a, "--dangerously-"), strings.HasPrefix(a, "--allow-dangerously-"):
 			return errors.New("acceptance: a permission-skipping flag is refused")
 		case strings.HasPrefix(a, "--add-dir"): // also the glued --add-dir=<dir> form
-			return errors.New("acceptance: --add-dir is only for the item 1 probe argv (ValidateProbeArgv)")
+			return errors.New("acceptance: --add-dir is only for the runs that carry the probe run home: items 1, 4 and 6 (ValidateProbeArgv)")
 		case a == "--allowedTools", a == "--allowed-tools", a == "--permission-prompt-tool",
 			strings.HasPrefix(a, "--allowedTools="), strings.HasPrefix(a, "--allowed-tools="), strings.HasPrefix(a, "--permission-prompt-tool="):
 			return errors.New("acceptance: a flag that grants tool permissions is refused")
@@ -118,8 +118,9 @@ func ValidateWrapper(p string) error {
 	return nil
 }
 
-// ValidateProbeArgv is ValidateArgv for the argv of an item 1 probe or control run (R6 run 1, #409). Probe and
-// control must both be able to READ the decoys, so the CLI gets one extra readable scope: the isolated test
+// ValidateProbeArgv is ValidateArgv for the argv of a run that is given the run home as a readable scope: an item
+// 1 probe or control run (R6 run 1, #409) and the runs of items 4 and 6 (R6 run 4, #426). Probe and control (and
+// the tool calls of items 4 and 6) must be able to READ the decoys, so the CLI gets one extra readable scope: the isolated test
 // user's HOME (the managed deny rule still refuses the two credential directories under it; a deny rule wins
 // over a granted scope). The only extra flag allowed is ONE trailing `--add-dir <run home>` with exactly the
 // configured run home; everything before it must pass ValidateArgv, which refuses any other --add-dir. The

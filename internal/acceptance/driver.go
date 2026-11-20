@@ -237,6 +237,17 @@ func (d *Driver) scopedArgv(uuid string, mut func(settings map[string]any)) ([]s
 	return args, ValidateProbeArgv(args, d.Cfg.RunHome)
 }
 
+// runHomePreflight is the run-home pre-flight of items 4 and 6 (R6 run 4 follow-up, #430, review #429 P2-1): both
+// hand the CLI the run home as a readable scope (--add-dir <run home>), as item 1 does, so the run home must be a
+// real directory owned by the run user that nobody else can write into BEFORE any run starts or anything is
+// created. Item 1 runs the full claudecode.Preflight, which includes the same checks. It prints one line with the
+// item and the result, never a path.
+func (d *Driver) runHomePreflight(item int) bool {
+	ok := claudecode.PreflightRunHome(d.Canary, d.Cfg.RunHome, d.Cfg.RunHome, d.Cfg.RunUID) == nil
+	_ = d.Out.KV("run_home", "item", strconv.Itoa(item), "preflight", map[bool]string{true: "pass", false: "fail"}[ok])
+	return ok
+}
+
 func (d *Driver) env() []string {
 	if d.Cfg.Candidate {
 		return []string{"ENABLE_CLAUDEAI_MCP_SERVERS=false"}
@@ -249,8 +260,9 @@ func (d *Driver) run(ctx context.Context, label string, args []string, stdin str
 	return d.runInv(ctx, label, args, stdin, steps, closeOn, "")
 }
 
-// runInv is run with the probe run home of an item 1 probe or control run (probeHome empty for every other
-// run): the production runner then validates the argv with ValidateProbeArgv instead of ValidateArgv.
+// runInv is run with the probe run home of a run that carries the readable scope (an item 1 probe or control
+// run, or a run of item 4 or 6; probeHome empty for every other run): the production runner then validates the
+// argv with ValidateProbeArgv instead of ValidateArgv.
 func (d *Driver) runInv(ctx context.Context, label string, args []string, stdin string, steps []Step, closeOn, probeHome string) (Result, StreamInfo, error) {
 	if err := d.budget.Take(); err != nil {
 		_ = d.Out.KV("budget", "state", "breached", "runs", strconv.Itoa(d.budget.Used()))
@@ -641,6 +653,10 @@ func (d *Driver) itemLag(ctx context.Context) Verdict {
 // A FAIL of one run is never hidden behind an unexercised other run.
 func (d *Driver) itemSignals(ctx context.Context) Verdict {
 	v := Verdict{Item: 4, Name: itemName(4), Result: Fail}
+	if !d.runHomePreflight(4) {
+		v.Why = "preflight_failed"
+		return v
+	}
 	cleanup, ok := d.toolDecoys()
 	if !ok {
 		v.Why = "control_dir_exists_or_not_creatable"
@@ -724,6 +740,10 @@ func (d *Driver) itemManaged(ctx context.Context) (v Verdict) {
 		return v
 	}
 	d.Out.Forbid(cp.plan.Marker, cp.plan.ControlMarker)
+	if !d.runHomePreflight(6) { // before anything is written or run: the CLI is given the run home as a readable scope
+		v.Why = "preflight_failed"
+		return v
+	}
 	var created []string // the decoy is registered for removal only after it was created here
 	defer func() { d.cleanup(created, cp.controlDir) }()
 	if err := d.FS.Write(cp.plan.DecoyFile, cp.decoyContent); err != nil {

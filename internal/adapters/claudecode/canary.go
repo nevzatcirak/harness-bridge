@@ -88,6 +88,61 @@ func inside(p, tree string) bool {
 	return p == tree || strings.HasPrefix(p, strings.TrimSuffix(tree, "/")+"/")
 }
 
+// PreflightRunHome is the run-home part of Preflight, for a run that hands the CLI the run home as a readable
+// scope (`--add-dir <run home>`): items 4 and 6 of the acceptance driver (R6 run 4 follow-up, #430, review #429
+// P2-1). The tree and HOME must be real, clean absolute paths (HOME inside the tree), and the run home must be a
+// real directory owned by the run user that nobody else can write into. It needs no decoy, so it can run before
+// anything is created. Item 1 keeps calling Preflight, which runs the same checks through the same helper.
+func PreflightRunHome(fsys CanaryFS, tree, home string, runUID uint32) error {
+	if runUID == 0 {
+		return errors.New("canary: the test must not run as root")
+	}
+	for name, v := range map[string]string{"tree": tree, "home": home} {
+		if err := cleanAbs(v); err != nil || v == "/" {
+			return fmt.Errorf("canary: %s is not an absolute clean path", name)
+		}
+	}
+	_, err := preflightRunHome(fsys, tree, home, runUID)
+	return err
+}
+
+// preflightRunHome checks the throwaway tree, HOME inside it, and the run home itself; it returns the real tree.
+func preflightRunHome(fsys CanaryFS, treePath, home string, runUID uint32) (string, error) {
+	tree, err := fsys.EvalSymlinks(treePath)
+	if err != nil || tree != treePath {
+		return "", errors.New("canary: the throwaway tree is not a real path (symlink alias or missing)")
+	}
+	if ti, err := fsys.Lstat(tree); err != nil || !ti.isDir() {
+		return "", errors.New("canary: the throwaway tree is not a directory")
+	}
+	// HOME must be inside the tree in BOTH forms: CLAUDE_CONFIG_DIR alone does not change
+	// what `~` means (review #183 P2-2), so a run with the real HOME is refused.
+	real, err := fsys.EvalSymlinks(home)
+	if err != nil {
+		return "", fmt.Errorf("canary: HOME does not resolve: %w", err)
+	}
+	if !inside(real, tree) {
+		return "", errors.New("canary: HOME resolves outside the throwaway tree")
+	}
+	if real != home {
+		return "", errors.New("canary: HOME is not a real path")
+	}
+	// The run home itself (R6 run 1 fix, #416): the CLI is given it as a readable scope, so it must be a real
+	// directory owned by the run user that nobody else can write into.
+	hi, err := fsys.Lstat(home)
+	switch {
+	case err != nil:
+		return "", errors.New("canary: the run home cannot be inspected")
+	case hi.isSymlink() || !hi.isDir():
+		return "", errors.New("canary: the run home is not a directory")
+	case hi.UID != runUID:
+		return "", errors.New("canary: the run home is not owned by the run user")
+	case hi.Mode.Perm()&0o022 != 0:
+		return "", errors.New("canary: the run home is group- or world-writable")
+	}
+	return tree, nil
+}
+
 // Preflight is the check the harness runs BEFORE the run and that fails closed (§8.3
 // "Isolation"): the UID differs from the service user's; HOME (both forms), CLAUDE_CONFIG_DIR
 // (form B), the decoy file and the decoy profile all resolve (Lstat, EvalSymlinks; no file is
@@ -111,12 +166,10 @@ func Preflight(fsys CanaryFS, p CanaryPlan) error {
 			return fmt.Errorf("canary: %s is not an absolute clean path", name)
 		}
 	}
-	tree, err := fsys.EvalSymlinks(p.Tree)
-	if err != nil || tree != p.Tree {
-		return errors.New("canary: the throwaway tree is not a real path (symlink alias or missing)")
-	}
-	if ti, err := fsys.Lstat(tree); err != nil || !ti.isDir() {
-		return errors.New("canary: the throwaway tree is not a directory")
+	// The tree, HOME and the run home itself (shared with PreflightRunHome, so the two cannot drift apart).
+	tree, err := preflightRunHome(fsys, p.Tree, p.Home, p.RunUID)
+	if err != nil {
+		return err
 	}
 	resolve := func(what, v string) (string, error) {
 		real, err := fsys.EvalSymlinks(v)
@@ -127,28 +180,6 @@ func Preflight(fsys CanaryFS, p CanaryPlan) error {
 			return "", fmt.Errorf("canary: %s resolves outside the throwaway tree", what)
 		}
 		return real, nil
-	}
-	// HOME must be inside the tree in BOTH forms: CLAUDE_CONFIG_DIR alone does not change
-	// what `~` means (review #183 P2-2), so a run with the real HOME is refused.
-	home, err := resolve("HOME", p.Home)
-	if err != nil {
-		return err
-	}
-	if home != p.Home {
-		return errors.New("canary: HOME is not a real path")
-	}
-	// The run home itself (R6 run 1 fix, #416): the CLI is given it as a readable scope, so it must be a real
-	// directory owned by the run user that nobody else can write into.
-	hi, err := fsys.Lstat(p.Home)
-	switch {
-	case err != nil:
-		return errors.New("canary: the run home cannot be inspected")
-	case hi.isSymlink() || !hi.isDir():
-		return errors.New("canary: the run home is not a directory")
-	case hi.UID != p.RunUID:
-		return errors.New("canary: the run home is not owned by the run user")
-	case hi.Mode.Perm()&0o022 != 0:
-		return errors.New("canary: the run home is group- or world-writable")
 	}
 	switch p.Form {
 	case CanaryFormA:

@@ -35,6 +35,9 @@ type fakeFS struct {
 	dirGone bool
 	failOn  string
 	dirs    map[string]bool // directories created through Mkdir (the only ones RemoveDir removes)
+	// R6 run 4 follow-up (#430): opt-in changes of what Lstat says about the run home itself.
+	homeMode fs.FileMode // non-zero: the run home's mode (type and permission bits)
+	homeUID  uint32      // non-zero: the run home's owner
 }
 
 func newFakeFS() *fakeFS { return &fakeFS{content: map[string][]byte{}} }
@@ -115,7 +118,14 @@ func (f *fakeFS) Lstat(p string) (claudecode.FileInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p == tHome {
-		return claudecode.FileInfo{Mode: fs.ModeDir | 0o700, UID: 1500, Nlink: 2}, nil
+		mode, uid := fs.ModeDir|0o700, uint32(1500)
+		if f.homeMode != 0 {
+			mode = f.homeMode
+		}
+		if f.homeUID != 0 {
+			uid = f.homeUID
+		}
+		return claudecode.FileInfo{Mode: mode, UID: uid, Nlink: 2}, nil
 	}
 	if _, ok := f.content[p]; ok {
 		return claudecode.FileInfo{Mode: 0o600, UID: 1500, Nlink: 1}, nil
