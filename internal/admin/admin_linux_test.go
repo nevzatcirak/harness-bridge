@@ -3,9 +3,11 @@
 package admin
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -496,6 +498,58 @@ func TestConnectionCapRefusesExtra(t *testing.T) {
 	waitFor(t, "slot freed", func() bool { return h.srv.active() == wantCap-1 })
 	if got := call(t, h, validRequest()); got.Outcome != "released" {
 		t.Fatalf("after freeing a slot: %+v", got)
+	}
+}
+
+// A connection over the cap is not only answered: the server also closes it (a refusal path that kept the
+// descriptor would leak one per refusal, review #151 P3-1, mutation O3), and the refusal writes exactly one
+// audit line, with the peer's principal and no request fields (nothing was read from the connection).
+func TestOverCapRefusalClosesTheConnectionAndWritesOneAuditLine(t *testing.T) {
+	const wantCap = 4
+	stub := &stubReleaser{}
+	h := startWith(t, stub, func(s *Server) { s.ReadTimeout = 30 * time.Second })
+	var holders []net.Conn
+	t.Cleanup(func() {
+		for _, c := range holders {
+			_ = c.Close()
+		}
+	})
+	for i := 0; i < wantCap; i++ {
+		c, err := net.Dial("unix", h.socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		holders = append(holders, c)
+	}
+	waitFor(t, "holders admitted", func() bool { return h.srv.active() == wantCap })
+	if n := len(h.logs.lines(t)); n != 0 {
+		t.Fatalf("%d audit lines before any refusal", n)
+	}
+
+	extra, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	_ = extra.SetDeadline(time.Now().Add(2 * time.Second))
+	br := bufio.NewReader(extra)
+	var r Response
+	if err = json.NewDecoder(br).Decode(&r); err != nil {
+		t.Fatalf("extra connection got no immediate refusal: %v", err)
+	}
+	refused(t, r, "TOO_MANY_CONNECTIONS")
+	// The server closed its end: the next read ends with EOF, not with our own deadline.
+	if _, err := br.ReadByte(); err != io.EOF {
+		t.Fatalf("read after the refusal: %v, want io.EOF (the server must close a refused connection)", err)
+	}
+	// Exactly one audit line, for exactly this refusal, with the peer's UID as principal and no request fields.
+	wantFields(t, onlyLine(t, h), map[string]any{
+		"event": "guard_release", "tool": "admin", "outcome": "refused", "accepted": false,
+		"error_code": "TOO_MANY_CONNECTIONS", "principal": "admin:uid=" + strconv.Itoa(os.Geteuid()),
+		"session_id": nil, "execution_id": nil, "ticket": nil, "native_state": nil,
+	})
+	if stub.count() != 0 {
+		t.Fatalf("a refused connection reached the manager (%d calls)", stub.count())
 	}
 }
 
