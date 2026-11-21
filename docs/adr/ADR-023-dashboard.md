@@ -758,3 +758,642 @@ Facts only (task #289). R-DASH stays **NOT_EXERCISED**; the native shapes stay U
   still marked a slice-5a proposal name.
 - **Not here.** The archive overlay and ADR-022 S6/S8, the O2 flag, Claude Code history and diffs,
   any new native endpoint, and the live R-DASH run.
+
+## Amendment A1 (ACCEPTED, 2026-11-21, maintainer decision D31): dashboard visual system v2 ("Cirak")
+
+Status: **ACCEPTED (2026-11-21, maintainer decision D31, recorded in issue #117).** Task #463; maintainer decision **D28 (2026-11-21, in chat):** make
+the dashboard look professional and reuse the *visual language* of the maintainer's Lokman admin UI.
+Revised in task #469 by the **Hallmark sweep (A1.13)**, at the maintainer's request to use Hallmark for the
+dashboard design, in task #477 for review #476 (one P2 and nine P3, dispositions in A1.14), in task #483 for reviews #480 and #481 (one P2 and nine P3, plus two P3, dispositions in A1.15), and in task #489
+for review #486 (four P3, A1.16). **Acceptance.** The reviews passed with no open P0-P2 (C #476 and #481, B #480
+and #486), the amendment conforms to the recorded D-items, and the maintainer answered **every one of its sixteen
+open questions with the recommendation in decision D31 (2026-11-21, issue #117)**: A1.12 records them as decided.
+Implementation proceeds in the slices of A1.9; until a slice ships, the dashboard serves the pages of the accepted
+sections above.
+
+**What it is.** Mostly a presentation amendment: tokens, layout, screens, accessibility, CSP and JavaScript
+inventory, refresh behaviour, three implementation slices, a test plan and the Hallmark sweep. It supersedes
+the ASCII layouts of §5 **as visual design only**; §5's data, columns and semantics stay. Reference files,
+both docs only and not served: `docs/design/dashboard-v2.css` (the tokens and component shapes; slice S1
+turns it into the embedded `assets/dashboard.css`) and `docs/design/dashboard-v2-mock.html` (a static mock
+with fictional data that links that stylesheet). **No code changes in this task.** The design values below are
+the maintainer's token values (values only); no Lokman code or asset is copied.
+
+**What A1 decides beyond presentation** (each was confirmed by D31; none touches a recorded D-item): (i) it supersedes accepted §4's hidden-tab polling cadence with a pause (A1.7); (ii) it adds three
+GET routes (`/executions`, `/catalog`, `/health`), their JSON twins, a page parameter on `/audit`, and two
+`Source` readers (`Executions`, `Health`) plus liveness and pending-permission copies on the dashboard
+`Execution` (A1.8); (iii) it adds a read-only getter for the connector token's **expiry timestamp** (Q4); (iv) it
+adds one optional variable for an instance label, `CIRAK_DASHBOARD_LABEL`, in ADR-026's prefix (A1.8, Q3, Q16). Everything else changes
+how existing data looks.
+
+### A1.0 Invariants that stay (ADR-023 §3, §4, §6, T1-T11)
+
+| Invariant | How A1 keeps it |
+| --- | --- |
+| Read-only: only GET/HEAD, no form, no write route (T5, T11) | No form, no button that submits. The only controls are links, a client-side filter, a copy button, a theme toggle and a menu disclosure, none of which sends anything to a Bridge write path. New routes are GET/HEAD. |
+| Server-rendered Go `html/template` | Unchanged. No `template.HTML`/`template.JS`/`template.URL` for native data (T1). |
+| No JavaScript framework, no build step, no external fetch | The one embedded `dashboard.js` stays vanilla; no bundler, no CDN, no webfont download, no remote image. |
+| CSP stays strict | The header string is **byte-identical** to §3 (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`). A1 adds no inline style, no inline script and no handler (A1.6). |
+| Loopback / unix socket only; Host and Origin checks | Unchanged. |
+| Redaction, size caps, no logging of content | Unchanged. The redaction count stays visible (A1.4). |
+| Session scope: every ACL-authorized session (D17 Q6); archived sessions hidden by default with a filter (D17 Q7, ADR-025) | **The Sessions list, the session detail, `/executions`, `/catalog` and their JSON twins obey the same scope.** `/executions` shows only executions of sessions in the scope set of the Sessions list, and an archived session's executions only with `?archived=1` (A1.4 item 3, A1.8). No page widens the scope. **The audit page is the one exception, and A1 leaves it as D17 Q4 recorded it:** the 1000-entry ring is the process audit and is **not** ACL-filtered (`internal/dashboard/audit.go:78-79`: `AuditSource.Entries()` is all the dashboard gets), so it can show an entry that names a session outside the list, such as an admin `guard_release`; the sweep tests do not apply to it (A1.10 item 11). |
+| Distinct harness badges and columns (D17 Q8) | The harness stays a badge plus a column (A1.4 item 1; the mock shows it). |
+| ADR-010/011/017/018: nothing the page shows changes a state | The liveness and pending-permission rows render what the Bridge already holds; they are labelled advisory (A1.4). |
+
+### A1.1 Design tokens
+
+Dark is the default. "Extracted" = the maintainer's value (D28); "A1" = chosen here, because the extracted
+list has no value for it. `docs/design/dashboard-v2.css` holds all of them as CSS custom properties.
+
+| Token | Dark | Light | Provenance |
+| --- | --- | --- | --- |
+| page background | `#121212` | `#fafafa` | dark extracted; light **A1** |
+| surface low (toolbars, the detail row: the second neutral) / mid (cards, top bar, tables) / high (menus) | `#1a1a1a` / `#1e1e1e` / `#242424` | `#f2f2f2` / `#ffffff` (paper) / `#ffffff` | dark extracted; light mid extracted, low and high **A1** |
+| text / muted text | `#e0e0e0` / `#a6a6a6` | `#212121` / `#595959` | dark **A1**; light text extracted (neutral), light muted **A1** |
+| primary (the primary action, the current selection, the focus ring) / text on primary | `#82b1ff` / `#0d1b3e` | `#2962ff` / `#ffffff` | extracted; light on-primary **A1** (the light theme blocks also set `color-scheme: light`) |
+| success / warning / error / info | `#81c784` / `#ffb74d` / `#e57373` / `#64b5f6` | `#1b5e20` / `#9a4700` / `#c62828` / `#01579b` | extracted (light = the tone-text values) |
+| primary pressed fill (a pressed primary button) | `#6a9cf5` | `#1a4fd6` | **A1**: the neutral pressed fill gave text on a pressed primary button 1.34:1 / 1.32:1 (review #480 P2-1); text on this fill is 6.18 / 6.70 (A1.2) |
+| secondary (reserved) | `#b388ff` | `#6200ea` | extracted |
+| input border | `#8a8a8a` | `#767676` | extracted |
+| hairlines (decorative separators only) | `#333333` | `#e0e0e0` | **A1** |
+| radius: card / pill / nav pill | 12 / 20 / 18 px | same | extracted |
+| chip height / chip text / table head | 22 px / 12 px / 12 px | same | extracted |
+| control height / hit target | 36 px visual / 44 px for coarse pointers | same | **A1.13** (the extracted 30 px is below Hallmark's 32-40 px app range) |
+| card padding | 12 px | same | extracted |
+| spacing scale | 4, 8, 12, 16, 24, 32 px | same | **A1.13** (Hallmark gate 24b: the 4 px scale) |
+| type scale (one ratio, about 1.17) | 12 / 14 / 16.4 / 19.2 px: label, body, h2, h1 | same | **A1.13**; system face, tabular numerals on times, durations and figures |
+| focus ring | 2 px primary, offset 2 px | same | extracted |
+| motion | state only: 80 ms and 140 ms, color and background-color, never `all` | same | **A1.13** |
+| type faces | `system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif`; mono `ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace` for IDs, paths and diffs | same | extracted; no webfont (Q2) |
+
+There is no sidebar and so no nav width token (A1.13 shell).
+
+**Accent restraint.** Primary marks only the primary action, the current navigation item, the current
+selection and the focus ring; links are the text colour, underlined. **Reserved colour rule:** secondary
+purple means **only** "pending / awaiting a human": a session or an execution in `waiting_for_permission`
+and the pending-permission row. Nothing else uses it (a test fails if any other class refers to `--secondary`
+or `--chip-secondary`).
+
+**State chips** (text on a tint of its own colour at alpha 0.14). The chip shows a **sentence-case label in
+the body face, untracked**, never the raw machine word, never a glyph or a dot; the label word is the
+non-colour cue. The raw closed word stays in the `title` attribute and in the JSON.
+
+| Raw state | Label | Tone | | Raw state | Label | Tone |
+| --- | --- | --- | --- | --- | --- | --- |
+| `completed` | Completed | ok | | `failed` | Failed | error |
+| `running` | Running | info | | `interrupted` | Interrupted | warn |
+| `waiting_for_permission` | Waiting for permission | secondary | | `unknown` | Unknown | warn |
+| `idle` | Idle | neutral | | `archived` | Archived | neutral outline |
+| any unknown value | the escaped word, as received | neutral | | | | |
+
+`idle` is **not** success (ADR-023 §5.1, ADR-011); it stays neutral. Liveness: native status `busy` info,
+`retry` warn, `absent` neutral, `unavailable` warn; `stall_reason` chips are warn with a sentence-case label
+from a closed map (`COMPLETED_WITHOUT_TERMINAL_EVIDENCE` "Completed without terminal evidence",
+`NO_CORRELATED_ASSISTANT` "No correlated assistant", `NO_PROGRESS` "No progress"; an unknown value renders
+"Unknown"). **Reserved rows, not rendered until ADR-017 A2 is accepted and its slice ships** (A2 is PROPOSED; these
+rows decide nothing for it): `PROVIDER_RETRYING` "Provider retrying", `PROVIDER_ERROR` "Provider error",
+`TOOL_RUNNING_LONG` "Tool running long", `HARNESS_UNREACHABLE` "Harness unreachable"; until then such a value
+renders "Unknown", and the label-map totality test (A1.10 item 7) covers the A1 values only. Audit event and outcome chips follow the same rule (a fixed label map; an unknown word is shown
+escaped, neutral).
+
+### A1.2 Contrast (WCAG 2.x relative luminance; AA = 4.5:1 text, 3:1 non-text)
+
+Computed from the values of `docs/design/dashboard-v2.css` itself, compositing the 0.14 tint exactly (no
+rounding of the tint colour): **124 token pairs** (text, muted text, six chip tones, input border, focus ring and
+five semantic text colours on the four surfaces, both themes, plus text on primary and text on the pressed primary
+fill) and **26 fill pairs**
+(listed below), the light media-query block and the toggle block identical: **0 failures. The minimum text pair
+is 4.62:1 (dark secondary chip on the high surface); the minimum non-text pair is 4.06:1 (light input border on
+the low surface).** Chip tint = the chip text colour at alpha 0.14 composited over the surface the chip sits on.
+Slice S1 turns this computation into a test over the embedded CSS (A1.10), so the table cannot drift from the file.
+
+| Pair (dark) | bg | low | mid | high | | Pair (light) | bg | low | mid | high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| text | 14.19 | 13.18 | 12.63 | 11.76 | | text | 15.43 | 14.38 | 16.10 | 16.10 |
+| muted text | 7.70 | 7.15 | 6.85 | 6.38 | | muted text | 6.71 | 6.26 | 7.00 | 7.00 |
+| chip ok | 7.25 | 6.59 | 6.27 | 5.81 | | chip ok | 6.05 | 5.67 | 6.30 | 6.30 |
+| chip info | 6.70 | 6.11 | 5.81 | 5.39 | | chip info | 5.68 | 5.32 | 5.91 | 5.91 |
+| chip secondary | 5.73 | 5.23 | 4.98 | 4.62 | | chip secondary | 5.69 | 5.32 | 5.92 | 5.92 |
+| chip error | 6.86 | 6.25 | 5.94 | 5.51 | | chip error | 4.97 | 4.65 | 5.17 | 5.17 |
+| chip warn | 8.22 | 7.47 | 7.10 | 6.57 | | chip warn | 4.99 | 4.67 | 5.19 | 5.19 |
+| chip neutral | 10.17 | 9.19 | 8.73 | 8.06 | | chip neutral | 11.70 | 10.94 | 12.19 | 12.19 |
+| input border (3:1) | 5.43 | 5.04 | 4.83 | 4.50 | | input border (3:1) | 4.35 | 4.06 | 4.54 | 4.54 |
+| focus ring (3:1) | 8.64 | 8.02 | 7.69 | 7.16 | | focus ring (3:1) | 4.69 | 4.38 | 4.90 | 4.90 |
+
+Other pairs (dark / light). **Token pairs not in the table:** semantic text on a card: ok 8.28 / 7.87, info
+7.53 / 7.40, error 5.58 / 5.62, secondary 6.26 / 7.76, warn 9.63 / 6.41 (on the light low surface 7.03, 6.61, 5.02,
+6.93 and 5.73); text on primary (the current nav item, the button) 7.79 / 4.90 and **text on the pressed primary
+fill 6.18 / 6.70**. **The 26 fill pairs** (thirteen per
+theme, the fills a component draws that the tokens alone do not give): text on a row hover 8.73 / 12.19; text on a
+nav hover 9.19 / 10.94; text on the pressed fill 9.57 / 12.20; text on a diff add line 9.56 / 12.89 and muted text on
+it 5.18 / 5.61; text on a delete line 9.69 / 12.67 and muted 5.26 / 5.51; text on the pending-permission row
+10.06 / 12.30 and muted 5.45 / 5.35; the outline chip inside that row 4.98 / 5.92; the archived outline chip
+border against a card 12.63 / 16.10 (non-text); **the pressed primary fill against the surface it sits on, the
+toolbar `low` surface and the card (non-text, 3:1): dark 6.37 and 6.10, light 5.99 and 6.70** (four of the 26).
+
+**Where the extracted values were not enough (the reasons for the "A1" cells):**
+
+1. **Error chip text.** The extracted error colour as chip text gives dark 4.55:1 on a card but **4.24:1 on
+   the `high` surface (fails)**; light `#c62828` gives **4.498:1 on white (a hair below 4.5: it fails)**, 4.32 on
+   the page background `#fafafa` and 4.05 on the low surface `#f2f2f2` (fail). The chip text therefore uses `#ef9a9a` (dark) and `#b71c1c` (light); the error
+   tint behind a chip and behind a removed diff line is that same colour at alpha 0.14. Error as plain text
+   (the `-M` count, an error message) keeps the extracted value.
+2. **Light surfaces.** The light page background `#fafafa` and the second neutral `#f2f2f2` are A1 values:
+   the maintainer's list has only the paper `#ffffff`. Every pair above holds on all four surfaces.
+3. **Nested tints.** A chip inside the tinted pending-permission row would stack two tints (dark 3.96:1,
+   fails; light 4.61); inside that row chips are outlines (4.98 dark / 5.92 light).
+4. **Pressed primary button (review #480 P2-1).** `.btn:active` gave every button the neutral pressed fill, and its
+   specificity (0,2,0) out-ranks `.btn--primary` (0,1,0), so a pressed primary button drew `--on-primary` text on
+   `--hairline`: **1.337:1 dark, 1.320:1 light**
+   (unreadable). *After:* a `.btn--primary:active` rule, placed after `.btn:active`, uses the new `--primary-active`
+   token (`#6a9cf5` dark, `#1a4fd6` light); text on it is **6.18 / 6.70**, the pair is in the token set and in the
+   contrast test, and the mutation "primary pressed fill reverted to `--hairline`" is listed (A1.10). **The 3:1
+   non-text pair of the press is the pressed fill against the surface it sits on** (toolbar `low` / card): dark
+   6.37 / 6.10, light 5.99 / 6.70; these four pairs are in the fill list and in the test. The difference between the
+   normal and the pressed fill (1.26 / 1.37) is a **supplementary** cue, deliberately outside the A1.10 item 2
+   assertion; the press has no other state cue, and "every pair" stays true because the asserted pairs are the ones
+   listed.
+5. **Rule:** a chip sits on one of the four surfaces above, never on another tint; links are the text colour,
+   so no accent-on-surface link pair exists.
+
+Not covered by a ratio: hairlines (decorative); the state is always also in text.
+
+### A1.3 Layout (a top bar, no sidebar: A1.13)
+
+```
+┌ Cirak   Sessions  Executions  Catalog and archived  Audit  About and health ───── bridge-a  Token expires in 52 min  [Theme]  Read-only ┐
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  main content, centred, at most 96rem wide, 16 px gutters, cards 12 px radius, tables before cards                                      │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Top bar** (48 px, not sticky): the "Cirak" wordmark (text, no image); the five destinations as pills
+  (36 px, radius 18, `aria-current="page"` fills the current one with the primary colour); an instance label (Q3);
+  the connector-token expiry badge in remote mode (A1.8; absent in local mode, where ADR-019 says there is no
+  expiry; neutral, warn under 60 minutes, error once expired); the theme toggle (hidden unless JS runs); the word
+  "Read-only". **The instance label and the token-expiry badge arrive in S3 with `Source.Health` and the label
+  variable (A1.9); the S1 and S2 top bars omit them, by the same rule as a destination.**
+- **Below 60rem** the destinations collapse into a `<details>` menu below the wordmark (open without JS, closed by
+  the script on narrow screens, JS-6); the content is one column at 320 px (WCAG 1.4.10); tables scroll inside
+  their own wrapper, never the page.
+- A destination appears only when its page exists (no dead links in S1).
+
+### A1.4 Screens
+
+All screens: a `<main>` landmark, one `<h1>`, tables with a visually hidden `<caption>` and `th scope`,
+absolute time in `title` and in the detail view's text beside the relative form (`<time datetime>`), IDs and
+paths in mono, times and durations in tabular numerals, labels in sentence case. State lives in the URL (A1.13).
+
+1. **Sessions (`GET /`).** Toolbar (the low surface): search, state filter, harness filter, the archived link
+   (`?archived=1`), and the **Refresh link** (the no-JS refresh of A1.6 JS-3 and the page's primary action). Sticky-header table, columns: **harness** (a badge with the harness name: D17 Q8 keeps the distinct harness
+   badge and column), **title and ID**, **repository and path** (mono; a path longer than 40 runes is shown as an
+   ellipsis plus its **last two segments**, never cut inside a segment; two rows of one list that would then render
+   identically get a stable 6-hex suffix taken from the sha256 of the full path; the full value is in `title`, on the
+   detail page and in the copy control), **lifecycle root**, **state chip**,
+   **guard**, **current execution**, **last activity** (relative, absolute in `title`), an **Archived** chip.
+   Caps unchanged: the page renders the first 200 rows and says "Showing the first 200 of N sessions" (`maxListRows`,
+   `internal/dashboard/poll.go:96-98`). Tables before cards: the table is the screen.
+2. **Session detail (`GET /session/<harness>/<id>`).** The signature screen (A1.13):
+   - A header card: copyable ID, path, lifecycle root, state chip, guard (a key/value list).
+   - **The execution timeline**, one table, newest first: state chip, execution, start, duration, and a liveness
+     cell. Under the **current** execution a detail row carries the **liveness report (ADR-017)**: native status
+     chip, retry attempt and next attempt time, last native progress (relative and absolute), observed-at, the
+     stall reason as a chip with its plain-language sentence, and the fixed note "This is a report, not a
+     verdict; the Bridge takes no action." The dashboard keys on `stall_reason`, **not** on `stall_suspected`
+     alone (review #459 P2-1). Values of ADR-017 A2 (`PROVIDER_RETRYING`, `PROVIDER_ERROR`, `TOOL_RUNNING_LONG`,
+     `HARNESS_UNREACHABLE`, `cause_hint`, `tool`, `thresholds`) are **reserved rows in the label map, rendered only
+     after A2 is accepted and its slice ships**; A1 depends on A1 fields only.
+   - **Pending permission** is a secondary-tinted row of the same table: "Awaiting a human", the count of pending
+     native permissions and, only when the Bridge attributes one to an execution (ADR-024), the fields ADR-024
+     already exposes to Chat (tool, kind, pattern count, digest). Never a pattern, never native text. With the
+     default incarnation mode off it says it is not attributed and to answer it in OpenCode.
+   - **Changes in the working tree:** the totals, the **redaction count**, a file list with status word and
+     `+N -M` counts (text, not colour only), per file a `<details>` (the first open, the rest collapsed; no border
+     box, hairline separators), the diff in `<pre>` as text (unified; a split view is Q7), added and removed lines
+     with a tint **and** the `+`/`-` character; per-turn diffs behind the existing turn links; the "diff
+     unavailable" state with its reason (Claude Code history: ADR-021 pending, unchanged).
+3. **Executions (`GET /executions`).** A flat table, newest first, of **only the executions of sessions in the
+   scope set of the Sessions list**: the same ACL-authorized scope (D17 Q6), and the executions of an **archived**
+   session only with `?archived=1` (D17 Q7, ADR-025), through the same request-context flag the sessions list uses.
+   **The join set is that scope set before the Sessions page's 200-row display cap** (the page truncates what it
+   shows, not what is in scope), so an execution of the 201st session can appear here; a footnote says so
+   ("includes sessions beyond the first 200 shown on the Sessions page"), as it says that a restart empties the list
+   (ADR-010) and that archived sessions' executions are behind the archived filter. The **cap of 200 rows is
+   applied to the executions after the filter**, so a hidden session can neither appear nor crowd a visible one out.
+   The **Session** column and its link are built from the harness-qualified session ID carried on the row (A1.8). Data:
+   A1.8.
+4. **Catalog and archived (`GET /catalog`).** Sessions grouped by lifecycle root (the existing label) with the
+   archived filter; read-only; it widens nothing (ADR-022 §6.1).
+5. **Audit (`GET /audit`, `?page=N`).** The bounded ring in pages of 100 (a server-side page parameter, GET,
+   bounded); the **event** as a neutral chip, the **outcome** as a chip from a fixed label map, the error code,
+   session, execution, principal and the "other" attributes as today; the client-side filter stays. **The ring is the
+   D17 Q4 process audit and is not ACL-filtered** (A1.0): an entry can name a session that is not in the Sessions list.
+6. **About and health (`GET /health`).** A key/value list: version, build (the VCS revision when the binary
+   carries one, else unknown), connector token expiry (remote mode only), lifecycle, permission relay and Claude
+   Code as On/Off chips (one row each, no joined strings), harness reachability **taken from the outcome of the last
+   session-list read** (no extra native probe), audit feed on/off and fill.
+7. **States.** Every data region has the four states of A1.13: loading, empty, error and full, with the
+   server-rendered "loading" marked not applicable; a stale banner when a poll fails; *503* (page text plus
+   `Retry-After`, as §4); *404* (fixed text, never echoes the identifier). Each has a heading, a sentence and a link
+   back or the one action that fills it.
+
+### A1.5 Accessibility (WCAG 2.2 AA)
+
+- **Contrast:** A1.2, both themes, as a test. **Not colour alone (1.4.1):** every chip has its word.
+  **Non-text contrast (1.4.11):** input border, focus ring and outline chip, all >= 3:1 (A1.2).
+- **Keyboard:** every control reachable in DOM order; a visible 2 px focus ring on every focusable element,
+  appearing instantly; a "Skip to content" link first; the top bar is not sticky, so a focused element is never
+  hidden behind it (2.4.11).
+- **Target size (2.5.8 and Hallmark's hit target):** controls 36 px visual, 44 px minimum for coarse pointers;
+  chips are not interactive.
+- **Structure:** `lang`, a meta description, landmarks (`header`, `nav` with a label, `main`), heading order,
+  table captions and `th scope`, `aria-current`, `<time datetime>`; no information only in `title`.
+- **Reflow and spacing:** usable at 320 px width and 200% zoom (1.4.10, 1.4.4); text-bearing elements (chips,
+  badges, inputs, buttons) use `min-height`, never a fixed `height`, so the text-spacing overrides do not clip
+  (1.4.12; the only fixed height is the visually hidden element).
+- **Scroll wrappers:** every table wrapper is a keyboard-reachable named region (`tabindex="0"`, `role="region"`,
+  `aria-labelledby` the screen heading), so a scrollable table can be read without a pointer. The sticky table head
+  has `scroll-padding-top` on its wrapper so a focused row is not hidden under it (2.4.11), and the wrapper's
+  `max-height` has a floor (`max(calc(100vh - 14rem), 12rem)`) so a short viewport does not collapse it.
+- **Motion:** `prefers-reduced-motion: reduce` disables every animation and transition. `forced-colors: active`
+  gives chips a `CanvasText` border.
+- Not claimed without a real render and a screen-reader pass (UNVERIFIED, A1.11); the three wrapper and
+  text-spacing rules above are tests in A1.10 that need no render for their static half.
+
+### A1.6 CSP, security and JavaScript
+
+**CSS.** The stylesheet is the one embedded `/dashboard.css` served under `style-src 'self'`; the pages carry
+**no inline `<style>` and no `style=""` attribute**, so the CSP needs no hash and no nonce. A nonce would
+need per-request state and would defeat the ETag/304 and the 1 s view cache of §4; a hash would need a build
+step. **This departs from the task text ("inline CSS with a hash/nonce") in favour of a strictly tighter
+policy; D31 confirmed it (Q9).** Proportions use classes or SVG presentation attributes. Icons, if any, are
+inline `<svg aria-hidden="true">` with fixed paths (none in v2: chips carry words); no `url()` to a remote host,
+no `@import`, no `@font-face`.
+
+**JavaScript inventory** (the single embedded `dashboard.js`, <= 16 KiB, plus `theme.js`, <= 1 KiB; the
+existing rules stay: values set with `textContent`, no markup built from data, nothing evaluated, `GET` only):
+
+| # | Behaviour | CSP impact | No-JS fallback |
+| --- | --- | --- | --- |
+| JS-1 | Copy-ID button (`navigator.clipboard.writeText`) | none (`script-src 'self'`) | the ID is selectable text (`user-select: all`); the button is `hidden` until the script runs |
+| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint. **The stored value is checked against the two allowed words (`dark`, `light`) before it is used; anything else is ignored and removed.** | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1). The dark state is explicit too: `:root[data-theme="dark"]` sets `color-scheme: dark`, as the light blocks set `light`, so the native controls follow the toggled theme |
+| JS-3 | Poll refresh of `/api/state` (existing), pausing when hidden (A1.7) | none (`connect-src 'self'`) | a "Refresh" link; optional `?refresh=N` (Q8) |
+| JS-4 | Client-side filter and search for the sessions, executions and audit tables; **the filter state is written to the URL query with `history.replaceState` and re-applied on load.** Query values reach the page only through `.value` of a control or `textContent`, the state and harness values are checked against the options the control offers, and nothing from the query is ever parsed as markup or URL. The filter text stays in the browser history (A1.11); `Referrer-Policy: no-referrer` keeps it out of any request. | none | the full table is shown; the query is ignored |
+| JS-5 | Re-render `<time>` relative text from `datetime` every 30 s; no network | none | the server-rendered relative text and the absolute time in `title` |
+| JS-6 | Close the navigation `<details>` below 60rem and open it above (`matchMedia`) | none | the menu is open: every destination is visible |
+
+Forbidden by test in the shipped JS: `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`,
+`new Function`, string arguments to `setTimeout`/`setInterval`, dynamic `import()`, any `http:`/`https:` literal,
+`localStorage` for anything but the theme key. No third-party code.
+
+**Security checks that stay or are added:** escaping fixtures (T1) for every new template field (titles, paths,
+labels, tool names); response headers on every response including errors; no CORS headers; Host/Origin as
+today; the method sweep returns 405 on every route including the new ones; no new native read (A1.8).
+
+### A1.7 Auto-refresh (amends §4's hidden-tab cadence)
+
+- Visible: the list polls every 5 s, the detail every 2 s (as §4), `If-None-Match`, `304` when unchanged.
+- **Hidden tab: paused** (no timer, no request, the in-flight request aborted) and **one immediate refresh
+  when the tab becomes visible again**. §4's "every 10 s when hidden" is superseded.
+- Errors: the retry delay after a failure is `max(the page's own interval, Retry-After)`, doubled on each further
+  failure up to 60 s, and reset on success. **The floor is the page's own interval (5 s for the list, 2 s for the
+  detail), never lower**: a failed poll never retries faster than a healthy one, and a small `Retry-After` cannot
+  speed it up (a `503` from the request limiter must not draw more load). A failed poll shows the stale
+  banner ("Showing the data from HH:MM:SSZ; the last refresh failed") and keeps the last data.
+- No-JS: no automatic refresh by default; a visible "Refresh" link; an opt-in `?refresh=N` meta refresh
+  (10 <= N <= 300, validated server-side, an invalid value ignored) is Q8.
+- **The new pages use the same machinery as `/api/state`:** the shared limiter (4 concurrent, 8 in flight, `503` with
+  `Retry-After` beyond), `If-None-Match`/`304`, the 1 s server-side view-model cache (its key carries the archived
+  flag and, for the audit, the page), and the 5 s context bound. Each new `Source` reader counts against that one
+  limiter. Intervals while visible (all paused while hidden): `/executions` 5 s, `/catalog` 5 s, `/health` 30 s,
+  `/audit` page 1 only, 10 s (page 2 and later do not poll: the ring is a log, not a live view).
+
+### A1.8 Data and Source additions (all read-only, all from memory the Bridge already holds)
+
+| Addition | Source | Notes |
+| --- | --- | --- |
+| `Execution.Liveness` (the ADR-017 A1 fields) and a pending-permission summary on the dashboard `Execution` | the existing `execution.Execution` copies in `DashboardSnapshot()` (`internal/execution/dashboard.go`), mapped in `internal/mcp/dashsource.go` | no native read; same copy-under-`m.mu`-then-each-`x.mu` order (T10); permission summary = what ADR-024 already shows Chat, never a pattern |
+| `Source.Executions(ctx)` | `DashboardSnapshot().Executions` (which holds **every** execution of the Manager and applies no cap, `internal/execution/dashboard.go:33-36`), **filtered in the Source implementation by the scope set the same call chain produces** (the ACL scope of D17 Q6, the archived flag of D17 Q7, joined on the harness-qualified session ID), **before** the Sessions page's 200-row display cap, then sorted newest first, then capped at 200 | the filter comes **before** the executions cap; an execution whose session is not in the scope set is dropped, never shown; the page's JSON twin calls this same reader, never a second implementation; the T11 method-set pin test lists the new reader |
+| the dashboard `Execution` row type (`internal/dashboard/source.go:22-30` today: `ID`, `State`, `Started`, `Updated`, `Ended`, `Current`) | S3 adds the **harness-qualified session ID** (`opencode:ses_…` today, copied from `execution.Execution.SessionID`; the dashboard source takes executions from the OpenCode `Manager`, whose IDs are `opencode:`, `internal/execution/manager.go:408`; a `claudecode:…` ID only appears once Claude executions are wired into the dashboard source, ADR-021 wiring, and is not supplied today) to the row; the Session column shows the session ID and links to `/session/<harness>/<id>` built by splitting the qualified ID at the first colon | the field is display data; the T11 type test pins it; an ID the sessions list does not know renders without a link |
+| `Source.Health(ctx)` | version and build from the binary, features from configuration, connector token **expiry timestamp** (never the token, never the Host or origin) from the remote settings through a read-only getter, harness reachability from the last list read | no new native probe; absent fields are omitted, never defaulted |
+| instance label | optional **`CIRAK_DASHBOARD_LABEL`** (ADR-026 §2 renames the environment prefix `BRIDGE_*` to `CIRAK_*`; ADR-026 and ADR-027 are still PROPOSED, so this is a cross-reference, not a decision: Q16), <= 40 bytes, `[A-Za-z0-9 ._-]`, default none | startup error on an invalid value, like the redaction variable (Q3); ADR-027's config schema would carry the same key |
+| audit `?page=N` | the existing ring, pages of 100 | bounded GET parameter; an invalid value is page 1 |
+| routes | `GET/HEAD` only: `/executions`, `/catalog`, `/health`, and the JSON twins `/api/state/executions`, `/api/state/catalog`, `/api/state/health` (`/api/audit` already exists) | each is listed in the route table; the 405 sweep and the Host/Origin checks cover them |
+
+The dashboard package still depends on the `Source` interface only; the T11 test lists the exact reader set.
+
+### A1.9 Slices (one PR each; the amendment is ACCEPTED, so no slice needs to record the acceptance)
+
+- **S1 — tokens, shell, sessions.** `assets/dashboard.css` from the reference file (dark only; `color-scheme:
+  dark`), the new page shell (top bar with the destinations that exist, the menu below 60rem, JS-6), the sessions
+  table with chips and the label map, path shortening, relative time, filters with URL state (JS-4), the A1.7
+  pause-on-hidden behaviour, golden snapshots, the CSP / no-inline / no-external-URL / typography tests, the
+  contrast test over the dark tokens, A1.0 route and method sweeps.
+- **S2 — detail.** `Execution.Liveness` and the permission summary in `Source`, the detail page (header, the
+  execution timeline with its liveness and permission rows, the diff with file list and `<details>`), JS-1,
+  per-page snapshots with fixtures for every liveness reason, hostile-input fixtures.
+- **S3 — audit, health, executions, catalog, light theme.** The audit restyle and `?page=N`, `Source.Health` and
+  `/health`, **the top bar's token-expiry badge and instance label (`CIRAK_DASHBOARD_LABEL`, with the read-only
+  expiry getter)**, `Source.Executions` and `/executions` (scoped to the scope set, A1.4 item 3, with the session
+  field on the row and the A1.10 scope tests), `/catalog`, the light token blocks, `theme.js` and the toggle
+  (JS-2), the light contrast checks and snapshots. S3 may be split into S3a (pages) and S3b (light theme) by the
+  implementer.
+
+Each slice is RED-first with the A1.10 cases it owns. No slice needs a live service; the visual result is
+confirmed by the operator in R-DASH (below).
+
+### A1.10 Test plan (RED-first)
+
+1. **Golden HTML snapshots** of every screen and state with a fixed clock and fixture source, committed under
+   `internal/dashboard/testdata/`, one per theme where it applies.
+2. **Contrast as code:** parse the custom properties of the embedded CSS, composite the 0.14 tints, compute the
+   WCAG ratio, assert every pair of A1.2 (>= 4.5 text, >= 3 non-text) for each theme present, **including the
+   states a component draws (the pressed primary fill)**; the test fails when a token changes.
+3. **CSP header test:** the exact string of §3 on every response; **no `<style>`, no `style=`, no `on*=`
+   attribute, no inline `<script>`** in any rendered page (all screens, all states).
+4. **No external URL:** the templates, CSS and JS **code** (comments stripped before the scan, or the embedded
+   copy has its comments removed in S1; the reference file's comments may name a project) contain no
+   `http:`/`https:`/protocol-relative URL, no `@import`, no `@font-face`, no `url(` to a non-embedded path.
+5. **JS hygiene:** the forbidden-API scan of A1.6; a size cap on `dashboard.js` and `theme.js`.
+6. **Reserved colour:** no class other than the pending ones refers to the secondary tokens.
+7. **Typography (Hallmark Floor 9):** the CSS contains no `text-transform: uppercase|capitalize`, no
+   `letter-spacing` on a label, table head, tag or nav link, no `font-variant: small-caps`; no template renders a
+   raw snake-case state word as a chip label (the label map is total over the known values).
+8. **Floor 1, 2 and 4:** no literal colour or `font-family` outside the token blocks, no `transition: all`, no
+   animation of `width`/`height`/`top`/`left`, `overflow-x: clip` on `html` and `body`, no `100vw`.
+9. **No-JS render:** the same pages with the script blocked show the full tables, the open menu, the Refresh
+   link and no dead control (the toggle and copy button stay hidden).
+10. **Accessibility structure:** `lang`, a meta description, landmarks, one `h1`, `caption` and `th scope` on
+    every table, `aria-current` on exactly one nav link, labels on every input, no skipped heading level.
+11. **Security and scope:** XSS fixtures in titles, paths, labels, tool names and audit values for every new
+    template field **and an XSS fixture for the query string** (`?q=`, `?state=`, `?harness=`: reflected only as
+    escaped text or ignored); **an execution of an archived session is absent from `/executions` without
+    `?archived=1` and present with it; an execution of a session outside the ACL scope is never listed, with or
+    without the flag; the cap applies after the filter** (a hidden session's executions never push a visible one
+    out); `/executions` never lists an execution whose session is not in the scope set (a subset property test);
+    **a fixture with more than 200 in-scope sessions: an execution of the 201st session is listed on `/executions`
+    (the join set is the scope set before the display cap) while the Sessions page shows 200 rows and the truncation
+    note; the JSON twin `/api/state/executions` goes through the same `Source.Executions` and passes the same
+    archived, out-of-scope, cap-after-filter and subset assertions; a request with `?archived=1` followed within
+    1 s by one without never serves the first response (the cache key carries the flag), for the page and the
+    twin;** the audit page is out of these tests (A1.0); route table lists only GET/HEAD; every route answers 405 to POST/PUT/PATCH/DELETE; T10 and T11 tests
+    updated for the new readers; the dashboard still produces no AUDIT-01 mutation line.
+12. **Refresh and URL state:** a fake clock test that no request is sent while hidden, one on becoming visible,
+    back-off and `Retry-After` bounds **with the floor at the page's own interval** (a first failure never retries
+    sooner than 5 s on the list, and `Retry-After: 1` does not shorten it); the filter state round-trips through the
+    URL query; the stored theme value is ignored unless it is `dark` or `light`; the new routes use the shared
+    limiter, ETag and cache.
+13. **Accessibility rules in the CSS and the templates (static half; the render half is UNVERIFIED until R-DASH):**
+    no `height` declaration on chips, badges, inputs or buttons (`min-height` only; the visually hidden element is
+    the one exception); every table wrapper has `tabindex="0"`, `role="region"` and an accessible name; the wrapper
+    has `scroll-padding-top` and a `max-height` with a floor.
+14. **Race:** `go test -race -count=20 ./internal/dashboard ./internal/mcp`.
+
+Mutations (each must be killed): the primary pressed fill reverted to `--hairline`; `/executions` lists the
+executions of an archived session without the flag; the cap applied before the filter; an execution of an
+out-of-scope session listed; the JSON twin served from an unfiltered list; the cache key without the archived flag
+(a stale-flag response); the join set cut at 200 sessions; the CSP string weakened; an inline `style=` emitted; the dark error chip colour
+reverted to `#e57373`; a chip label rendered in capitals; `letter-spacing` added to a table head; a raw state
+word shown as a label; the secondary colour used for a non-pending state; polling continued while hidden;
+`template.HTML` used for a title; a remote `url()` in the CSS; `th scope` or `lang` dropped; the liveness row keyed
+on `stall_suspected` alone; an unknown liveness reason rendered as if known.
+
+### A1.11 Limitations / UNVERIFIED
+
+- The design values are the maintainer's token list as given in tasks #463 and #469; the Lokman source was not
+  read. The "A1" values (light backgrounds, text and muted colours, hairlines, error chip text, control height,
+  spacing and type scales) are chosen here.
+- Contrast is computed with the WCAG 2.x relative-luminance formula (not APCA) on the CSS file; browsers were
+  **not** used. The static mock was checked for well-formedness, duplicate IDs, dangling anchors, unstyled
+  classes and forbidden constructs by a script and linted with Hallmark's `sloplint` (A1.13), but **was not
+  rendered in any browser** (none is installed on the host, and `sloplint --render` was not run): layout, sticky
+  headers, the `<details>` menu, `rgb(r g b / a)` colour syntax support and the 44 px coarse-pointer rule are
+  UNVERIFIED until S1 is viewed in R-DASH.
+- Keyboard, screen-reader and zoom behaviour are design claims, not test results.
+- The static mock is one page with **seven `<h1>`** (one per screen, as its header comment says; each real screen is
+  its own page). The A1.10 tests that need one page per document (one `h1`, landmarks, the no-JS render) run on the
+  real per-page templates, not on the mock; the mock is checked by script for tag balance, IDs, anchors, styled
+  classes and forbidden constructs only.
+- The filter text written to the URL stays in the browser history of the operator's browser (local, and kept out of
+  requests by `no-referrer`); it is search text, never a credential.
+- System fonts render differently per OS; relative-time and path-shortening text depends on the clock and the
+  fixture.
+- ADR-017 A2 is PROPOSED with open review findings (#459): A1 renders A1 fields only and keys on `stall_reason`.
+- The sources and native shapes of §1 remain as stated there; nothing here adds a native read.
+
+### A1.12 Decided (D31, 2026-11-21)
+
+The maintainer answered all sixteen questions of this amendment with **the recommendation** in decision D31
+(2026-11-21, recorded in issue #117). Each question keeps its text; the decision follows it.
+
+1. **Light theme.** Media query plus an optional toggle stored in `localStorage` (JS-2), or media query only?
+   Recommended: both (the toggle is progressive; without JS the system preference applies).
+   **Decided (D31): media query plus an optional JS toggle.**
+2. **Fonts.** System stack only (recommended), or embed Roboto under its OFL licence (about 100-150 KB per
+   weight, a licence notice to ship)? **Decided (D31): system fonts.**
+3. **Instance label.** A new optional `CIRAK_DASHBOARD_LABEL` (recommended, default none), or show the host name?
+   **Decided (D31): `CIRAK_DASHBOARD_LABEL`, default none.** (The question text named `BRIDGE_DASHBOARD_LABEL`, the
+   name before ADR-026's prefix; D31 names `CIRAK_DASHBOARD_LABEL` and Q16 already recommended it, so the text now
+   carries D31's name; see A1.16.)
+4. **Token-expiry badge.** Fed by a read-only getter of the connector token's expiry (remote mode only, never the
+   token), recommended; or drop the badge from v2? **Decided (D31): the badge, via a read-only getter.**
+5. **Executions page.** Add the `Source.Executions` reader (recommended; the data is already in
+   `DashboardSnapshot`), or keep executions inside the session detail only? **Decided (D31): the Executions page.**
+6. **Error-chip text colours.** Approve the A1 deviation (`#ef9a9a` dark, `#b71c1c` light) and the A1 light
+   surfaces, or provide other values? **Recommended: approve**; the extracted values fail AA on three surfaces (A1.2).
+   **Decided (D31): the A1 error-chip colours and the A1 light surfaces.**
+7. **Diff view.** Unified only in S2 (recommended), with a split view as a later slice (a `?diff=split` GET link,
+   no JS)? **Decided (D31): unified diff first, split later.**
+8. **No-JS auto refresh.** Offer the opt-in `?refresh=N` meta refresh (recommended off by default), or only the
+   Refresh link? **Decided (D31): the opt-in `?refresh=N`.**
+9. **CSS delivery.** Confirm the embedded stylesheet under `style-src 'self'` (no inline CSS, no hash, no nonce)
+   instead of the task's "inline CSS with a hash/nonce". **Recommended: confirm the embedded stylesheet** (stricter,
+   and it keeps the ETag and the 1 s cache). **Decided (D31): the embedded stylesheet under `style-src 'self'`.**
+10. **Source of truth.** Keep `docs/design/dashboard-v2.css` as the reference and copy it in S1 (recommended), or
+    treat `assets/dashboard.css` as the only copy once S1 merges and delete the design file then?
+    **Decided (D31): `docs/design/dashboard-v2.css` is the reference, copied in S1.**
+11. **Wordmark and name.** "Cirak" as text only in the top bar and in each page `<title>` suffix; is a logo
+    needed (an inline SVG would be allowed by the CSP)? **Recommended: text only** in v2; no logo asset.
+    **Decided (D31): text wordmark only.**
+12. **Relative time.** Relative text with the absolute time in `title` (plus the absolute time in the detail
+    view), or absolute only? **Recommended: relative text with the absolute time in `title` and in the detail view.**
+    **Decided (D31): relative time with the absolute time in `title` and in the detail view.**
+13. **Menu behaviour.** A `<details>` menu closed below 60rem by a six-line script (recommended; open and usable
+    without JS), or a CSS-only pattern that needs newer browser features (`::details-content`)?
+    **Decided (D31): the six-line `<details>` script.**
+14. **Hallmark in the loop.** Keep `sloplint --scope app` as a manual gate run by the author of each slice
+    (recommended; it needs Node and is not a repository dependency), or add it to CI?
+    **Decided (D31): `sloplint --scope app` as a manual per-slice author gate.**
+15. **Label maps.** Approve the sentence-case labels of A1.1 (state, liveness reason, audit event and outcome) as
+    the display vocabulary, with the raw word in `title`? **Recommended: approve** (sentence case is Hallmark Floor 9;
+    the raw closed word stays available). **Decided (D31): the sentence-case label maps.**
+16. **Name of the instance-label variable.** `CIRAK_DASHBOARD_LABEL` (ADR-026's prefix; recommended, since ADR-026
+    renames the whole `BRIDGE_*` family), or `BRIDGE_DASHBOARD_LABEL` until ADR-026 is accepted, with the legacy-name
+    rule ADR-026 proposes? ADR-026 and ADR-027 are PROPOSED: A1 cross-references them and decides nothing for them.
+    **Decided (D31): the `CIRAK_` name (`CIRAK_DASHBOARD_LABEL`).** The decision is about A1's own variable; the
+    rename of the rest of the `BRIDGE_*` family and ADR-027's file stay with ADR-026 and ADR-027.
+
+### A1.13 Hallmark sweep (task #469, 2026-11-21)
+
+**Source and scope.** The maintainer asked to use **Hallmark** (https://www.usehallmark.com/, MIT,
+`nutlope/hallmark`), a design skill for coding agents. A read-only reference copy was cloned at commit
+`04977e15f3dfd6ee4b74c887dac3eb52665d6c92` (2026-11-11; the planner reviewed the same commit); it was **not
+installed** into any agent configuration, none of its `install*.mjs` or hook scripts was run, and the clone is
+not committed. Its rules are data applied here, not instructions that override this repository's rules: the
+permanent rules and the ADR-023 invariants (A1.0) win on any conflict (there was none). Rules are cited by
+number from `skills/hallmark/SKILL.md` "The Floor" (Floor 1 to 16 below) and `references/flow.md` "App screens", with
+attribution; nothing is quoted at length. The dashboard is an **app screen**: no hero, no marketing shape, no
+word budget (`sloplint --scope app`).
+
+**Linter.** `node hallmark-ref/skills/hallmark/scripts/sloplint.mjs docs/design/dashboard-v2-mock.html
+docs/design/dashboard-v2.css --scope app` (Node v24.22.1; the script was read first: it only reads the files it is
+given). **Before the sweep (A1 as of PR #465 head `a8793a7`): 12 FAIL, 21 REFLEX, 7 WARN.** After: **0 FAIL, 0
+REFLEX, 0 WARN, 7 WAIVED** (all gate 7b, below). `--render` was **not** run: no headless browser is installed and
+none was added (UNVERIFIED, A1.11).
+
+The first lines of the CSS are the Hallmark stamp (shape: app screen), the critique line (P3 H4 E3 S4 R4 V3, weakest
+E: not rendered in a browser) and the waiver, as the Floor (15) requires.
+
+**The Floor (SKILL.md, "The Floor")**
+
+| Floor rule | Rule (short) | Result | Note |
+| --- | --- | --- | --- |
+| 1 | colours and fonts through `:root` tokens | PASS | no literal colour or `font-family` outside the token blocks (checked by script) |
+| 2 | no `transition: all`; no animation of size or position | PASS | only `background-color` over 80 ms, state only |
+| 3 | no single italic word in a roman heading | PASS | no italics |
+| 4 | `overflow-x: clip` on `html` and `body` | CHANGED | was missing (FAIL 34); added; no `100vw` |
+| 5 | `minmax(0, 1fr)` tracks, wrap-safe heads | PASS | the `.kv` grid uses `minmax(0, 1fr)`; heads use `text-wrap: balance` |
+| 6 | `:focus-visible` on every interactive element | PASS | one global rule, 2 px primary, instant |
+| 7 | `prefers-reduced-motion` fallback; content visible with scripting off | PASS | the fallback exists; every page and the menu are complete without JS (JS-1..JS-6 fallbacks) |
+| 8 | no invented metric | PASS | the ADR defines no figure; the mock's values are labelled fictional at the foot of the page |
+| 9 | no eyebrow, no tracked-caps or small-caps label, table head or nav | CHANGED | `NO_PROGRESS` was typed in capitals in a chip (FAIL 67), and an eyebrow line sat above the first screen (FAIL 54): chips now show sentence-case labels from a map (A1.1), the sample-data note is a footer line |
+| 10 | no middle-dot meta strings, glued arrows, decorative status dots | CHANGED | two middle-dot strings (FAIL 63) became one key/value row each; chip glyphs removed |
+| 11 | no purple-to-blue gradient, card in card, emoji icon, fake window | CHANGED | the geometric glyphs in chips were read as emoji icons (FAIL 30a, six places): removed, the label is the cue; the bordered `<details>` boxes inside a card became hairline-separated rows |
+| 12, 13, 14 | hero fold, about 80 words per screen, capped container | N/A | the hero and the word budget are skipped in the app scope; the container is capped and centred at 96rem anyway |
+| 15 | the stamp is the first CSS line | CHANGED | added (FAIL 20) |
+| 16 | run sloplint (`--render` when a browser exists) | PASS, static run only | 0 FAIL after the sweep, counts above; `--render` **not run** (no headless browser, none installed) |
+
+**App-screen rules (`references/flow.md`, "App screens")**
+
+| Rule | Result | What was decided and why |
+| --- | --- | --- |
+| Shell: a top bar by default; a sidebar only above about seven destinations; a menu under 60rem | **CHANGED** | A1 has five destinations, so the 248 px left nav is gone (A1.3). Below 60rem the destinations collapse into a `<details>` menu (JS-6; open without JS). |
+| Type scale fixed at a ratio of 1.125 to 1.2; system face allowed; tabular numerals | **CHANGED** | one scale at about 1.17 (12, 14, 16.4, 19.2 px) on tokens; `font-variant-numeric: tabular-nums` on times, durations and counts |
+| Colour restraint: accent only on the primary action, the current selection and state; keep the reserved secondary | **CHANGED** | links are the text colour, underlined; primary is the current nav item, the primary button, the focus ring. The reserved secondary rule is kept and tested (A1.1, A1.10). |
+| Density: controls 32-40 px with a 44 px hit target; tables before cards | **CHANGED, reconciled** | **Hallmark's range wins over A1's 30 px:** 36 px visual height (inside 32-40, and above WCAG 2.5.8's 24 px) keeps the compact table density; the **44 px hit target applies to coarse pointers** (`@media (pointer: coarse)`), where a bigger control costs nothing. Detail data moved from four cards to a header card, one timeline table and one changes list. |
+| Four states per data region | **CHANGED** | table below |
+| State in the URL: filters, archived, page | **CHANGED** | `archived` was already in the URL; the filter state is now synced to the query by JS-4 (the server does no filtering, ADR-023 §5.1 stays); the audit ring gets `?page=N` (A1.8) |
+| Motion is state only | PASS | 80 ms and 140 ms colour changes on hover and press; nothing animates on load |
+| The signature | **NAMED** | **the per-session execution timeline with its liveness report and stall reason**: the detail page is built around it (A1.4). |
+
+**Four states per data region** (loading is **N/A** for a server-rendered first paint; during a poll the last data stays and a failed poll shows the stale banner):
+
+| Region | Loading | Empty | Error | Full |
+| --- | --- | --- | --- | --- |
+| Sessions table | N/A | "No sessions" with the archived link | 503 page with `Retry-After`; stale banner on a failed poll | the table |
+| Session header | N/A | not applicable (a session exists or 404) | "This view cannot be read" / 404 | key/value list |
+| Execution timeline | N/A | "No executions" for this process | error state; stale banner | rows with the liveness report |
+| Liveness report | N/A | absent before submission and on terminal executions: the cell says "Ended" or is empty, never a guess | "Unavailable" with the reason class | report row |
+| Pending permission | N/A | no row when none is pending | not attributed: says so | secondary row |
+| Changes (diff) | N/A | "No changes" | "Diff unavailable" with the reason (snapshot disabled, binary, truncated, history pending) | file list and diffs |
+| Executions page | N/A | "No executions" (for the sessions the list shows) | 503 / error | the table, after the scope filter |
+| Catalog and archived | N/A | "No sessions in this root" | error | grouped table |
+| Audit | N/A | "The audit feed is not enabled" / no entries | error | the page of 100 |
+| About and health | N/A | not applicable | unreachable harness shown as a chip | key/value list |
+
+**Waiver (gate 7b, Reflex).** `#ffffff` paper and text on the primary colour are pure white. **Waived on the record**
+in the CSS stamp: the stamp declares `genre: modern-minimal`, which allows `#fff` paper (Hallmark gate 7b); the light
+paper is the maintainer's own token (D28) and the light text on `#2962ff` needs white to reach 4.90:1. All other
+Reflex findings were fixed, not waived: off-scale spacing (gate 24b), missing `:active` and `:disabled` states
+(26b), the accented word in a heading (38iii), side stripes (3: replaced by hairline borders all round), two sticky
+`top:0` elements (FAIL 56: the top bar is no longer sticky; the table header sticks inside its own scroll
+wrapper), and three Finish-list warnings (balanced heads, typographic quotes, the missing meta description).
+
+**What did not change.** Everything in A1.0; the data model; the routes except the additive ones of A1.8; the
+reserved secondary rule; the contrast result (now 124 token pairs and 26 fill pairs, 0 failures, minimum text 4.62:1,
+minimum non-text 4.06:1; the two pairs added in A1.15 are text on the pressed primary fill, the four added in A1.16
+are the pressed fill against its surfaces).
+
+### A1.14 Review #476 dispositions (task #477, 2026-11-21)
+
+Review #476 (Worker C, second review of PR #465 at `ab69132`): PASS-WITH-NITS, one P2 and nine P3. Every cited
+code line was re-checked on main `cdaf5bd` and held. No finding was false.
+
+**P2-1, before and after.** *Before* (A1.4 item 3): "A flat table of the executions the Bridge holds, newest first,
+capped" and (A1.8) "`DashboardSnapshot().Executions`, newest first, capped"; the Manager's snapshot holds **every**
+execution and applies no cap (`internal/execution/dashboard.go:33-36`), so an archived or out-of-scope session's
+executions would have been listed. *After:* `/executions` shows only the executions of the sessions the Sessions
+list shows (ACL scope, D17 Q6), an archived session's only with `?archived=1` (D17 Q7, ADR-025), the cap (200) is
+applied **after** the filter; the filter lives in the `Source` implementation by joining on the harness-qualified
+session ID; two tests and a subset property are added (A1.10 item 11) and the matching mutations (A1.10). D17 is
+conformed to, not reopened.
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| **P2-1** executions ignore D17 Q6/Q7 | **FIXED** | A1.0 (scope row), A1.4 item 3, A1.8, A1.9 S3, A1.10 item 11 and mutations |
+| P3-1 test 4 would fail on the reference CSS comments | **FIXED** twice: the scan is on code with comments stripped (A1.10 item 4), and the two comments no longer contain a URL or the `@import` text (`dashboard-v2.css:11,14`) | A1.10, the CSS |
+| P3-2 contrast numbers | **FIXED**: exact (unrounded) compositing; light error chip on white **4.498** (it fails, not "4.501"), 4.32 and 4.05 on the light surfaces; the nested tint 3.96; minimum **text 4.62**, minimum **non-text 4.06**; the count is **122 token pairs + 22 listed fill pairs** (the earlier "216" counted the light theme twice, once for the media-query block and once for the identical toggle block, over a smaller pair set; the reproducible figures replace it) | A1.2, A1.13 |
+| P3-3 error back-off floor | **FIXED**: the floor is the page's own interval (5 s list, 2 s detail) | A1.7, A1.10 item 12 |
+| P3-4 polling and limits of the new pages | **FIXED**: same limiter, ETag, 1 s cache and 5 s bound; intervals 5 s, 5 s, 30 s and 10 s (audit page 1 only); routes listed | A1.7, A1.8 |
+| P3-5 accessibility against the CSS | **FIXED** in the CSS and the mock: `min-height` on chips, badges, inputs; `max(calc(100vh - 14rem), 12rem)` and `scroll-padding-top` on the wrapper; `tabindex="0"`, `role="region"`, `aria-labelledby` on all four wrappers; static tests in A1.10 item 13; the render half stays **UNVERIFIED** | A1.5, A1.10, A1.11, the CSS, the mock |
+| P3-6 scope beyond "presentation" and the variable name | **FIXED**: the header lists what A1 decides beyond presentation; the variable is `CIRAK_DASHBOARD_LABEL` with a cross-reference to ADR-026 §2 and ADR-027 (both PROPOSED), raised as Q16 | header, A1.8, A1.12 |
+| P3-7 D17 Q8 harness badge | **FIXED**: the badge stays (A1.0 row, A1.4 item 1) and is in the mock (sessions table and detail header) | A1.0, A1.4, the mock |
+| P3-8 theme allow-list, query values, history | **FIXED**: the stored theme is checked against `dark`/`light`; query values only through `.value`/`textContent` and allow-listed options; XSS fixture for the query string; the history note | A1.6, A1.10 items 11 and 12, A1.11 |
+| P3-9 path shortening ambiguity | **FIXED**: ellipsis plus the last two segments (never inside a segment), a stable 6-hex suffix only when two rows would render identically, full value in `title`, the detail page and the copy control | A1.4 item 1, the mock |
+
+**Out of scope, recorded:** nothing new. Review #476's UNVERIFIED items (the mock is not rendered; the 216-pair
+count and D28 are not verifiable from the repository) stay as stated in A1.11; the "216" count is replaced by the
+reproducible count above.
+
+### A1.15 Review #480 and #481 dispositions (task #483, 2026-11-21)
+
+Review #480 (Worker B, mandatory): PASS-WITH-NITS, one P2 and nine P3. Delta re-review #481 (Worker C): PASS-WITH-NITS,
+two new P3. Every cited line was re-checked on main `cdaf5bd` and on the PR head `839ba4a`: `.btn:active`
+(`dashboard-v2.css:237`) and `.btn--primary` (`:238`) as described, `Execution` without a session field
+(`internal/dashboard/source.go:22-30`), `AuditSource.Entries()` only (`internal/dashboard/audit.go:78-79`),
+`maxListRows = 200` and the truncation note (`internal/dashboard/views.go:20`, `poll.go:96-98`). No finding was false.
+
+**P2-1, before and after (recomputed with the WCAG 2.x formula).** *Before:* a pressed primary button drew `--on-primary`
+on `--hairline`: dark `#0d1b3e` on `#333333` = **1.337:1**, light `#ffffff` on `#e0e0e0` = **1.320:1**. *After:* a
+`.btn--primary:active` rule after `.btn:active` with the new token `--primary-active` (`#6a9cf5` dark, `#1a4fd6`
+light): **6.18:1 dark, 6.70:1 light**, both tested; the pair joins the token set (**124 token pairs + 22 fill pairs**,
+0 failures; the minima are unchanged: text 4.62, non-text 4.06); the mutation "primary pressed fill reverted to
+`--hairline`" is in A1.10.
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| **#480 P2-1** pressed primary button 1.34:1 / 1.32:1 | **FIXED** (token, rule, tested pair, mutation, counts restated) | A1.1, A1.2, A1.10, the CSS |
+| #480 P3-1 + #481 P3-1 `/executions` join set vs the 200-row display cap | **FIXED**: the join set is the scope set **before** the display cap; a footnote on the page; a fixture with more than 200 in-scope sessions | A1.4 item 3, A1.8, A1.10 item 11 |
+| #480 P3-2 no session field on the dashboard `Execution` | **FIXED**: S3 adds the harness-qualified session ID to the row; the Session column and link are built from it | A1.8, A1.9 S3 |
+| #480 P3-3 A1.0 scope vs the D17 Q4 audit ring | **FIXED**: the scope sentence is limited to the session and execution pages and the audit page is named as the D17 Q4 exception (not ACL-filtered, cited); D17 is conformed to, not reopened | A1.0, A1.4 item 5 |
+| #480 P3-4 mock gaps | **FIXED** in the mock: the liveness note says "the Bridge takes no action"; the audit table has a Session column; an archived row with its chip and the filter note; **declined** for the seven `h1`: the mock is a one-page stand-in, stated in A1.11 with the tests that run on real templates instead | the mock, A1.11 |
+| #480 P3-5 token-expiry badge and instance label have no slice | **FIXED**: both are S3 (with `Source.Health` and the label variable); S1/S2 omit them | A1.3, A1.9 |
+| #480 P3-6 questions without a recommendation | **FIXED**: explicit "Recommended:" on Q6, Q9, Q11, Q12 and Q15 (the questions stay open) | A1.12 |
+| #480 P3-7 A1.1 vs A1.4 reserved labels | **FIXED**: the four reserved A2 labels are listed in A1.1 as not rendered until ADR-017 A2 is accepted | A1.1 |
+| #480 P3-8 `color-scheme: light` | **FIXED** in both light blocks of the CSS | the CSS, A1.1 |
+| #480 P3-9 + #481 P3-2 the JSON twin and the cache key | **FIXED**: the twin uses the same `Source.Executions`; tests on the twin, a cache-key test (`?archived=1` then without within 1 s), and three mutations (unfiltered twin, flagless key, join set cut at 200) | A1.8, A1.10 item 11 and mutations |
+
+**Out of scope, recorded:** nothing new. #481's UNVERIFIED items (the pending-permission row, the archived outline
+token and the nested-tint stack are not recomputable from the tokens alone) stay listed in A1.2 as fills; the nested
+tint is still not a used pair.
+
+### A1.16 Acceptance record and review #486 dispositions (task #489, 2026-11-21)
+
+**Acceptance.** Marked ACCEPTED per maintainer decision D31 (2026-11-21, issue #117, and the planner comment on PR
+#465), after reviews C #476 and #481 and B #480 and #486 with no open P0-P2. A1.12 records Q1-Q16 as decided with the
+recommendations, worded as in D31. **One wording difference was found and resolved by D31's own text:** the text of
+Q3 named `BRIDGE_DASHBOARD_LABEL` (the name before ADR-026's prefix) while D31 answers Q3 with
+`CIRAK_DASHBOARD_LABEL` (and Q16, already in the text, recommended the same); Q3's text now carries D31's name. No
+other recommendation differed.
+
+Review #486 (Worker B, delta re-review of `229efc2`): PASS-WITH-NITS, four new P3. Every citation was re-checked on the
+head before editing and held.
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| #486 P3-1 pressed-cue ratio vs the 3:1 rule | **FIXED**: the 3:1 non-text pair is the pressed fill against the surface it sits on (dark 6.37 toolbar / 6.10 card, light 5.99 / 6.70), added to the fill list (**26 fill pairs**, 124 token pairs, 0 failures, minima unchanged); the normal-vs-pressed difference (1.26 / 1.37) is stated as a supplementary cue outside the asserted set | A1.2 (rationale 4, fill list), A1.13 |
+| #486 P3-2 dark `data-theme` has no `color-scheme: dark` | **FIXED**: `:root[data-theme="dark"] { color-scheme: dark; }` added to the CSS; noted in A1.6 JS-2 | the CSS, A1.6 |
+| #486 P3-3 `claudecode:` example not reachable | **FIXED**: `opencode:` today; `claudecode:` only once Claude executions are wired into the dashboard source (the source takes executions from the OpenCode `Manager`, `manager.go:408`) | A1.8 |
+| #486 P3-4 mock gaps | **FIXED**: the executions footnote says "includes sessions beyond the first 200 shown on the Sessions page"; the primary control is the Refresh **link** (the JS-3 no-JS fallback) and the toolbar lists it | the mock, A1.4 item 1 |
+
+**Out of scope, recorded:** nothing new.
