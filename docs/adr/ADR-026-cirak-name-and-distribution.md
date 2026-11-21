@@ -1,8 +1,8 @@
 # ADR-026: product name "Cirak", distribution channels and release pipeline
 
-Date: 2026-11-21. Status: **PROPOSED**. Maintainer decisions **D25** (distribution) and **D26** (rename) were
+Date: 2026-11-21. Status: **ACCEPTED (2026-11-21, maintainer decision D29, recorded in issue #117)**. Maintainer decisions **D25** (distribution) and **D26** (rename) were
 taken on 2026-11-21 and are recorded by the Planning Desk; this ADR designs how to carry them out, and is
-accepted by the Planning Desk under D19 only after the mandatory review (B). Written for planner task #461 by
+accepted under D19 when it merges after the mandatory review (B) passes; the maintainer answered every open question of §10 with its recommendation (**D29**, 2026-11-21, issue #117), so §10 records decisions. Written for planner task #461 by
 Worker C. **Docs only: nothing here renames, builds or publishes anything.** Every statement about the current
 code was measured at `main` `e2ac772` (2026-11-21); every statement about an upstream tool is marked
 **verified (docs read 2026-11-21)** or **UNVERIFIED**.
@@ -89,7 +89,7 @@ npm account owns the scope `nevzatcirak`, and any trademark or name clash for "C
 | Environment prefix | `BRIDGE_*` (31 names) | `CIRAK_*` | table in §2.2; `OPENCODE_*` and `CREDENTIALS_DIRECTORY` are **not** renamed (upstream and systemd names) |
 | MCP server name | `harness-bridge` | `cirak` | also `Version`, today the literal `"0.2.0"`: derive it from the build info (§5) |
 | Probe client names | `harness-bridge-local-client`, `...-private-probe` | `cirak-local-client`, `cirak-private-probe` | internal tools |
-| `WWW-Authenticate` realm | `harness-bridge` | `cirak` | check with a live connector at the first adoption (open question 4) |
+| `WWW-Authenticate` realm | `harness-bridge` | `cirak` | check with a live connector at the first adoption (Q4, decided D29) |
 | Dashboard title | `Harness Bridge dashboard` (4 strings) | `Cirak dashboard` | tests that assert the title change with it |
 | Docs | "Harness Bridge" and `harness-bridge` throughout | "Cirak" / `cirak` | historical evidence files and accepted ADR texts keep their wording (dated records); live runbooks and the README are updated. `HARNESS_BRIDGE_SPEC.md` keeps its file name in S1 (`AGENTS.md` names it as the source of truth): renaming it is open question 11 |
 | systemd units | host unit `harness-bridge-private.service` | the **package** unit is `cirak.service`; the host unit is untouched | no collision |
@@ -165,18 +165,18 @@ A single function, `cirakEnv(os.Getenv)`, is the only reader of the process envi
 - **Empty counts as unset on both sides.** This keeps the idiom the H5 runbook relies on (an empty
   `Environment=BRIDGE_TOKEN=` neutralises an inherited value, #450) working: it neutralises the legacy twin.
   The converse is the rule's weak spot: an empty `CIRAK_X` does **not** neutralise a non-empty `BRIDGE_X`
-  (open question 3).
+  (Q3, decided D29).
 - **The scan covers every known name up front**, not only the names a given configuration reads, so a conflict
   in the dashboard variables is found even when the dashboard is off.
 - **The existing exclusions run on the merged view**: `CIRAK_TOKEN_FILE` together with `BRIDGE_TOKEN` is still the
   "mutually exclusive" refusal of `readSecret`; the empty-as-unset rule (`cmd/bridge/secret.go:15-23`) is unchanged.
 - **The warning** is one line per variable and per process start, naming the legacy and the new name and the
   release in which the legacy name stops working, never a value:
-  `legacy environment variable BRIDGE_X is deprecated; set CIRAK_X instead (not accepted from v0.2.0)`. The text is true under either outcome of open question 1: from v0.2.0 a legacy
-  name is no longer accepted, and whether it is then refused at startup (recommended) or ignored is Q1.
+  `legacy environment variable BRIDGE_X is deprecated; set CIRAK_X instead (not accepted from v0.2.0)`. From v0.2.0 a legacy
+  name is no longer accepted: it is refused at startup in v0.2.x and ignored from v0.3.0 (Q1, decided D29).
 - **The window, and why it ends closed, not open.** v0.1.x (the first public release, which already contains
-  the rename) accepts both with the warning, which is the "one minor release" of D26. **Proposed addition
-  (open question 1):** v0.2.x **refuses to start** if any known legacy name is set (`BRIDGE_X is no longer
+  the rename) accepts both with the warning, which is the "one minor release" of D26. **Addition decided
+  (Q1, D29):** v0.2.x **refuses to start** if any known legacy name is set (`BRIDGE_X is no longer
   supported; use CIRAK_X`), and v0.3.0 ignores them. Silently ignoring a legacy name at the end of the window
   would turn `BRIDGE_READ_ONLY=1`, `BRIDGE_ALLOWED_ROOTS` or `BRIDGE_TOKEN_MAX_LIFETIME` into no-ops on an
   upgraded host, so the daemon would start as a writer, with no ACL root, or with a longer lifetime than the
@@ -217,7 +217,7 @@ dual module path). The Go module proxy caches by path and may lag a rename: **UN
   `BRIDGE_X` (different values refuse the start, so a half-edited drop-in is caught); (4) the `harness-bridge-
   private.service` unit name, the `/etc/harness-bridge` and `/var/lib/harness-bridge` paths stay valid for ever
   (the binary has no fixed path); (5) the rollback is the previous `ExecStart`. The one connector-visible change
-  is the MCP server name and realm (open question 4): the operator checks the connector once at the first
+  is the MCP server name and realm (Q4, decided D29): the operator checks the connector once at the first
   adoption.
 
 ## 3. The release pipeline
@@ -232,7 +232,7 @@ dual module path). The Go module proxy caches by path and may lag a rename: **UN
   features fail closed, §1.2; runtime **UNVERIFIED**). **Windows: not in v0.1.0**: it does not compile
   (`syscall.Flock` in `internal/overlay`) and the safety rules (single-writer lock, owner and mode checks,
   `SO_PEERCRED`, `os.OpenRoot` confinement) have no verified Windows equivalent, so a port needs its own ADR
-  (open question 5).
+  (Q5, decided D29).
 - **The recipe is the H4/H5 one**: `CGO_ENABLED=0`, `flags: [-trimpath, -buildvcs=true]`, `ldflags:
   [-buildid=]`, archive timestamps `mod_timestamp: "{{ .CommitTimestamp }}"`. Because GoReleaser's default
   ldflags (`-s -w -X main.version=...`) change the bytes and its docs do not say whether a user list replaces
@@ -315,7 +315,7 @@ is produced by GoReleaser's default Syft `sboms` (`spdx-json`).
   `brews:` while it works, or to generate the formula from a template in our own workflow (a few lines: the url,
   the sha256 from `checksums.txt`, `bin.install "cirak"`, `test do assert_match version.to_s, shell_output(
   "#{bin}/cirak version")`). **Recommendation: our own small template step**, because it removes the dependency on
-  a deprecated option and the formula is easy to test; open question 7.
+  a deprecated option and the formula is easy to test; Q7, decided D29.
 - **Token.** The default `GITHUB_TOKEN` cannot push to another repository (verified); the job needs a
   fine-grained token limited to the tap repository (contents: read and write), stored as `HOMEBREW_TAP_TOKEN`
   in the `release` environment (§6).
@@ -340,7 +340,7 @@ is produced by GoReleaser's default Syft `sboms` (`spdx-json`).
 - **Names.** `cirak` was **not taken** on 2026-11-21 (404); npm's similarity check and the account's ownership of
   the scope are **UNVERIFIED**. Fallback: the scoped `@nevzatcirak/cirak` (a scope matching the user name, per the
   npm scope page). Platform packages are scoped under the user scope (`@nevzatcirak/cirak-linux-x64`, ...) to avoid
-  creating an npm organisation (open question 8).
+  creating an npm organisation (Q8, decided D29).
 - **Provenance and the token.** `npm publish --provenance --access public` from the protected job (npm >= 9.5.0,
   `id-token: write`, a public repository, a matching `repository` field: verified). **Trusted publishing** (OIDC,
   npm CLI >= 11.5.1, Node >= 22.14) would remove `NPM_TOKEN` entirely, but it is configured per package on
@@ -444,7 +444,7 @@ Code 2.1.325 where R6 applies).
 
 **Tag gate for v0.1.0 (the maintainer's checklist, `AGENTS.md`: "a feature is not released until its required real
 acceptance evidence exists").** S1 to S4 merged; the H5 evidence present (2026-11-21); the Claude Code adapter
-stays **off by default and documented experimental** (the R6 live acceptance is COMPLETE as of 2026-11-21, items 4 and 6 PASS in run 5, per task #485; its evidence PR #471 is open and not yet on main at `cdaf5bd`, and the H5 evidence file still says "run 5 pending"; whether to lift the restriction is open question 16); the
+stays **off by default and documented experimental** (the R6 live acceptance is COMPLETE as of 2026-11-21, items 4 and 6 PASS in run 5, per task #485; its evidence PR #471 is open and not yet on main at `cdaf5bd`, and the H5 evidence file still says "run 5 pending"; the adapter stays off by default, experimental and enable-able: Q16, decided D29); the
 reproducibility job green on a rehearsal tag in a fork or a pre-release; the secrets and repositories of §6
 created; the repository renamed.
 
@@ -452,7 +452,7 @@ created; the repository renamed.
 A single-maintainer project: **no SLA**. Supported: the latest minor of the latest release, on linux/amd64 and
 linux/arm64 with the tested-with OpenCode version; darwin builds are **experimental, core features only**
 (§1.2); Windows is not supported. Security reports follow the repository's `SECURITY` instructions if any (none
-exists today: open question 15). No telemetry is added.
+exists today: Q15, decided D29). No telemetry is added.
 
 ## 6. What the maintainer must create (nothing is published before)
 
@@ -469,7 +469,7 @@ exists today: open question 15). No telemetry is added.
 
 cosign keyless and the attestations need **no secret** (the OIDC token of the run). No package-signing key (GPG) is
 planned for `.deb`/`.rpm` in v0.1.0 (the checksum, cosign bundle and attestation cover the files; a repository
-signing key is a later ADR if an apt/yum repository is ever hosted: open question 14).
+signing key is a later ADR if an apt/yum repository is ever hosted: Q14, decided D29).
 
 ## 7. Slices (one PR each; order S1, S2, then the maintainer's rename, then S3 and S4)
 
@@ -538,46 +538,66 @@ keeps `config|noreplace` files, remove keeps state and the user, purge removes o
 | An upgrade restarts or stops a service mid-execution | the packages never restart; `Restart=no`; the maintainer scripts stop only on removal (guarded on the upgrade argument); the S4 test asserts the unit stays active with the same PID; the ADR-010 fence stays an operator step |
 | The repository rename breaks tooling | S1 and S2 do not depend on the hosting name; GitHub redirects; the instruction texts are updated after the rename |
 
-## 10. Open questions for the maintainer
+## 10. Questions for the maintainer: decided (D29)
+
+The maintainer answered every question below (**D29**, 2026-11-21 20:5xZ, issue #117). Each question keeps its text; the **Decided (D29)** line is the decision.
 
 1. **End of the legacy window.** v0.1.x accepts `BRIDGE_*` with a warning (D26). Do you want v0.2.x to **refuse**
    them (recommended: ignoring them would silently drop `BRIDGE_READ_ONLY`, the ACL roots or the token lifetime)
    and v0.3.0 to ignore them?
+   **Decided (D29):** v0.1.x accepts legacy `BRIDGE_*` with the warning; v0.2.x **refuses to start** if any known legacy name is set; v0.3.0 ignores them.
 2. **Both forms set and equal:** warn (recommended, the legacy twin is dead weight) or stay silent?
+   **Decided (D29):** both forms set and equal: **warn**.
 3. **Empty value across the two families:** keep "empty is unset on both sides" (an empty `CIRAK_X` then does not
    neutralise a non-empty `BRIDGE_X`), or make a set-but-empty `CIRAK_X` win?
+   **Decided (D29):** **empty is unset on both sides** (an empty `CIRAK_X` does not neutralise a non-empty `BRIDGE_X`).
 4. **MCP server name and realm** (`harness-bridge` to `cirak`): how the claude.ai connector uses `serverInfo.name`
    and the realm is **UNVERIFIED**; accept a one-time connector check at the first live adoption?
+   **Decided (D29):** accept a **one-time connector check** of the MCP server name and realm at the first live adoption.
 5. **Windows:** confirm "not in v0.1.0" (it does not compile and the safety rules have no Windows equivalent).
+   **Decided (D29):** **no Windows in v0.1.0**.
 6. **darwin:** ship `darwin/amd64` and `arm64` as experimental (core features only, runtime unverified), add a
    macOS CI job, or leave darwin out of v0.1.0? (D25's Homebrew channel mostly serves macOS.)
+   **Decided (D29):** `darwin/amd64` and `darwin/arm64` are **shipped as experimental** (core features only, runtime unverified).
 7. **Homebrew:** our own formula template (recommended) or GoReleaser `brews:` (deprecated since v2.10)?
+   **Decided (D29):** **our own formula template** (not GoReleaser `brews:`).
 8. **npm layout and names:** layout A (recommended) or B; the unscoped `cirak` (free today) or `@nevzatcirak/cirak`;
    platform packages under the user scope (recommended) or a new `@cirak` organisation?
+   **Decided (D29):** **layout A**; the **unscoped `cirak`** package; platform packages **under the user scope**.
 9. **`install.sh` hosting and default:** release asset (recommended) and `~/.local/bin` default?
+   **Decided (D29):** `install.sh` is a **release asset**; the default install location is **`~/.local/bin`**.
 10. **Signing:** both cosign and attestations (recommended) or only one?
+   **Decided (D29):** **both** cosign and GitHub attestations.
 11. **Names of governance files:** keep `HARNESS_BRIDGE_SPEC.md`, `AGENTS.md` wording and the agent/planner protocol
     markers `harness-bridge-agent` / `harness-bridge-planner` for now (recommended), and decide their rename
     separately?
+   **Decided (D29):** governance, spec and agent/planner protocol marker names are **unchanged for now** (any rename is decided separately).
 12. **Dev and host names** (`hb-claude-acceptance`, `hb-claude-wrapper`, user `hbclaude`, `/opt/harness-bridge-test`):
     keep (recommended)?
+   **Decided (D29):** dev and host names are **unchanged**.
 13. **Paths:** the daemon has no fixed path (measured), so packages use `/etc/cirak` etc. and no dual-path reading is
     added: confirm.
+   **Decided (D29):** packages use `/etc/cirak` etc.; **no dual-path reading**.
 14. **Package repository and signing key:** none in v0.1.0 (files only on GitHub Releases); an apt/yum repository
     needs its own ADR.
+   **Decided (D29):** **no apt/yum repository** in v0.1.0 (files only on GitHub Releases).
 15. **Name and legal:** no trademark or name-clash search for "Cirak" was made; a `SECURITY.md`/reporting address
     does not exist yet. **Recommendation (the decision stays the maintainer's):** do a name and trademark search
     in the jurisdictions the maintainer cares about before the repository rename (§2.4 step: last), and add a
     `SECURITY.md` with a reporting address before `v0.1.0`; this ADR does not claim the name is free beyond the
     registry probes of §1.3.
+   **Decided (D29):** the name/trademark search and the `SECURITY.md` reporting address are a **maintainer TODO before v0.1.0 and before the repository rename**; this ADR claims nothing beyond the registry probes of §1.3.
 16. **The first-tag gate:** is "adapter off by default and marked experimental until R6 passes" acceptable for
     v0.1.0, or must R6 pass first?
+   **Decided (D29):** **R6 passed** (the maintainer's statement; the evidence PR #471 was not merged at `cdaf5bd`, so this is UNVERIFIED in the repository); the Claude Code adapter is **off by default, experimental and enable-able**.
 17. **Support statement** of §5.3 (single maintainer, no SLA, latest minor only).
+   **Decided (D29):** the support statement of §5.3 stands (single maintainer, no SLA, latest minor only).
 18. **Dev tools in the rename (reviews #479 P3-4, P3-5).** `cmd/mcpsmoke` reads `BRIDGE_TOKEN` directly and
     `cmd/privatecheck` has the flag defaults `/etc/harness-bridge/tls/ca.crt` and `/opt/harness-bridge-test/workspace`.
     Recommended: `mcpsmoke` reads `CIRAK_TOKEN` first and falls back to `BRIDGE_TOKEN` for the legacy window (it
     cannot import the `cmd/bridge` shim; the fallback ends with the window); the `privatecheck` defaults stay (they
     name the live host's kept paths, §2.1 "Host artifacts") and a packaged install passes `-ca`/`-workspace`. Confirm.
+   **Decided (D29):** `cmd/mcpsmoke` reads `CIRAK_TOKEN` and falls back to `BRIDGE_TOKEN` for the legacy window; the `cmd/privatecheck` defaults are **unchanged**.
 
 ## 11. Limitations
 
@@ -591,7 +611,7 @@ of §4.4 was not run anywhere.
 Review #479 (Worker B, PR #468 at `baab808`): FAIL, one P1, one P2, nine P3. Every cited line was re-checked on
 main `cdaf5bd` and on the PR head and held (ADR-010 step 4 `Restart=no`; the module-path count; no Go reader of
 `BRIDGE_PERMISSION_POLICY`; `cmd/mcpsmoke/main.go:111`; `cmd/privatecheck/main.go:29,31`). No finding was false.
-Status stays PROPOSED; D25 and D26 are conformed to, not reopened.
+Status at that time: PROPOSED (now ACCEPTED, header); D25 and D26 are conformed to, not reopened.
 
 **P1-1, before and after.** *Before* (§4.4 unit sketch): `Restart=on-failure`. *After:* `Restart=no`, with the reason
 (ADR-010 step 4) and the rule that any restart policy is an ADR-010 amendment. S4 asserts `Restart=no` on the
