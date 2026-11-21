@@ -28,7 +28,7 @@ maintainer step).
 | Fact | Value |
 |---|---|
 | Module path | `github.com/nevzatcirak/harness-bridge` (`go.mod`, `go 1.25.0`; CI and the H5 build use `go1.27.2`) |
-| Occurrences of the module path | 281 in 137 Go files, plus 147 occurrences in docs, workflows, scripts and JSON (all of `internal/` is non-importable by third parties: only the `cmd/*` binaries are installable) |
+| Occurrences of the module path | 281 in 137 Go files, plus 172 occurrences on 146 lines in non-Go files (docs, workflows, scripts and JSON; method: `git grep -I -o` for the occurrences and `git grep -I -n` for the lines over `':!*.go'` at `e2ac772` and at `cdaf5bd`, this ADR excluded, since it is not on main) (all of `internal/` is non-importable by third parties: only the `cmd/*` binaries are installable) |
 | `cmd/` | `bridge` (the daemon and its `admin` subcommand), `hb-claude-acceptance`, `mcpsmoke`, `privatecheck`, `smoke` |
 | Environment variables read by the daemon | **31** `BRIDGE_*` names (table in §2.2) plus `OPENCODE_URL`, `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` (and `_FILE`), and the systemd-provided `CREDENTIALS_DIRECTORY`; the dev tools read `H1_*`/`H2_*` |
 | How the daemon reads them | 34 literal reads go through an injected `env func(string) string`; `cmd/bridge/main.go` also calls `os.Getenv` directly (lines 40, 51 and 59: `BRIDGE_ALLOWED_ROOTS`, `BRIDGE_ALLOWED_SESSIONS`, `BRIDGE_WRITER_LOCK_DIR`) and passes `os.Getenv` itself as the injected function in places; two exported constants carry names into error messages (`lifecycle.EnvConfig`, `dashboard.EnvRedactExtra`); the dev tool `cmd/mcpsmoke` reads `BRIDGE_TOKEN`. A **single choke point is feasible** |
@@ -93,6 +93,7 @@ npm account owns the scope `nevzatcirak`, and any trademark or name clash for "C
 | Dashboard title | `Harness Bridge dashboard` (4 strings) | `Cirak dashboard` | tests that assert the title change with it |
 | Docs | "Harness Bridge" and `harness-bridge` throughout | "Cirak" / `cirak` | historical evidence files and accepted ADR texts keep their wording (dated records); live runbooks and the README are updated. `HARNESS_BRIDGE_SPEC.md` keeps its file name in S1 (`AGENTS.md` names it as the source of truth): renaming it is open question 11 |
 | systemd units | host unit `harness-bridge-private.service` | the **package** unit is `cirak.service`; the host unit is untouched | no collision |
+| Dev-tool env and defaults | `cmd/mcpsmoke` reads `BRIDGE_TOKEN` (`cmd/mcpsmoke/main.go:111`); `cmd/privatecheck` defaults `/etc/harness-bridge/tls/ca.crt` and `/opt/harness-bridge-test/workspace` (`cmd/privatecheck/main.go:29,31`) | proposed: `CIRAK_TOKEN` with a legacy fallback; the defaults kept | outside the daemon's `cirakEnv` shim; open question 18 |
 | Paths | `/etc/harness-bridge`, `/var/lib/harness-bridge`, `/run/harness-bridge-*` | the **packages** use `/etc/cirak`, `/var/lib/cirak`, `/run/cirak*` | **decision: the binary reads no fixed path (measured), so there is nothing to keep reading**: a host that keeps its old paths needs no change; no dual-path logic is added |
 
 **What stays unchanged, on purpose** (a journal grep, a client or a stored record keeps working):
@@ -143,7 +144,7 @@ file that reads the name (the first one, there may be more).
 | `BRIDGE_WRITER_LOCK_DIR` | `CIRAK_WRITER_LOCK_DIR` | `cmd/bridge/claude.go`, `main.go` |
 
 Names that appear in docs or test scripts but are not read by the daemon (`BRIDGE_CLAUDE_HISTORY_MAX_AGE`, not
-wired; `BRIDGE_PERMISSION_POLICY`, refused at startup; `BRIDGE_BINARY`, `BRIDGE_CA_FILE`, `BRIDGE_UNIT`,
+wired; `BRIDGE_PERMISSION_POLICY`, named in ADR-024 prose only: no Go code reads or refuses it, so the daemon ignores it and it is not one of the 31; `BRIDGE_BINARY`, `BRIDGE_CA_FILE`, `BRIDGE_UNIT`,
 `BRIDGE_SPEC`, test and operator scripts) are renamed in the documents and scripts only; the daemon does not
 learn them.
 
@@ -171,7 +172,8 @@ A single function, `cirakEnv(os.Getenv)`, is the only reader of the process envi
   "mutually exclusive" refusal of `readSecret`; the empty-as-unset rule (`cmd/bridge/secret.go:15-23`) is unchanged.
 - **The warning** is one line per variable and per process start, naming the legacy and the new name and the
   release in which the legacy name stops working, never a value:
-  `legacy environment variable BRIDGE_X is deprecated; set CIRAK_X instead (support ends with v0.2.0)`.
+  `legacy environment variable BRIDGE_X is deprecated; set CIRAK_X instead (not accepted from v0.2.0)`. The text is true under either outcome of open question 1: from v0.2.0 a legacy
+  name is no longer accepted, and whether it is then refused at startup (recommended) or ignored is Q1.
 - **The window, and why it ends closed, not open.** v0.1.x (the first public release, which already contains
   the rename) accepts both with the warning, which is the "one minor release" of D26. **Proposed addition
   (open question 1):** v0.2.x **refuses to start** if any known legacy name is set (`BRIDGE_X is no longer
@@ -343,7 +345,12 @@ is produced by GoReleaser's default Syft `sboms` (`spdx-json`).
   `id-token: write`, a public repository, a matching `repository` field: verified). **Trusted publishing** (OIDC,
   npm CLI >= 11.5.1, Node >= 22.14) would remove `NPM_TOKEN` entirely, but it is configured per package on
   npmjs.com and whether it can be set before the first publish is **UNVERIFIED**: the plan is a granular
-  publish-only `NPM_TOKEN` for the first publish, then trusted publishing and deletion of the token.
+  publish-only `NPM_TOKEN` for the first publish, then trusted publishing and deletion of the token. **A newly
+  created trusted-publisher configuration must complete its first successful publish within 2 days, or it expires
+  and can no longer be used or edited** (npm documentation, "Trusted publisher configuration expiry", read
+  2026-11-21; whether a publisher can be configured before the package exists is not stated there). So the
+  publisher is configured **immediately before the release that will use it**, never in advance, and the release
+  procedure checks that the publish is made within the 2 days (otherwise delete and recreate the configuration).
 
 ### 4.4 `.deb` and `.rpm` (nfpm through GoReleaser)
 
@@ -374,8 +381,16 @@ is produced by GoReleaser's default Syft `sboms` (`spdx-json`).
   ProtectHome=true
   PrivateTmp=true
   NoNewPrivileges=true
-  Restart=on-failure
+  Restart=no
   ```
+
+  **`Restart=no` is deliberate (ADR-010 step 4, accepted: "retain `Restart=no`"; the live validation unit also has
+  `Restart=no`, `docs/deploy/SYSTEMD_LOCAL_VALIDATION.md:58`).** A crash restart would start a new writer lifetime
+  without the ADR-010 fence: the process-local idempotency records and the guard state are gone, and a replay or
+  a new key could be accepted while an earlier submission is unresolved. Any automatic restart policy is an
+  ADR-010 amendment and a separate maintainer decision, not part of this packaging ADR. (An earlier draft of this
+  sketch had `Restart=on-failure`; review #479 P1-1 showed that it contradicted ADR-010 and this section's own
+  "no automatic restart" rule.)
 
   Parts **proven live** in the H5 sitting (and recorded in `H5_EVIDENCE_2026-11-21.md`): a token delivered through
   `LoadCredential` (`mcp-token`), `RuntimeDirectory=` for the admin and dashboard sockets, `StateDirectory=` with
@@ -387,10 +402,27 @@ is produced by GoReleaser's default Syft `sboms` (`spdx-json`).
   without a token and an ACL), and **an upgrade never restarts it**: a restart drops the idempotency records and
   needs the ADR-010 fence (an idle session, no pending permission). `postinstall` runs `systemctl daemon-reload`
   and prints the next steps and "restart when idle"; the unit change takes effect at the operator's restart.
+- **The maintainer scripts are guarded on the upgrade argument.** nfpm maps `scripts.preremove` to the deb
+  `prerm` and the rpm `%preun`, and both are also run on an upgrade (Debian policy 6.5: `old-prerm upgrade
+  <new-version>`; rpm `%preun` gets `$1` = 1 on an upgrade and 0 on a removal). The script therefore stops the
+  service **only** for a removal: deb `$1` is `remove` (never `upgrade`, `failed-upgrade` or `deconfigure`), rpm
+  `$1 -eq 0`; for a deb `$1 = upgrade` and an rpm `$1 -ge 1` it does nothing. `postinstall` and `postremove` never
+  start, stop or restart the unit either (only `daemon-reload`). An unguarded stop on an upgrade would drop the
+  idempotency records exactly as a restart does (ADR-010).
 - **Remove and purge.** `remove` stops the service (the binary is going away) and keeps configuration, state
   (`overlay.json`, the writer locks) and the user; `purge` removes only `/etc/cirak`. State directories are never
   deleted by a package (no permanent delete, as everywhere in the product). Upgrade replaces the binary and the
   unit file and leaves `config|noreplace` files alone.
+- **What the unit sketch does not wire (stated, not forgotten).** The unit creates `RuntimeDirectory=` and
+  `StateDirectory=` but sets none of `CIRAK_ADMIN_SOCKET` (for example `/run/cirak-admin/admin.sock`),
+  `CIRAK_DASHBOARD_SOCKET` (`/run/cirak-dashboard/dash.sock`), `CIRAK_OVERLAY_DIR` (`/var/lib/cirak/overlay`),
+  `CIRAK_WRITER_LOCK_DIR` (`/var/lib/cirak/writer-locks`) or `CIRAK_LIFECYCLE_CONFIG`; without them the daemon opens
+  no admin or dashboard socket and the directories stay unused (the H5 drop-in sets the legacy twins of the first
+  two, `docs/deploy/H5_RUNBOOK.md`). These are **operator configuration**, shipped as commented examples in
+  `/etc/cirak/cirak.env.example`, and are config-file items for ADR-027 (PROPOSED; this ADR cross-references it
+  and decides nothing there). With `ProtectHome=true` and a `cirak` user without a home, enabling the Claude Code
+  adapter needs `CIRAK_CLAUDE_HOME` under a state directory (for example `/var/lib/cirak/claude`, which would be
+  added to `StateDirectory=`); the adapter is off by default.
 - **Compatibility.** No `Provides`/`Conflicts` with anything: the live host uses other unit and path names (§2.1).
   The admin command is `sudo -u cirak cirak admin release-guard ...`.
 
@@ -412,7 +444,7 @@ Code 2.1.325 where R6 applies).
 
 **Tag gate for v0.1.0 (the maintainer's checklist, `AGENTS.md`: "a feature is not released until its required real
 acceptance evidence exists").** S1 to S4 merged; the H5 evidence present (2026-11-21); the Claude Code adapter
-stays **off by default and documented experimental** until the R6 acceptance passes (run 5 is pending); the
+stays **off by default and documented experimental** (the R6 live acceptance is COMPLETE as of 2026-11-21, items 4 and 6 PASS in run 5, per task #485; its evidence PR #471 is open and not yet on main at `cdaf5bd`, and the H5 evidence file still says "run 5 pending"; whether to lift the restriction is open question 16); the
 reproducibility job green on a rehearsal tag in a fork or a pre-release; the secrets and repositories of §6
 created; the repository renamed.
 
@@ -485,7 +517,14 @@ command, the sha256 of each packaged binary equals the release checksum.
 
 **S4.** `nfpm` builds both formats; in a Debian and a Fedora container: install creates the user and the files
 with the expected modes, `systemd-analyze verify` accepts the unit, an upgrade does not restart a service and
-keeps `config|noreplace` files, remove keeps state and the user, purge removes only `/etc/cirak`.
+keeps `config|noreplace` files, remove keeps state and the user, purge removes only `/etc/cirak`. **Restart and upgrade
+ safety (reviews #479 P1-1, P2-1):** (a) the shipped unit has `Restart=no` (`systemctl show -p Restart cirak` and a
+ grep of the packaged unit file), and a service that exits non-zero is **not** started again (`NRestarts=0`, state
+ `failed`); (b) with the service started by the test (a stub binary that holds a long-running state), a package
+ **upgrade** leaves the unit **active** with the **same main PID** and `NRestarts=0`; this assertion, not the absence
+ of a restart, is the upgrade-safety test; (c) a **removal** stops it. Mutations that must turn the suite RED:
+ the unit with `Restart=on-failure`; a `preremove` that stops the service unconditionally (the upgrade then
+ stops the unit or changes the PID); a `postinstall` that restarts it.
 
 ## 9. Risks
 
@@ -496,7 +535,7 @@ keeps `config|noreplace` files, remove keeps state and the user, purge removes o
 | `curl \| sh` abuse | release-pinned script, checksum and signature verification, user-level install by default, inspect-first form |
 | Supply chain of the channels (npm, tap) | no install scripts (layout A), provenance, tokens scoped to one repository or package, a protected environment, the maintainer's publish click |
 | Users on macOS expect lifecycle features | the support statement; the Linux-only features fail closed and say so |
-| An upgrade restarts a service mid-execution | the packages never restart; the ADR-010 fence stays an operator step |
+| An upgrade restarts or stops a service mid-execution | the packages never restart; `Restart=no`; the maintainer scripts stop only on removal (guarded on the upgrade argument); the S4 test asserts the unit stays active with the same PID; the ADR-010 fence stays an operator step |
 | The repository rename breaks tooling | S1 and S2 do not depend on the hosting name; GitHub redirects; the instruction texts are updated after the rename |
 
 ## 10. Open questions for the maintainer
@@ -527,10 +566,18 @@ keeps `config|noreplace` files, remove keeps state and the user, purge removes o
 14. **Package repository and signing key:** none in v0.1.0 (files only on GitHub Releases); an apt/yum repository
     needs its own ADR.
 15. **Name and legal:** no trademark or name-clash search for "Cirak" was made; a `SECURITY.md`/reporting address
-    does not exist yet.
+    does not exist yet. **Recommendation (the decision stays the maintainer's):** do a name and trademark search
+    in the jurisdictions the maintainer cares about before the repository rename (§2.4 step: last), and add a
+    `SECURITY.md` with a reporting address before `v0.1.0`; this ADR does not claim the name is free beyond the
+    registry probes of §1.3.
 16. **The first-tag gate:** is "adapter off by default and marked experimental until R6 passes" acceptable for
     v0.1.0, or must R6 pass first?
 17. **Support statement** of §5.3 (single maintainer, no SLA, latest minor only).
+18. **Dev tools in the rename (reviews #479 P3-4, P3-5).** `cmd/mcpsmoke` reads `BRIDGE_TOKEN` directly and
+    `cmd/privatecheck` has the flag defaults `/etc/harness-bridge/tls/ca.crt` and `/opt/harness-bridge-test/workspace`.
+    Recommended: `mcpsmoke` reads `CIRAK_TOKEN` first and falls back to `BRIDGE_TOKEN` for the legacy window (it
+    cannot import the `cmd/bridge` shim; the fallback ends with the window); the `privatecheck` defaults stay (they
+    name the live host's kept paths, §2.1 "Host artifacts") and a packaged install passes `-ca`/`-workspace`. Confirm.
 
 ## 11. Limitations
 
@@ -538,3 +585,35 @@ Docs only. No rename, build, signing or publication was attempted. The cross-com
 checks are measurements of 2026-11-21; the upstream tool facts are from public documentation pages read once
 (§1.4) and every unverified item is marked. Nothing was run on darwin, nothing on a Windows host, and the unit
 of §4.4 was not run anywhere.
+
+## 12. Review #479 dispositions (task #485, 2026-11-21)
+
+Review #479 (Worker B, PR #468 at `baab808`): FAIL, one P1, one P2, nine P3. Every cited line was re-checked on
+main `cdaf5bd` and on the PR head and held (ADR-010 step 4 `Restart=no`; the module-path count; no Go reader of
+`BRIDGE_PERMISSION_POLICY`; `cmd/mcpsmoke/main.go:111`; `cmd/privatecheck/main.go:29,31`). No finding was false.
+Status stays PROPOSED; D25 and D26 are conformed to, not reopened.
+
+**P1-1, before and after.** *Before* (§4.4 unit sketch): `Restart=on-failure`. *After:* `Restart=no`, with the reason
+(ADR-010 step 4) and the rule that any restart policy is an ADR-010 amendment. S4 asserts `Restart=no` on the
+packaged unit and `NRestarts=0` after a failing exit, with the mutation `Restart=on-failure`.
+
+**P2-1, before and after.** *Before* (§4.4): "`remove` stops the service" with no argument guard, and S4 "an
+upgrade does not restart a service". *After:* `preremove` stops only for a removal (deb `$1 = remove`, rpm `$1 -eq 0`)
+and does nothing for deb `$1 = upgrade` / rpm `$1 -ge 1`; S4 asserts the unit is still active with the same main
+PID and `NRestarts=0` after an upgrade, with the mutations "unguarded stop on upgrade" and "postinstall restarts".
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| P1-1 `Restart=on-failure` | **FIXED** | §4.4, S4, §9 |
+| P2-1 upgrade stops the service, test too weak | **FIXED** | §4.4, S4, §9 |
+| P3-1 non-Go count | **FIXED**: 172 occurrences on 146 lines, method stated | §1.1 |
+| P3-2 `BRIDGE_PERMISSION_POLICY` | **FIXED**: not read anywhere, not "refused" | §2.2 |
+| P3-3 warning text vs Q1 | **FIXED**: "not accepted from v0.2.0", true under either Q1 outcome | §2.3 |
+| P3-4 `mcpsmoke` `BRIDGE_TOKEN` | **IN THE INVENTORY**, recommendation raised as Q18 (open) | §2.1, Q18 |
+| P3-5 `privatecheck` defaults | **IN THE INVENTORY**, recommendation raised as Q18 (open) | §2.1, Q18 |
+| P3-6 unit does not wire its directories | **FIXED**: listed as operator configuration and ADR-027 (PROPOSED) items, the Claude HOME under `StateDirectory` named | §4.4 |
+| P3-7 stale R6 wording | **FIXED**: R6 COMPLETE per task #485; evidence PR #471 open (UNVERIFIED on main) | §5.2 |
+| P3-8 npm trusted-publisher expiry | **FIXED**: 2-day rule (verified on the npm page) and the sequencing | §4.3 |
+| P3-9 Q15 recommendation | **FIXED**: recommendation added; the question stays open | §10 |
+
+**Out of scope, recorded:** nothing new.
