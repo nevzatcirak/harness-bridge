@@ -665,7 +665,7 @@ no child"; weaker than OpenCode's `idle`).
 `list_catalog {root?, state?, updated_since?, created_by_bridge?, harness_name?,
 include_archived?, limit?, offset?}` -> `{harnesses:[], sessions:[{session_ref:
 {harness:"harness:<hash>", session_id:"opencode:<id>"}, harness_name, directory, root?,
-title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggregates:
+title, state, updated_at?, created_by_bridge, archived}], next_offset?, aggregates:
 {scope:"page", window:{offset,limit,returned}, total, by_state, by_root}}`.
 
 - Lists exactly the sessions the immutable ACL authorizes (same bounded discovery as
@@ -683,7 +683,9 @@ title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggrega
   read of a listed session fails; `INTERNAL` when the archive overlay cannot answer.
 - Read-only: no native write, not audited as a mutation, available under `BRIDGE_READ_ONLY`.
   Overlay-archived sessions (the persisted overlay of ADR-025, opened from `BRIDGE_OVERLAY_DIR` when it
-  is set; otherwise none) are hidden unless `include_archived` is true.
+  is set; otherwise none) are hidden unless `include_archived` is true. Every row carries `archived`
+  (`false` for a session that is not archived; before the H5 live sitting the field was omitted when
+  false, so a client could not tell "not archived" from "not supported").
 - The tool is registered only when the server has a catalog configuration, which `cmd/bridge` builds when
   `BRIDGE_LIFECYCLE_CONFIG` is set and valid (D22, `cmd/bridge/lifecycle.go`); unset, a deployed Bridge
   lists the same tools as before. It stays registered on a read-only ingress (it never writes).
@@ -691,7 +693,10 @@ title, state, updated_at?, created_by_bridge, archived?}], next_offset?, aggrega
 ### ADR-022 S4: `create_session` (against a fake native; registered only when configured)
 
 `create_session {root, subdirectory?, title?, idempotency_key}` ->
-`{session_id, root, directory, title, created: true}`. `session_id` is `opencode:<id>`. The
+`{session_id, root, directory, title, created: true, replay?: true}`. `session_id` is `opencode:<id>`.
+`replay` is present, and `true`, only on an answer that is a recorded outcome returned again for the same
+idempotency key and input (H5 live finding): every other field is the recorded output verbatim, so
+`created` stays `true` on a replay. A first answer never carries it. The
 input schema has no other property: a `prompt`, `permission`, `agent`, `model`, `parentID`,
 `workspaceID` or `harness` is rejected before the handler runs (the first prompt needs the O2
 flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
@@ -705,6 +710,17 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   The Bridge never creates a directory. The fully resolved canonical path is what is sent
   (`POST /session?directory=<path>`, body `{title?, metadata: {hb_origin: "bridge", hb_key:
   <first 16 hex of sha256(key)>}}`; nothing else, never the raw key).
+- **Refusal causes.** The cause of an authorization refusal is internal (audit line and tests) except
+  one closed word: a `FORBIDDEN` refusal whose cause is `unavailable` (a filesystem check of the
+  directory, its Git metadata or the lifecycle root could not complete, for example a permission problem
+  of the service user) ends its message with `(unavailable: a filesystem check could not complete; check
+  the service user's read access to the lifecycle root, the directory and its Git metadata)`. No path is
+  ever in a message, and every other cause keeps the message it had (H5 live finding F-H5-2: a lifecycle
+  root the service user could only search made every create `FORBIDDEN` with no hint).
+- **Startup check of the roots.** Each lifecycle root is opened at startup the way the request path opens
+  it (`os.OpenRoot`, which needs read and search permission); a root the service user cannot open makes the
+  Bridge refuse to start with `lifecycle roots: lifecycle root "<path>" cannot be opened by the service
+  user ...`, never "start without it" (D22).
 - **Order and errors** (every refusal up to the count makes no native call): input shape
   `INVALID_INPUT`; `BRIDGE_READ_ONLY` `FORBIDDEN`; a recorded outcome for the same key is returned
   before any cap, the same key with another input `IDEMPOTENCY_CONFLICT`; root not configured or

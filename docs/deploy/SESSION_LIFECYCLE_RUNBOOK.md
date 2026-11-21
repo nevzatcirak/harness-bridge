@@ -64,6 +64,21 @@ Lifecycle roots grant authority only to the lifecycle tools (ADR-022 3.2). A cre
 (O2 is parsed but not implemented). `create_session` never creates a directory and refuses a root whose Git top
 level is missing or outside the root (`non_git`, `not_in_root`).
 
+### Host permissions of a root (H5 live findings F-H5-1 and F-H5-2)
+
+- A root must be **owned by root or by the service user** (`internal/lifecycle/config.go:344-345`, reason
+  `root_owner`): the Bridge refuses to start otherwise. A root owned by the agent user (live: the OpenCode
+  user) is refused; the sitting made it `root:<agent-group>`, mode `0710`, with an ACL
+  (`u:<agent-user>:rwx`) so that the agent keeps its write access.
+- The service user needs **read and search (`r-x`) on the root**, `r-x` on the directory a session is created in,
+  and read on its `.git`. The request path opens every root with `os.OpenRoot`
+  (`internal/security/lifecycle_root.go:123`); with only search (`--x`) every create was `FORBIDDEN` with no reason.
+  The Bridge now performs the same open at startup (`lifecycle_root.go:59`) and refuses to start with
+  `lifecycle root "<path>" cannot be opened by the service user`; a create refused by a failed filesystem check
+  of the directory or its Git metadata says so (`unavailable: a filesystem check could not complete ...`).
+- Check as the service user without printing content: `namei -m <root>` and
+  `sudo -u <service-user> sh -c 'test -r <root> -a -x <root> && echo readable'`.
+
 ## The archive overlay
 
 Archive in Chat is a **Bridge-side label**, not a native archive (D16 Q1; the native `PATCH time.archived` stays
@@ -78,6 +93,8 @@ operator-only). The label lives in `overlay.json` in one directory (ADR-025 4.1,
   file, fsync, rename, directory fsync, then publish (`overlay.go:609-720`);
 - an invalid file: the **writer refuses to start**; a read-only process starts and reports the overlay as
   unknown, so `list_catalog` fails with `INTERNAL` rather than listing a guess (D18 Q3);
+- under the unit's `ProtectSystem` the directory must be a `StateDirectory=` (with `StateDirectoryMode=0700`):
+  a directory made by hand failed with `openat overlay.lock: read-only file system` (H5 live finding F-H5-3);
 - **unset: the archive tools are not registered; there is no memory-only mode** (D18 Q5).
 
 Operating rules that already hold in the code: the overlay never grants or denies anything beyond hiding a
@@ -89,8 +106,8 @@ file by the service user is out of the checksum's protection (ADR-025 §6, T1); 
 
 | Tool | Writes | Notable refusals |
 |---|---|---|
-| `list_catalog` | nothing | `INVALID_INPUT` bad filter; `UPSTREAM_TIMEOUT` (10 s deadline); `INTERNAL` unknown overlay |
-| `create_session` | one native `POST /session` per accepted request, never retried | `SESSION_LIMIT`, `IDEMPOTENCY_CONFLICT`, `UNKNOWN_OUTCOME` |
+| `list_catalog` | nothing (every row carries `archived`, `false` unless archived) | `INVALID_INPUT` bad filter; `UPSTREAM_TIMEOUT` (10 s deadline); `INTERNAL` unknown overlay |
+| `create_session` | one native `POST /session` per accepted request, never retried; a replay returns the recorded output with `"replay": true` | `SESSION_LIMIT`, `IDEMPOTENCY_CONFLICT`, `UNKNOWN_OUTCOME`, `FORBIDDEN` (a failed filesystem check says `unavailable`) |
 | `archive_session`, `unarchive_session` | the overlay file only; **no native write** | `SESSION_BUSY` (not idle, pending permission, running child, held guard), `SESSION_LIMIT` (hourly cap or full overlay), `UNKNOWN_OUTCOME` reason `overlay_uncertain` |
 | `close_session` | the existing interrupt (at most one native abort POST), then the overlay | the same, plus `INVALID_INPUT` "execution already terminal" and `UNKNOWN_OUTCOME` when the interrupt does not settle in 5 s |
 
@@ -114,7 +131,13 @@ archive it natively (operator-only) or leave the variables set.
 ## Verification status
 
 Everything on this page is tested against fakes (a fake native server, the real overlay store on a temporary
-directory). **No live run has been made**: the behaviour of an archived session on a real OpenCode, the
-`POST /session` and abort calls against a real server, and the overlay under a real power loss are UNVERIFIED.
+directory), and the lifecycle tools were run **once live on 2026-11-21** (the H5 sitting,
+`docs/evidence/R7_EVIDENCE_2026-11-21.md`): `list_catalog`, `create_session` against a real OpenCode (replay,
+conflict, an invalid subdirectory refused), the ACL update and restart, prompts to the created session,
+`archive_session` (hidden in the catalog and dashboard, `send_prompt` refused `session_archived`),
+`unarchive_session` and `close_session` with its interrupt all behaved as specified, after the host findings
+F-H5-1 to F-H5-3 were fixed. `get_session` stays unchanged by an archive label by design (ADR-025 Q2: the
+existing tools are byte-identical whatever the overlay). The overlay under a real power loss and a second writer
+on the same overlay directory are UNVERIFIED.
 `BRIDGE_OVERLAY_DIR` and the file names are decided by D18 Q5/Q6, but the ADR still calls them proposals in §4.1
 and §10 (recorded in `docs/BACKLOG.md`).

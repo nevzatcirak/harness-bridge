@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -240,5 +241,83 @@ func TestNewLifecycleRootsRefusesOverlap(t *testing.T) {
 	sib := mk(t, base, "outer-2")
 	if _, err := NewLifecycleRoots([]string{outer, sib}); err != nil {
 		t.Errorf("a name-prefix sibling is not nested: %v", err)
+	}
+}
+
+// ---- H5 live finding F-H5-2 (task #460): the startup check must be the open the request path uses ----
+
+// Live, a lifecycle root whose service user had only search permission (--x) passed startup and
+// then made every create_session FORBIDDEN without a reason, because the request path opens the
+// root with os.OpenRoot (read permission needed). Startup now performs that open, and closes it.
+
+// withOpenRoot replaces the opener for one test. The security tests are not parallel.
+func withOpenRoot(t *testing.T, f func(string) (*os.Root, error)) {
+	t.Helper()
+	prev := openRoot
+	openRoot = f
+	t.Cleanup(func() { openRoot = prev })
+}
+
+func TestNewLifecycleRootsOpensAndClosesEveryRootAtStartup(t *testing.T) {
+	base := canonicalDir(t)
+	a, b := mk(t, base, "a"), mk(t, base, "b")
+	var opened []*os.Root
+	withOpenRoot(t, func(p string) (*os.Root, error) {
+		r, err := os.OpenRoot(p)
+		if err == nil {
+			opened = append(opened, r)
+		}
+		return r, err
+	})
+	if _, err := NewLifecycleRoots([]string{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	if len(opened) != 2 {
+		t.Fatalf("%d roots opened at startup, want 2", len(opened))
+	}
+	for i, r := range opened {
+		if _, err := r.Stat("."); err == nil {
+			t.Errorf("root %d was left open by the startup check", i)
+		}
+	}
+}
+
+func TestNewLifecycleRootsRefusesARootTheServiceUserCannotOpen(t *testing.T) {
+	base := canonicalDir(t)
+	good, bad := mk(t, base, "good"), mk(t, base, "bad")
+	withOpenRoot(t, func(p string) (*os.Root, error) {
+		if p == bad {
+			return nil, &os.PathError{Op: "openat", Path: p, Err: os.ErrPermission}
+		}
+		return os.OpenRoot(p)
+	})
+	_, err := NewLifecycleRoots([]string{good, bad})
+	if err == nil {
+		t.Fatal("a root the process cannot open was accepted at startup")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("the cause is lost: %v", err)
+	}
+	for _, want := range []string{bad, "cannot be opened", "r-x"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("startup error %q lacks %q", err, want)
+		}
+	}
+}
+
+// The real thing, with a real permission failure. It needs a non-root user (root opens anything):
+// run as an unprivileged user it must pass; as root it is NOT EXERCISED (reported, never a pass).
+func TestNewLifecycleRootsRefusesAnUnreadableRootOnDisk(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("NOT EXERCISED as root: root can open any directory; run as an unprivileged user")
+	}
+	base := canonicalDir(t)
+	root := mk(t, base, "root")
+	if err := os.Chmod(root, 0o300); err != nil { // search and write, no read: the live "--x" shape
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	if _, err := NewLifecycleRoots([]string{root}); err == nil {
+		t.Fatal("an unreadable root was accepted at startup")
 	}
 }

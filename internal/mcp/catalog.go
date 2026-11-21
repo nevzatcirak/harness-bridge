@@ -92,9 +92,10 @@ type CatalogEntry struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 	// CreatedByBridge is a best-effort provenance LABEL (metadata.hb_origin), never an authority.
 	CreatedByBridge bool `json:"created_by_bridge"`
-	// Archived is true only for an overlay-archived session, which is listed only
-	// with include_archived.
-	Archived bool `json:"archived,omitempty"`
+	// Archived is true only for an overlay-archived session, which is listed only with
+	// include_archived. It is always present (false for every other row), so a client can tell
+	// "not archived" from "the field is not supported".
+	Archived bool `json:"archived"`
 }
 
 // CatalogWindow is the page the aggregates describe.

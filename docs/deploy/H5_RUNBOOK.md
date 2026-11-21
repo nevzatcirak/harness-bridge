@@ -1,6 +1,8 @@
 # H5: promote a frozen main build, H5 regression, R7 lifecycle and the dashboard live acceptance
 
-Status: **DRAFT for the H5 sitting, not executed.** Worker B, 2026-11-20, rewritten for planner task
+Status: **the H5 sitting was executed on 2026-11-21** (live result and findings: `docs/evidence/H5_EVIDENCE_2026-11-21.md`,
+`docs/evidence/R7_EVIDENCE_2026-11-21.md`; the live findings F-H5-1 to F-H5-5 are folded into the steps
+below, each marked "live finding"). Original draft: Worker B, 2026-11-20, rewritten for planner task
 #435 from the #322 draft (after #428/#429 and PR #427 merged). Base inspected: `main`
 `8406b18fa965e839da4a025276be0b846123124b` (the merge of #427), 2026-11-20. The freeze SHA is a
 placeholder: it is whatever merge the Planning Desk freezes for H5. Re-check every row and every
@@ -85,6 +87,12 @@ sha256sum out/harness-bridge-h5
 go version -m out/harness-bridge-h5 | grep -E 'vcs\.(revision|modified)'
 ```
 
+**Build outside the clone (live finding F-H5-5).** The command above is written for an `out/` inside the
+clone; with `out/` **or** a per-task `GOCACHE` inside the clone, the untracked files make Go stamp
+`vcs.modified=true` and the hash differs (live: dirty-tree hash `29c7278e…eba5c8`, clean build
+`06bf6ab2…6379`, B #454 and C #455). Keep both the output and the `GOCACHE` outside the checked-out tree
+(or copy the finished binary in afterwards), and check `vcs.modified=false` before hashing.
+
 Two independent builders (H4-BUILD/H4-REPRO pattern): the sha256 values must match byte-for-byte and
 `vcs.modified=false` in both. A mismatch is STOP. Record the toolchain, the freeze SHA, both sha256
 values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
@@ -134,7 +142,19 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    owned by the service user (`cmd/bridge/admin.go:18-31`; ADR-020).
 
 3. **Token rotation inside the sitting (ADR-019).** The live token expires
-   **2026-11-23T17:54:48Z**; rotate it now rather than between stages:
+   **2026-11-23T17:54:48Z**; rotate it now rather than between stages.
+
+   **In-place rotation (live finding F-H5-4; the path the sitting used, and the simpler one).** When the
+   unit already takes its token through a systemd credential (`LoadCredential=`, here `mcp-token`) and its
+   `BRIDGE_TOKEN_EXPIRES` from the `EnvironmentFile=`, rotate **in place**: replace the credential file with
+   a new random value of at least 43 characters (the live one had 64), set the new
+   `BRIDGE_TOKEN_EXPIRES` (at most +7 days, RFC 3339) in that environment file, restart, and update the
+   connector header. No new token file, no `BRIDGE_TOKEN_FILE` line in `zzzz-h5.conf`, no new directory and
+   no `BRIDGE_TOKEN=` neutralising line are needed. A rollback to H4 would use the same credential, which
+   meets H4's rules (at least 43 characters, expiry within 168 h); no rollback was exercised in the sitting,
+   so that is UNVERIFIED live. Never print the value; check only its length and the startup line (expiry and
+   maximum lifetime, never the token). The new-token-file procedure below is the
+   alternative when the unit has no such credential.
 
    ```sh
    set +o history
@@ -314,6 +334,22 @@ and stage 2 in the same sitting. `BRIDGE_PERMISSION_RELAY=off` stays. The test r
 lies inside it (the Bridge never creates directories; a directory without a Git top level is
 `FORBIDDEN non_git`, `internal/lifecycle/authz.go:26,135-221`).
 
+**Host permissions of the root (live findings F-H5-1 and F-H5-2). Check these before the restart:**
+- The root must be **owned by root or by the service user** (`internal/lifecycle/config.go:344-345`:
+  `root_owner`, a startup refusal). Live, the test workspace was owned by the agent user, so the Bridge
+  refused it; the sitting changed the owner to root with the agent's group (`chown root:<agent-group>`),
+  mode `0710`, and gave the agent user back its write access with an ACL (`u:<agent-user>:rwx`).
+- The service user needs **read and search (`r-x`) on the root**: the request path opens the root with
+  `os.OpenRoot` (`internal/security/lifecycle_root.go:123`), and, on the created directory, `r-x` plus
+  read on its `.git` (the Git top-level check reads inside the root). With only search (`--x`) every
+  `create_session` was `FORBIDDEN` with no reason. Since this revision the Bridge opens each root at
+  startup the same way (`lifecycle_root.go:59`) and refuses to start with
+  `lifecycle root "<path>" cannot be opened by the service user`, and a create refused by a failed
+  filesystem check says `unavailable: a filesystem check could not complete` in its message.
+- Check as the service user, without printing any content: `namei -m <root>` and
+  `sudo -u <service-user> sh -c 'test -r <root> -a -x <root> && echo readable'`; for a created directory the
+  same, plus `test -r <dir>/.git/HEAD`.
+
 **Prepare (operator, before the restart):**
 ```sh
 ROOT=/opt/harness-bridge-test/workspace
@@ -332,15 +368,20 @@ cat > /etc/harness-bridge/h5/lifecycle.json <<'JSON'
  "create_per_hour":10,"archive_per_hour":10,"max_total_sessions":50}
 JSON
 chown <bridge-uid> /etc/harness-bridge/h5/lifecycle.json && chmod 0600 /etc/harness-bridge/h5/lifecycle.json
-# overlay directory: owned by the Bridge UID, mode exactly 0700, no symlink in the final component:
-install -d -m 0700 /var/lib/harness-bridge/h5-overlay && chown <bridge-uid> /var/lib/harness-bridge/h5-overlay
 ```
 
-Add to the drop-in:
+**The overlay directory is a `StateDirectory=` (live finding F-H5-3).** Under the unit's `ProtectSystem` the
+file system outside the allowed paths is read-only for the Bridge, so a directory made by hand under
+`/var/lib` failed with `openat overlay.lock: read-only file system`. Let systemd create it (owned by the
+unit's `User=`, mode exactly `0700`, no symlink in the final component), in the drop-in:
 ```ini
+StateDirectory=harness-bridge-h5
+StateDirectoryMode=0700
 Environment=BRIDGE_LIFECYCLE_CONFIG=/etc/harness-bridge/h5/lifecycle.json
-Environment=BRIDGE_OVERLAY_DIR=/var/lib/harness-bridge/h5-overlay
+Environment=BRIDGE_OVERLAY_DIR=/var/lib/harness-bridge-h5
 ```
+(`StateDirectory=` names a directory below `/var/lib`; the name is an example, keep the two in step.) Check
+`ls -ld /var/lib/harness-bridge-h5` is `drwx------` and owned by the service user after the restart.
 
 Restart (fence first). Expected: startup line
 `lifecycle: registered list_catalog,create_session,archive_session,unarchive_session,close_session (roots=1, overlay=true)`
@@ -367,8 +408,8 @@ R7.2. create_session {root: "/opt/harness-bridge-test/workspace", subdirectory: 
       until R7.4.
 
 R7.3. Replay R7.2 with the same key and input: the SAME session ID and output (the recorded output
-      is returned verbatim, so "created" stays true), no second native session; the audit line is
-      outcome=replay. Then the same key with a different title: IDEMPOTENCY_CONFLICT, no native call.
+      is returned verbatim, so "created" stays true), plus `"replay": true` (an additive field, absent
+      on the first answer), no second native session; the audit line is outcome=replay. Then the same key with a different title: IDEMPOTENCY_CONFLICT, no native call.
 
 R7.4. (Operator) add the new session ID to the existing BRIDGE_ALLOWED_SESSIONS value (the H4
       setting in the unit/base drop-in), fence the target, restart the Bridge, and confirm the same
@@ -502,9 +543,9 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
 **UNVERIFIED list (as of this revision):**
 - the frozen SHA itself and that it contains the D22 wiring and the #427 fix (the inspected main
   `8406b18` does);
-- the real OpenCode behaviour of `POST /session` (create), the abort POST (close), the archived
-  `send_prompt` refusal and the overlay under a real power loss (`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md`
-  "Verification status");
+- the overlay under a real power loss (`docs/deploy/SESSION_LIFECYCLE_RUNBOOK.md` "Verification status"); the
+  real OpenCode behaviour of `POST /session`, the abort POST (close) and the archived `send_prompt` refusal
+  were observed in the 2026-11-21 sitting (`R7_EVIDENCE_2026-11-21.md`);
 - the `BRIDGE_PERMISSION_*` live path (S7) and the relay — stage 5 is NOT_RUN;
 - every Claude Code behaviour — stage 6 is OFF; R6 run 5 is pending;
 - the dashboard's native diff shapes and the live `?archived=1` view (fakes only);

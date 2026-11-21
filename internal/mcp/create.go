@@ -117,6 +117,10 @@ type CreateOutput struct {
 	Directory string `json:"directory"`
 	Title     string `json:"title"`
 	Created   bool   `json:"created"`
+	// Replay is true only on an answer that is a recorded outcome returned again for the same
+	// idempotency key (H5 live finding). Every other field is returned verbatim, so created stays
+	// true on a replay: this field is how a client tells a replay from the first answer.
+	Replay bool `json:"replay,omitempty"`
 }
 
 // createError is an *execution.Error that also carries the evidence the audit line of slice S5
@@ -269,6 +273,11 @@ func authRefusal(err error) error {
 		if ae.Reason != "" {
 			msg += " (" + ae.Reason + ")"
 		}
+		if ae.Cause == lifecycle.CauseUnavailable {
+			// The one cause a client is told (closed phrase, no path): a refusal without it looks
+			// like a policy decision, and live it was a permission problem of the service user.
+			msg += " (unavailable: a filesystem check could not complete; check the service user's read access to the lifecycle root, the directory and its Git metadata)"
+		}
 		switch ae.Code {
 		case lifecycle.CodeNotFound:
 			return execution.Fail("NOT_FOUND", "the directory does not exist (create_session never creates directories)")
@@ -342,6 +351,7 @@ func (s *Server) createCall(ctx context.Context, a args) (any, error) {
 			return nil, rec.err
 		}
 		out := *rec.out
+		out.Replay = true // the recorded outcome itself is untouched: only this copy says "replay"
 		return out, nil
 	}
 	// A panic below must not leave the record pending (a retry of the key would wait on it
