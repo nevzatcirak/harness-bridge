@@ -53,7 +53,7 @@
         <label class="visually-hidden" for="f-h">Harness</label>
         <select class="select" id="f-h"><option>All harnesses</option><option>OpenCode</option><option>Claude Code</option></select>
         <a class="btn" href="#catalog">Show archived</a>
-        <button class="btn btn--primary" type="button">Refresh</button>
+        <a class="btn btn--primary" href="#sessions">Refresh</a>
         <span class="label">5 sessions, updated <time datetime="2026-11-21T17:48:02Z" title="2026-11-21 17:48:02Z">3 s ago</time></span>
       </div>
       <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-sessions">
@@ -231,7 +231,7 @@
           </tbody>
         </table>
       </div>
-      <p class="label">Only executions of the sessions listed on the Sessions page appear here; those of archived sessions appear with the archived filter. Executions live in the memory of this Bridge process: a restart empties the list (ADR-010).</p>
+      <p class="label">Only executions of the sessions in the scope of the Sessions page appear here (this includes sessions beyond the first 200 shown on the Sessions page); those of archived sessions appear with the archived filter. Executions live in the memory of this Bridge process: a restart empties the list (ADR-010).</p>
     </div>
   </section>
 

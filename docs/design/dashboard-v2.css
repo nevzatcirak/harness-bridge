@@ -121,7 +121,8 @@
   }
 }
 
-/* explicit choice by the optional theme toggle (A1.6 JS-2) wins over the media query */
+/* explicit choice by the optional theme toggle (A1.6 JS-2) wins over the media query; the dark state sets color-scheme too */
+:root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="light"] {
   color-scheme: light;
   --bg: #fafafa;

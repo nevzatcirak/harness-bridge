@@ -759,14 +759,17 @@ Facts only (task #289). R-DASH stays **NOT_EXERCISED**; the native shapes stay U
 - **Not here.** The archive overlay and ADR-022 S6/S8, the O2 flag, Claude Code history and diffs,
   any new native endpoint, and the live R-DASH run.
 
-## Amendment A1 (PROPOSED, 2026-11-21): dashboard visual system v2 ("Cirak")
+## Amendment A1 (ACCEPTED, 2026-11-21, maintainer decision D31): dashboard visual system v2 ("Cirak")
 
-Status: **PROPOSED, not accepted.** Task #463; maintainer decision **D28 (2026-11-21, in chat):** make
+Status: **ACCEPTED (2026-11-21, maintainer decision D31, recorded in issue #117).** Task #463; maintainer decision **D28 (2026-11-21, in chat):** make
 the dashboard look professional and reuse the *visual language* of the maintainer's Lokman admin UI.
 Revised in task #469 by the **Hallmark sweep (A1.13)**, at the maintainer's request to use Hallmark for the
-dashboard design, in task #477 for review #476 (one P2 and nine P3, dispositions in A1.14), and in task #483 for reviews #480 and #481 (one P2 and nine P3, plus two P3, dispositions in A1.15). Acceptance is by the Planning Desk under D19 (an amendment that conforms to the recorded
-D-items and passed its independent reviews, B mandatory and C second, with no open P0-P2). Until it is
-accepted the dashboard serves exactly the accepted ADR-023 pages.
+dashboard design, in task #477 for review #476 (one P2 and nine P3, dispositions in A1.14), in task #483 for reviews #480 and #481 (one P2 and nine P3, plus two P3, dispositions in A1.15), and in task #489
+for review #486 (four P3, A1.16). **Acceptance.** The reviews passed with no open P0-P2 (C #476 and #481, B #480
+and #486), the amendment conforms to the recorded D-items, and the maintainer answered **every one of its sixteen
+open questions with the recommendation in decision D31 (2026-11-21, issue #117)**: A1.12 records them as decided.
+Implementation proceeds in the slices of A1.9; until a slice ships, the dashboard serves the pages of the accepted
+sections above.
 
 **What it is.** Mostly a presentation amendment: tokens, layout, screens, accessibility, CSP and JavaScript
 inventory, refresh behaviour, three implementation slices, a test plan and the Hallmark sweep. It supersedes
@@ -776,12 +779,11 @@ turns it into the embedded `assets/dashboard.css`) and `docs/design/dashboard-v2
 with fictional data that links that stylesheet). **No code changes in this task.** The design values below are
 the maintainer's token values (values only); no Lokman code or asset is copied.
 
-**What A1 decides beyond presentation** (each is open for the maintainer to confirm; none touches a recorded
-D-item): (i) it supersedes accepted §4's hidden-tab polling cadence with a pause (A1.7); (ii) it adds three
+**What A1 decides beyond presentation** (each was confirmed by D31; none touches a recorded D-item): (i) it supersedes accepted §4's hidden-tab polling cadence with a pause (A1.7); (ii) it adds three
 GET routes (`/executions`, `/catalog`, `/health`), their JSON twins, a page parameter on `/audit`, and two
 `Source` readers (`Executions`, `Health`) plus liveness and pending-permission copies on the dashboard
 `Execution` (A1.8); (iii) it adds a read-only getter for the connector token's **expiry timestamp** (Q4); (iv) it
-adds one optional variable for an instance label, named in ADR-026's prefix (A1.8, Q16). Everything else changes
+adds one optional variable for an instance label, `CIRAK_DASHBOARD_LABEL`, in ADR-026's prefix (A1.8, Q3, Q16). Everything else changes
 how existing data looks.
 
 ### A1.0 Invariants that stay (ADR-023 §3, §4, §6, T1-T11)
@@ -859,7 +861,7 @@ escaped, neutral).
 Computed from the values of `docs/design/dashboard-v2.css` itself, compositing the 0.14 tint exactly (no
 rounding of the tint colour): **124 token pairs** (text, muted text, six chip tones, input border, focus ring and
 five semantic text colours on the four surfaces, both themes, plus text on primary and text on the pressed primary
-fill) and **22 fill pairs**
+fill) and **26 fill pairs**
 (listed below), the light media-query block and the toggle block identical: **0 failures. The minimum text pair
 is 4.62:1 (dark secondary chip on the high surface); the minimum non-text pair is 4.06:1 (light input border on
 the low surface).** Chip tint = the chip text colour at alpha 0.14 composited over the surface the chip sits on.
@@ -881,12 +883,13 @@ Slice S1 turns this computation into a test over the embedded CSS (A1.10), so th
 Other pairs (dark / light). **Token pairs not in the table:** semantic text on a card: ok 8.28 / 7.87, info
 7.53 / 7.40, error 5.58 / 5.62, secondary 6.26 / 7.76, warn 9.63 / 6.41 (on the light low surface 7.03, 6.61, 5.02,
 6.93 and 5.73); text on primary (the current nav item, the button) 7.79 / 4.90 and **text on the pressed primary
-fill 6.18 / 6.70**. **The 22 fill pairs** (eleven per
+fill 6.18 / 6.70**. **The 26 fill pairs** (thirteen per
 theme, the fills a component draws that the tokens alone do not give): text on a row hover 8.73 / 12.19; text on a
 nav hover 9.19 / 10.94; text on the pressed fill 9.57 / 12.20; text on a diff add line 9.56 / 12.89 and muted text on
 it 5.18 / 5.61; text on a delete line 9.69 / 12.67 and muted 5.26 / 5.51; text on the pending-permission row
 10.06 / 12.30 and muted 5.45 / 5.35; the outline chip inside that row 4.98 / 5.92; the archived outline chip
-border against a card 12.63 / 16.10 (non-text).
+border against a card 12.63 / 16.10 (non-text); **the pressed primary fill against the surface it sits on, the
+toolbar `low` surface and the card (non-text, 3:1): dark 6.37 and 6.10, light 5.99 and 6.70** (four of the 26).
 
 **Where the extracted values were not enough (the reasons for the "A1" cells):**
 
@@ -904,8 +907,12 @@ border against a card 12.63 / 16.10 (non-text).
    `--hairline`: **1.337:1 dark, 1.320:1 light**
    (unreadable). *After:* a `.btn--primary:active` rule, placed after `.btn:active`, uses the new `--primary-active`
    token (`#6a9cf5` dark, `#1a4fd6` light); text on it is **6.18 / 6.70**, the pair is in the token set and in the
-   contrast test, and the mutation "primary pressed fill reverted to `--hairline`" is listed (A1.10). The press cue
-   also stays visible against the normal fill (1.26 / 1.37).
+   contrast test, and the mutation "primary pressed fill reverted to `--hairline`" is listed (A1.10). **The 3:1
+   non-text pair of the press is the pressed fill against the surface it sits on** (toolbar `low` / card): dark
+   6.37 / 6.10, light 5.99 / 6.70; these four pairs are in the fill list and in the test. The difference between the
+   normal and the pressed fill (1.26 / 1.37) is a **supplementary** cue, deliberately outside the A1.10 item 2
+   assertion; the press has no other state cue, and "every pair" stays true because the asserted pairs are the ones
+   listed.
 5. **Rule:** a chip sits on one of the four surfaces above, never on another tint; links are the text colour,
    so no accent-on-surface link pair exists.
 
@@ -938,7 +945,7 @@ absolute time in `title` and in the detail view's text beside the relative form 
 paths in mono, times and durations in tabular numerals, labels in sentence case. State lives in the URL (A1.13).
 
 1. **Sessions (`GET /`).** Toolbar (the low surface): search, state filter, harness filter, the archived link
-   (`?archived=1`). Sticky-header table, columns: **harness** (a badge with the harness name: D17 Q8 keeps the distinct harness
+   (`?archived=1`), and the **Refresh link** (the no-JS refresh of A1.6 JS-3 and the page's primary action). Sticky-header table, columns: **harness** (a badge with the harness name: D17 Q8 keeps the distinct harness
    badge and column), **title and ID**, **repository and path** (mono; a path longer than 40 runes is shown as an
    ellipsis plus its **last two segments**, never cut inside a segment; two rows of one list that would then render
    identically get a stable 6-hex suffix taken from the sha256 of the full path; the full value is in `title`, on the
@@ -1019,7 +1026,7 @@ paths in mono, times and durations in tabular numerals, labels in sentence case.
 **no inline `<style>` and no `style=""` attribute**, so the CSP needs no hash and no nonce. A nonce would
 need per-request state and would defeat the ETag/304 and the 1 s view cache of §4; a hash would need a build
 step. **This departs from the task text ("inline CSS with a hash/nonce") in favour of a strictly tighter
-policy; Q9 asks for confirmation.** Proportions use classes or SVG presentation attributes. Icons, if any, are
+policy; D31 confirmed it (Q9).** Proportions use classes or SVG presentation attributes. Icons, if any, are
 inline `<svg aria-hidden="true">` with fixed paths (none in v2: chips carry words); no `url()` to a remote host,
 no `@import`, no `@font-face`.
 
@@ -1029,7 +1036,7 @@ existing rules stay: values set with `textContent`, no markup built from data, n
 | # | Behaviour | CSP impact | No-JS fallback |
 | --- | --- | --- | --- |
 | JS-1 | Copy-ID button (`navigator.clipboard.writeText`) | none (`script-src 'self'`) | the ID is selectable text (`user-select: all`); the button is `hidden` until the script runs |
-| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint. **The stored value is checked against the two allowed words (`dark`, `light`) before it is used; anything else is ignored and removed.** | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1) |
+| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint. **The stored value is checked against the two allowed words (`dark`, `light`) before it is used; anything else is ignored and removed.** | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1). The dark state is explicit too: `:root[data-theme="dark"]` sets `color-scheme: dark`, as the light blocks set `light`, so the native controls follow the toggled theme |
 | JS-3 | Poll refresh of `/api/state` (existing), pausing when hidden (A1.7) | none (`connect-src 'self'`) | a "Refresh" link; optional `?refresh=N` (Q8) |
 | JS-4 | Client-side filter and search for the sessions, executions and audit tables; **the filter state is written to the URL query with `history.replaceState` and re-applied on load.** Query values reach the page only through `.value` of a control or `textContent`, the state and harness values are checked against the options the control offers, and nothing from the query is ever parsed as markup or URL. The filter text stays in the browser history (A1.11); `Referrer-Policy: no-referrer` keeps it out of any request. | none | the full table is shown; the query is ignored |
 | JS-5 | Re-render `<time>` relative text from `datetime` every 30 s; no network | none | the server-rendered relative text and the absolute time in `title` |
@@ -1067,7 +1074,7 @@ today; the method sweep returns 405 on every route including the new ones; no ne
 | --- | --- | --- |
 | `Execution.Liveness` (the ADR-017 A1 fields) and a pending-permission summary on the dashboard `Execution` | the existing `execution.Execution` copies in `DashboardSnapshot()` (`internal/execution/dashboard.go`), mapped in `internal/mcp/dashsource.go` | no native read; same copy-under-`m.mu`-then-each-`x.mu` order (T10); permission summary = what ADR-024 already shows Chat, never a pattern |
 | `Source.Executions(ctx)` | `DashboardSnapshot().Executions` (which holds **every** execution of the Manager and applies no cap, `internal/execution/dashboard.go:33-36`), **filtered in the Source implementation by the scope set the same call chain produces** (the ACL scope of D17 Q6, the archived flag of D17 Q7, joined on the harness-qualified session ID), **before** the Sessions page's 200-row display cap, then sorted newest first, then capped at 200 | the filter comes **before** the executions cap; an execution whose session is not in the scope set is dropped, never shown; the page's JSON twin calls this same reader, never a second implementation; the T11 method-set pin test lists the new reader |
-| the dashboard `Execution` row type (`internal/dashboard/source.go:22-30` today: `ID`, `State`, `Started`, `Updated`, `Ended`, `Current`) | S3 adds the **harness-qualified session ID** (`opencode:ses_…` or `claudecode:…`, copied from `execution.Execution.SessionID`) to the row; the Session column shows the session ID and links to `/session/<harness>/<id>` built by splitting the qualified ID at the first colon | the field is display data; the T11 type test pins it; an ID the sessions list does not know renders without a link |
+| the dashboard `Execution` row type (`internal/dashboard/source.go:22-30` today: `ID`, `State`, `Started`, `Updated`, `Ended`, `Current`) | S3 adds the **harness-qualified session ID** (`opencode:ses_…` today, copied from `execution.Execution.SessionID`; the dashboard source takes executions from the OpenCode `Manager`, whose IDs are `opencode:`, `internal/execution/manager.go:408`; a `claudecode:…` ID only appears once Claude executions are wired into the dashboard source, ADR-021 wiring, and is not supplied today) to the row; the Session column shows the session ID and links to `/session/<harness>/<id>` built by splitting the qualified ID at the first colon | the field is display data; the T11 type test pins it; an ID the sessions list does not know renders without a link |
 | `Source.Health(ctx)` | version and build from the binary, features from configuration, connector token **expiry timestamp** (never the token, never the Host or origin) from the remote settings through a read-only getter, harness reachability from the last list read | no new native probe; absent fields are omitted, never defaulted |
 | instance label | optional **`CIRAK_DASHBOARD_LABEL`** (ADR-026 §2 renames the environment prefix `BRIDGE_*` to `CIRAK_*`; ADR-026 and ADR-027 are still PROPOSED, so this is a cross-reference, not a decision: Q16), <= 40 bytes, `[A-Za-z0-9 ._-]`, default none | startup error on an invalid value, like the redaction variable (Q3); ADR-027's config schema would carry the same key |
 | audit `?page=N` | the existing ring, pages of 100 | bounded GET parameter; an invalid value is page 1 |
@@ -1075,7 +1082,7 @@ today; the method sweep returns 405 on every route including the new ones; no ne
 
 The dashboard package still depends on the `Source` interface only; the T11 test lists the exact reader set.
 
-### A1.9 Slices (one PR each; the first commit of S1 marks this amendment ACCEPTED per D19 with a dated note)
+### A1.9 Slices (one PR each; the amendment is ACCEPTED, so no slice needs to record the acceptance)
 
 - **S1 — tokens, shell, sessions.** `assets/dashboard.css` from the reference file (dark only; `color-scheme:
   dark`), the new page shell (top bar with the destinations that exist, the menu below 60rem, JS-6), the sessions
@@ -1174,42 +1181,57 @@ on `stall_suspected` alone; an unknown liveness reason rendered as if known.
 - ADR-017 A2 is PROPOSED with open review findings (#459): A1 renders A1 fields only and keys on `stall_reason`.
 - The sources and native shapes of §1 remain as stated there; nothing here adds a native read.
 
-### A1.12 Open questions (answers needed; recommendation first)
+### A1.12 Decided (D31, 2026-11-21)
+
+The maintainer answered all sixteen questions of this amendment with **the recommendation** in decision D31
+(2026-11-21, recorded in issue #117). Each question keeps its text; the decision follows it.
 
 1. **Light theme.** Media query plus an optional toggle stored in `localStorage` (JS-2), or media query only?
    Recommended: both (the toggle is progressive; without JS the system preference applies).
+   **Decided (D31): media query plus an optional JS toggle.**
 2. **Fonts.** System stack only (recommended), or embed Roboto under its OFL licence (about 100-150 KB per
-   weight, a licence notice to ship)?
-3. **Instance label.** A new optional `BRIDGE_DASHBOARD_LABEL` (recommended, default none), or show the host name?
+   weight, a licence notice to ship)? **Decided (D31): system fonts.**
+3. **Instance label.** A new optional `CIRAK_DASHBOARD_LABEL` (recommended, default none), or show the host name?
+   **Decided (D31): `CIRAK_DASHBOARD_LABEL`, default none.** (The question text named `BRIDGE_DASHBOARD_LABEL`, the
+   name before ADR-026's prefix; D31 names `CIRAK_DASHBOARD_LABEL` and Q16 already recommended it, so the text now
+   carries D31's name; see A1.16.)
 4. **Token-expiry badge.** Fed by a read-only getter of the connector token's expiry (remote mode only, never the
-   token), recommended; or drop the badge from v2?
+   token), recommended; or drop the badge from v2? **Decided (D31): the badge, via a read-only getter.**
 5. **Executions page.** Add the `Source.Executions` reader (recommended; the data is already in
-   `DashboardSnapshot`), or keep executions inside the session detail only?
+   `DashboardSnapshot`), or keep executions inside the session detail only? **Decided (D31): the Executions page.**
 6. **Error-chip text colours.** Approve the A1 deviation (`#ef9a9a` dark, `#b71c1c` light) and the A1 light
    surfaces, or provide other values? **Recommended: approve**; the extracted values fail AA on three surfaces (A1.2).
+   **Decided (D31): the A1 error-chip colours and the A1 light surfaces.**
 7. **Diff view.** Unified only in S2 (recommended), with a split view as a later slice (a `?diff=split` GET link,
-   no JS)?
+   no JS)? **Decided (D31): unified diff first, split later.**
 8. **No-JS auto refresh.** Offer the opt-in `?refresh=N` meta refresh (recommended off by default), or only the
-   Refresh link?
+   Refresh link? **Decided (D31): the opt-in `?refresh=N`.**
 9. **CSS delivery.** Confirm the embedded stylesheet under `style-src 'self'` (no inline CSS, no hash, no nonce)
    instead of the task's "inline CSS with a hash/nonce". **Recommended: confirm the embedded stylesheet** (stricter,
-   and it keeps the ETag and the 1 s cache).
+   and it keeps the ETag and the 1 s cache). **Decided (D31): the embedded stylesheet under `style-src 'self'`.**
 10. **Source of truth.** Keep `docs/design/dashboard-v2.css` as the reference and copy it in S1 (recommended), or
     treat `assets/dashboard.css` as the only copy once S1 merges and delete the design file then?
+    **Decided (D31): `docs/design/dashboard-v2.css` is the reference, copied in S1.**
 11. **Wordmark and name.** "Cirak" as text only in the top bar and in each page `<title>` suffix; is a logo
     needed (an inline SVG would be allowed by the CSP)? **Recommended: text only** in v2; no logo asset.
+    **Decided (D31): text wordmark only.**
 12. **Relative time.** Relative text with the absolute time in `title` (plus the absolute time in the detail
     view), or absolute only? **Recommended: relative text with the absolute time in `title` and in the detail view.**
+    **Decided (D31): relative time with the absolute time in `title` and in the detail view.**
 13. **Menu behaviour.** A `<details>` menu closed below 60rem by a six-line script (recommended; open and usable
     without JS), or a CSS-only pattern that needs newer browser features (`::details-content`)?
+    **Decided (D31): the six-line `<details>` script.**
 14. **Hallmark in the loop.** Keep `sloplint --scope app` as a manual gate run by the author of each slice
     (recommended; it needs Node and is not a repository dependency), or add it to CI?
+    **Decided (D31): `sloplint --scope app` as a manual per-slice author gate.**
 15. **Label maps.** Approve the sentence-case labels of A1.1 (state, liveness reason, audit event and outcome) as
     the display vocabulary, with the raw word in `title`? **Recommended: approve** (sentence case is Hallmark Floor 9;
-    the raw closed word stays available).
+    the raw closed word stays available). **Decided (D31): the sentence-case label maps.**
 16. **Name of the instance-label variable.** `CIRAK_DASHBOARD_LABEL` (ADR-026's prefix; recommended, since ADR-026
     renames the whole `BRIDGE_*` family), or `BRIDGE_DASHBOARD_LABEL` until ADR-026 is accepted, with the legacy-name
     rule ADR-026 proposes? ADR-026 and ADR-027 are PROPOSED: A1 cross-references them and decides nothing for them.
+    **Decided (D31): the `CIRAK_` name (`CIRAK_DASHBOARD_LABEL`).** The decision is about A1's own variable; the
+    rename of the rest of the `BRIDGE_*` family and ADR-027's file stay with ADR-026 and ADR-027.
 
 ### A1.13 Hallmark sweep (task #469, 2026-11-21)
 
@@ -1288,8 +1310,9 @@ Reflex findings were fixed, not waived: off-scale spacing (gate 24b), missing `:
 wrapper), and three Finish-list warnings (balanced heads, typographic quotes, the missing meta description).
 
 **What did not change.** Everything in A1.0; the data model; the routes except the additive ones of A1.8; the
-reserved secondary rule; the contrast result (now 124 token pairs and 22 fill pairs, 0 failures, minimum text 4.62:1,
-minimum non-text 4.06:1; the two added pairs are text on the pressed primary fill, A1.15).
+reserved secondary rule; the contrast result (now 124 token pairs and 26 fill pairs, 0 failures, minimum text 4.62:1,
+minimum non-text 4.06:1; the two pairs added in A1.15 are text on the pressed primary fill, the four added in A1.16
+are the pressed fill against its surfaces).
 
 ### A1.14 Review #476 dispositions (task #477, 2026-11-21)
 
@@ -1353,3 +1376,24 @@ light): **6.18:1 dark, 6.70:1 light**, both tested; the pair joins the token set
 **Out of scope, recorded:** nothing new. #481's UNVERIFIED items (the pending-permission row, the archived outline
 token and the nested-tint stack are not recomputable from the tokens alone) stay listed in A1.2 as fills; the nested
 tint is still not a used pair.
+
+### A1.16 Acceptance record and review #486 dispositions (task #489, 2026-11-21)
+
+**Acceptance.** Marked ACCEPTED per maintainer decision D31 (2026-11-21, issue #117, and the planner comment on PR
+#465), after reviews C #476 and #481 and B #480 and #486 with no open P0-P2. A1.12 records Q1-Q16 as decided with the
+recommendations, worded as in D31. **One wording difference was found and resolved by D31's own text:** the text of
+Q3 named `BRIDGE_DASHBOARD_LABEL` (the name before ADR-026's prefix) while D31 answers Q3 with
+`CIRAK_DASHBOARD_LABEL` (and Q16, already in the text, recommended the same); Q3's text now carries D31's name. No
+other recommendation differed.
+
+Review #486 (Worker B, delta re-review of `229efc2`): PASS-WITH-NITS, four new P3. Every citation was re-checked on the
+head before editing and held.
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| #486 P3-1 pressed-cue ratio vs the 3:1 rule | **FIXED**: the 3:1 non-text pair is the pressed fill against the surface it sits on (dark 6.37 toolbar / 6.10 card, light 5.99 / 6.70), added to the fill list (**26 fill pairs**, 124 token pairs, 0 failures, minima unchanged); the normal-vs-pressed difference (1.26 / 1.37) is stated as a supplementary cue outside the asserted set | A1.2 (rationale 4, fill list), A1.13 |
+| #486 P3-2 dark `data-theme` has no `color-scheme: dark` | **FIXED**: `:root[data-theme="dark"] { color-scheme: dark; }` added to the CSS; noted in A1.6 JS-2 | the CSS, A1.6 |
+| #486 P3-3 `claudecode:` example not reachable | **FIXED**: `opencode:` today; `claudecode:` only once Claude executions are wired into the dashboard source (the source takes executions from the OpenCode `Manager`, `manager.go:408`) | A1.8 |
+| #486 P3-4 mock gaps | **FIXED**: the executions footnote says "includes sessions beyond the first 200 shown on the Sessions page"; the primary control is the Refresh **link** (the JS-3 no-JS fallback) and the toolbar lists it | the mock, A1.4 item 1 |
+
+**Out of scope, recorded:** nothing new.
