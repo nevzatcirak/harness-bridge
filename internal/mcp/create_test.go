@@ -400,7 +400,7 @@ func TestCreateIdempotentReplayAndConflict(t *testing.T) {
 	e := newCreateEnv(t, nil)
 	first := e.mustCreate(args{Root: e.rootA, Title: "same", IdempotencyKey: "key-idem-00001"})
 	again := e.mustCreate(args{Root: e.rootA, Title: "same", IdempotencyKey: "key-idem-00001"})
-	if first != again || e.count("POST") != 1 {
+	if unflagged(again) != first || !again.Replay || e.count("POST") != 1 {
 		t.Fatalf("replay: %+v vs %+v, %d POSTs", first, again, e.count("POST"))
 	}
 	for name, a := range map[string]args{
@@ -425,7 +425,7 @@ func TestCreateIdempotentReplayAndConflict(t *testing.T) {
 	// replay is looked up before any cap.
 	e3 := newCreateEnv(t, func(c *lifecycle.Config) { c.CreatePerHour = 1 })
 	a := e3.mustCreate(args{Root: e3.rootA, IdempotencyKey: "key-idem-00003"})
-	if b := e3.mustCreate(args{Root: e3.rootA, IdempotencyKey: "key-idem-00003"}); a != b {
+	if b := e3.mustCreate(args{Root: e3.rootA, IdempotencyKey: "key-idem-00003"}); unflagged(b) != a || !b.Replay {
 		t.Fatalf("replay at the cap: %+v vs %+v", a, b)
 	}
 	if _, err := e3.create(args{Root: e3.rootA, IdempotencyKey: "key-idem-00004"}); codeOf(err) != "SESSION_LIMIT" {
@@ -453,10 +453,19 @@ func TestCreateConcurrentIdenticalRequestsSendOnePost(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	close(release)
 	wg.Wait()
+	// Which goroutine becomes the owner is not fixed: exactly one answer is the first one (not a
+	// replay), the others are the recorded outcome returned again, and all are otherwise identical.
+	firsts := 0
 	for i := range outs {
-		if errs[i] != nil || outs[i] != outs[0] {
+		if errs[i] != nil || unflagged(outs[i]) != unflagged(outs[0]) {
 			t.Fatalf("request %d: %+v %v (first %+v)", i, outs[i], errs[i], outs[0])
 		}
+		if !outs[i].Replay {
+			firsts++
+		}
+	}
+	if firsts != 1 {
+		t.Fatalf("%d answers are not flagged as a replay, want exactly 1", firsts)
 	}
 	if e.count("POST") != 1 {
 		t.Fatalf("%d POSTs for one key", e.count("POST"))

@@ -27,8 +27,13 @@ const (
 	ReasonNotInRoot = "not_in_root" // a gitdir: or commondir target leaves the root
 )
 
-// Causes of a refusal: finer than Reason, never returned to a client, for the
-// audit line and tests.
+// CauseUnavailable is the one cause that is also told to a client (in the message of a FORBIDDEN
+// create_session refusal, without any path): a filesystem check could not complete, which is a
+// permission or storage problem and not a policy refusal (H5 live finding). It is a closed word.
+const CauseUnavailable = "unavailable"
+
+// Causes of a refusal: finer than Reason, never returned to a client (except CauseUnavailable),
+// for the audit line and tests.
 const (
 	causeNoRoot       = "no_root"          // outside every lifecycle root
 	causeMode         = "mode_not_granted" // the root lacks the needed mode
@@ -37,7 +42,7 @@ const (
 	causeSymlink      = "symlink"
 	causeNotDir       = "not_directory"
 	causeChanged      = "changed"
-	causeUnavailable  = "unavailable"
+	causeUnavailable  = CauseUnavailable
 	causeNoTopLevel   = "no_top_level" // ascent reached the root without a .git
 	causeAscentBound  = "ascent_bound" // more than 128 levels
 	causeDotGit       = "dot_git"      // .git is a symlink, unreadable or malformed
