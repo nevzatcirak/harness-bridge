@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -135,10 +136,16 @@ type rewriteProbes struct {
 func (r rewriteProbes) Run(ctx context.Context, inv Invocation) (Result, error) {
 	res, err := r.inner.Run(ctx, inv)
 	if err == nil && strings.HasPrefix(inv.Label, "canary_denied") {
-		res.Stdout = []byte(strings.ReplaceAll(string(res.Stdout), r.from, r.to))
+		out := strings.ReplaceAll(string(res.Stdout), r.from, r.to)
+		if r.from == textRuleDenied { // the Grep/Glob probes are refused with the Grep/Glob form of the rule text
+			out = grepGlobDeniedRe.ReplaceAllString(out, r.to)
+		}
+		res.Stdout = []byte(out)
 	}
 	return res, err
 }
+
+var grepGlobDeniedRe = regexp.MustCompile(`Permission to read \S+ has been denied\.`)
 
 // #412 P2-1: a probe that was not refused by the deny rule is never a PASS.
 func TestProbeNotRuleDeniedIsIncompleteNeverPass(t *testing.T) {

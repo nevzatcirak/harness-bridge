@@ -189,11 +189,11 @@ The attribution of the Grep/Glob text to the deny rule rests on the controls: th
 takes the list of directories the managed rule covers (`claudecode.DeniedDirs(plan)`: `HOME/.claude`,
 `HOME/.config/anthropic`, and `CLAUDE_CONFIG_DIR` in form B, the list `Preflight` keeps the controls out of) and
 classifies the Grep/Glob text as `rule` **only** when the whole sentence is `Permission to read <X> has been denied`
-(case-insensitive, one optional final period, surrounding white space) **and** `<X>` is exactly the probe's own
+(case-insensitive, one optional final period: a second period is not it; surrounding white space: whatever `strings.TrimSpace` trims, so Unicode white space such as a no-break space too) **and** `<X>` is exactly the probe's own
 target, a clean absolute path (no `..`, no `.` segment, no double or trailing slash), lying inside one of the denied
 directories. Any other text of that shape (another path, a parent, a sibling, the other denied directory, a
 control directory, a target that is not clean, a Read probe, an empty or malformed denied list) is `other`; the
-scope phrases are not consulted for it. The Read text is unchanged (no loosening). The driver already requires
+scope phrases are not consulted for it. The Read text is unchanged (no loosening); since the cleanup sweep (#434, review #424 P3-1) it counts only for a **Read** probe, so a Grep or Glob result that merely contains the phrase is `other`. The driver already requires
 **every control** to be `none` before any probe class counts (`control_refused_<class>` is checked before
 `probe_not_rule_denied_<class>`), so a probe's `rule` is never counted next to an unclean control; no per-pair rule
 was added. Run-3 behaviour of the real CLI (the same two texts, the paths, the order of the tool calls) is
@@ -206,10 +206,12 @@ the text or the path the CLI returns differs from run 2 (read the redacted histo
 line, which carries only the class).
 
 **R6 run 3 (2026-11-20 about 16:1xZ, run by the maintainer; recorded here from the Planning Desk's state log #117,
-not reproduced by the author).** Driver `54314e7` with `-tags live` (sha256 `ed973c79…`), form A test user
+not reproduced by the author).** Driver `54314e7` with `-tags live` (sha256 `ed973c79…4834`), form A test user
 `hbcanary`, Claude Code 2.1.325. **Item 1 (canary) PASS** `why=all_probes_denied_controls_read`, exit 0: 6/6 probes
 `denial_class=rule`, 6/6 controls `none`, no decoy leak, no file canary, no sink request, `mcp_servers=0` and
-`apiKeySource` `none` on 12/12 runs, all three observations made.
+`apiKeySource` `none` on 12/12 runs, all three observations made. That also settles review #424 P3-2 for the real CLI: a Grep/Glob
+probe is `rule` only when the whole bare sentence matched, so the four Grep/Glob probes of run 3 were answered with the bare
+sentence, not wrapped in `<tool_use_error>` (inferred from the relayed 6/6 `rule` and the classifier, not read from a stream).
 
 **R6 run 4 (2026-11-20 16:13Z, run by the maintainer; recorded here from the Planning Desk's issue #426, not
 reproduced by the author).** The same driver binary, `-items 2,4,5,6,7,8`. Item 2 OBSERVED (lag runs=5, min 469 /
@@ -236,8 +238,10 @@ without the `--add-dir <run home>` scope that item 1 got in #411.
   child check of item 4 now asks about the run's own session uuid.
 - **Item 4 verdict.** A signal that was sent while the wrapper did not exit or the child lives is **FAIL**
   (`signal_not_relayed_or_child_alive`); a run in which no signal was sent (no tool_use) is **INCOMPLETE**
-  `signal_not_sent_no_tool_use` (exit 3), never FAIL and never PASS; a FAIL of one run is not hidden behind an
-  unexercised other run. The SIGINT, 8 s, SIGTERM escalation is unchanged.
+  `signal_not_sent_no_tool_use` (exit 3), never FAIL and never PASS; a run in which a tool_use happened but the
+  wrapper exited before the signal fired is INCOMPLETE `signal_not_sent_after_tool_use` (the cleanup sweep #434, review
+  #428 P3-3: the label names the cause; when both happen the missing tool_use is the one named); a FAIL of one run
+  is not hidden behind an unexercised other run. The SIGINT, 8 s, SIGTERM escalation is unchanged.
 - **Item 6 verdict.** Marker shown: **FAIL** `managed_deny_did_not_apply`. No tool_use: **INCOMPLETE** `no_tool_use`.
   Tool_use without a denial entry and without the marker: **INCOMPLETE** `no_denial_no_marker`. A denial that is not
   the rule's: **INCOMPLETE** `denial_not_rule_<class>` (`scope`, `other`, `declined`, `none`). **PASS** needs a
@@ -254,17 +258,16 @@ without the `--add-dir <run home>` scope that item 1 got in #411.
   itself uses for item 1 (the same checks, the same wording), so the two cannot drift apart; item 1's behaviour is
   unchanged. The line is `run_home item=<4|6> preflight=pass|fail` (never a path).
 
-**Expected lines for run 5 (`-items 4,6`; UNVERIFIED).** `run_home item=4 preflight=pass` and `run_home item=6
-preflight=pass` first (before any `run` line; `preflight=fail` ends the item with no run). Then three `run` lines (`label=signal_interrupt`,
-`label=signal_terminated`, `label=managed_only_read`), each with `tool_uses=1` or more; two `signal` lines with
+**Expected lines for run 5 (`-items 4,6`; UNVERIFIED).** Each item's `run_home` line comes before that item's own `run` lines (`run_home item=4 preflight=pass`, the two item 4 `run` lines, `run_home item=6 preflight=pass`, the item 6 `run` line; with `-items 4,6` only item 4's line precedes every run; `preflight=fail` ends that item with no run). The three `run` lines are `label=signal_interrupt`,
+`label=signal_terminated`, `label=managed_only_read`, each with `tool_uses=1` or more; two `signal` lines with
 `wrapper_exited=true` and `child_gone=true` (`sent=interrupt`, plus `terminated` in the SIGINT run if the escalation
 fired before the wrapper exited); `verdict item=4 name=sudo_signal_relay result=PASS why=both_signals_relayed_child_gone`;
 `managed tool_use=true denial=true marker_shown=false denial_class=rule mcp_servers=0`; `verdict item=6
 name=managed_settings_in_p result=PASS why=managed_deny_applied_no_inline_rules`. **Whether `--add-dir <run home>` is
 honoured under `-p --permission-mode default --permission-prompts none`, whether the model calls the tool in a fresh
 session, the text of the refusals and the managed file's effect in these two items are all UNVERIFIED.** An INCOMPLETE
-with `signal_not_sent_no_tool_use` or `no_tool_use` means the model did not call the tool: repeat the run, do not
-read it as a product result. A `denial_not_rule_scope` means the scope was not granted for that read.
+with `signal_not_sent_no_tool_use` or `no_tool_use` means the model did not call the tool, and `signal_not_sent_after_tool_use` means it did but
+the wrapper exited before the signal fired: repeat the run, do not read it as a product result. A `denial_not_rule_scope` means the scope was not granted for that read.
 
 **Preconditions (all operator steps; the author edited no host file):**
 1. The isolated test user, its HOME and the wrapper/sudo that makes the child run as that user with that HOME

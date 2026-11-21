@@ -83,7 +83,8 @@ verdict lines and event types only.
    had `tool_uses=0` and `sent=none` (the model never called the tool). The two runs resumed one bootstrap session
    and ran outside the working directory without a scope. Each run is now a fresh `--session-id` session with the
    item 1 scope (`--add-dir <run home>`); a run without a tool_use is `INCOMPLETE`
-   `signal_not_sent_no_tool_use`, FAIL stays for "sent, but the wrapper did not exit or the child lives". Run 5
+   `signal_not_sent_no_tool_use` (or `signal_not_sent_after_tool_use` when a tool_use happened but the wrapper exited before the signal
+   fired), FAIL stays for "sent, but the wrapper did not exit or the child lives". Run 5
    (`-items 4,6`) is UNVERIFIED. NOT_EXERCISED as a PASS.
 5. **`--safe-mode` versus §8.3 item 2** on the pinned version. NOT_EXERCISED.
 6. **Managed settings applied in `-p`**, and the deny rule inside the managed file. **R6 run 4 (2026-11-20,

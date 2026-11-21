@@ -2,6 +2,11 @@
 
 package dashboard
 
+// Running as root weakens two things here (review #198 P3-3): a 0700 directory owned by ANOTHER user is not
+// exercised (the foreign-owner cases pass a different uid value to Open), and root ignores directory modes, so the
+// refusals that depend on permission bits are exercised through Lstat, not through a failing open. CI's identity is
+// not stated; run this package once as a non-root user (the sweep that added this note did, uid 65534).
+
 import (
 	"context"
 	"io"

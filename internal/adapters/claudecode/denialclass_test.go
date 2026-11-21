@@ -53,7 +53,9 @@ func TestDenialClassIsAClosedSetPerStream(t *testing.T) {
 		{"the tool ran and returned content", dcReadUse("t1") + dcResult("t1", false, "hbcanary-fedcba9876543210fedcba9876543210"), dcReadProbe, DenialNone},
 		{"an error text neither rule nor scope", dcReadUse("t1") + dcResult("t1", true, "ENOENT: no such file"), dcReadProbe, DenialOther},
 		{"the rule text without is_error is not a refusal", dcReadUse("t1") + dcResult("t1", false, dcRuleText), dcReadProbe, DenialNone},
-		{"grep denied by the rule", grepUse + dcResult("g1", true, dcRuleText), grep, DenialRule},
+		// The Read text is the rule only for a Read probe (cleanup sweep C, review #424 P3-1); a Grep probe is refused
+		// by the Grep/Glob shape (denialclass_grepglob_test.go), never by the Read phrase.
+		{"grep with the Read rule text is not the rule", grepUse + dcResult("g1", true, dcRuleText), grep, DenialOther},
 		{"glob refused for scope", globUse + dcResult("l1", true, dcScopeText), glob, DenialScope},
 		{"a tool_use that never got a result is neither a refusal nor a read", dcReadUse("t1"), dcReadProbe, DenialOther},
 		{"rule wins over scope when both appear", dcReadUse("t1") + dcResult("t1", true, dcScopeText+" "+dcRuleText), dcReadProbe, DenialRule},
