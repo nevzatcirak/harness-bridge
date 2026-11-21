@@ -19,6 +19,10 @@ var (
 	ErrLifecycleSymlink = errors.New("lifecycle path component is a symlink")
 )
 
+// openRoot is os.OpenRoot; a variable only so that a test can make the open fail on a host where the
+// tests run as root (root can open any directory, so a real permission failure cannot be built).
+var openRoot = os.OpenRoot
+
 // LifecycleRoots is the session-less, confined opener of ADR-022 section 3.2.
 //
 // It is a new security primitive and deliberately NOT an extension of Policy:
@@ -48,6 +52,15 @@ func NewLifecycleRoots(paths []string) (*LifecycleRoots, error) {
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("lifecycle root %q must be a directory", p)
 		}
+		// The request path opens every root with os.OpenRoot (Open below), which needs read and
+		// search permission on the directory. Do the same open now, so that a root the service
+		// user cannot open (live: only --x) refuses to start with a clear reason instead of making
+		// every create_session FORBIDDEN without one (H5 live finding F-H5-2).
+		probe, err := openRoot(p)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle root %q cannot be opened by the service user (it needs read and search permission, r-x, on the directory): %w", p, err)
+		}
+		_ = probe.Close()
 		for _, other := range l.paths {
 			// A duplicate or nested root would make "the root that contains a path"
 			// depend on list order and let an ascent cross into another root (#230 P3-3,
@@ -107,7 +120,7 @@ func (l *LifecycleRoots) Open(path string) (*os.Root, string, string, error) {
 	for ; i < len(l.paths) && l.paths[i] != base; i++ {
 	}
 	fsHook(base)
-	root, err := os.OpenRoot(base)
+	root, err := openRoot(base)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("lifecycle root unavailable: %w", err)
 	}
