@@ -8,16 +8,15 @@ response shapes are unverified against a live server.
 
 ## Enable it (unix socket, recommended)
 
-1. Create a private directory owned by the service user (mode exactly `0700`; not a symlink):
-
-   ```text
-   install -d -m 0700 -o <service-user> /run/harness-bridge/dashboard
-   ```
+1. Let systemd create a private directory: add `RuntimeDirectory=harness-bridge-dashboard` and
+   `RuntimeDirectoryMode=0700` to the Bridge unit (owned by the unit's `User=`, mode exactly `0700`,
+   removed when the unit stops). If you create it by hand instead, it must be a real directory
+   owned by the service user with mode exactly `0700` (not a symlink).
 
 2. Set one variable in the Bridge's environment (never both):
 
    ```text
-   BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge/dashboard/dash.sock
+   BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge-dashboard/dash.sock
    ```
 
 3. Restart the Bridge. A bad configuration (a directory that is not `0700`, a non-loopback address,
@@ -26,8 +25,9 @@ response shapes are unverified against a live server.
 
 The alternative `BRIDGE_DASHBOARD_ADDR=127.0.0.1:8765` (host exactly `127.0.0.1` or `::1`) serves
 TCP on the loopback interface only; requests must carry a `Host` of `localhost`, `127.0.0.1` or
-`[::1]`, and an `Origin` header from any other host is refused. The unix socket needs neither check:
-its directory mode is the fence, and no browser can reach it.
+`[::1]`, and an `Origin` header from any other host is refused. The unix socket skips the Host
+allowlist (its `0700` directory is the fence and no browser can reach it), but it refuses **any**
+request that carries an `Origin` header with 403: there is no browser origin for the socket.
 
 ## Reach it from your workstation (SSH forwarding, D17 Q1)
 
@@ -35,7 +35,7 @@ The host is a single-operator machine, so the dashboard has no token. Forward th
 instead of exposing a port (OpenSSH 6.7 or newer forwards a unix socket):
 
 ```text
-ssh -N -L 127.0.0.1:8765:/run/harness-bridge/dashboard/dash.sock <operator>@<bridge-host>
+ssh -N -L 127.0.0.1:8765:/run/harness-bridge-dashboard/dash.sock <operator>@<bridge-host>
 ```
 
 Then open `http://127.0.0.1:8765/` on the workstation. For the TCP transport forward the port
