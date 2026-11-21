@@ -1,15 +1,17 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: custom (by request)
+ * nav: top bar, five destinations, a menu under 60rem · signature: the per-session execution timeline with its liveness report and stall reason · states: empty, error, stale, full (loading is not applicable to a server-rendered page)
+ * axes: system face, dark default with a light theme, restrained accent · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P3 H4 E3 S4 R4 V3 · weakest: E, the mock has not been rendered in a browser; checked by sloplint and by the contrast script only */
+/* Hallmark · waive 7b · stamp surface: absolute, genre modern-minimal allows #fff paper, no tinted base is derived · the maintainer's light paper token is pure white and the dashboard keeps it as its card surface and as text on the primary colour */
 /*
- * Cirak dashboard visual system v2 (ADR-023 Amendment A1, PROPOSED): reference stylesheet.
+ * Cirak dashboard visual system v2 (ADR-023 Amendment A1, PROPOSED, with the Hallmark sweep A1.13):
+ * reference stylesheet. Source of truth for the tokens and the component shapes of A1; slice S1 turns
+ * it into the embedded internal/dashboard/assets/dashboard.css. The static mock links it.
  *
- * Source of truth for the tokens and the component shapes of A1. Slice S1 of A1 turns this file
- * into internal/dashboard/assets/dashboard.css (served by the dashboard itself: CSP style-src 'self').
- * The static mock docs/design/dashboard-v2-mock.html links it.
- *
- * Rules this file keeps (A1.6): no remote resource (no @import, no url() to a remote host, no
- * webfont), no JavaScript needed, no inline style attribute is expected from the markup.
- * Values marked "extracted" are the maintainer's design-token values (decision D28, values only,
- * no code or asset copied). Values marked "A1" were chosen by this amendment; A1.2 explains why
- * and lists the contrast ratios.
+ * Rules kept (A1.6): no remote resource, no @import, no webfont, no JavaScript needed, no inline style
+ * attribute expected from the markup. "extracted" = the maintainer's design-token value (D28, values
+ * only, no code or asset copied); "A1" = chosen by this amendment (A1.1, A1.2).
+ * Hallmark reference: https://github.com/nutlope/hallmark (MIT), rules cited in A1.13, not copied.
  */
 
 /* ---- tokens: dark is the default ---------------------------------------------------------- */
@@ -18,8 +20,8 @@
 
   /* surfaces (extracted) */
   --bg: #121212;
-  --surface-low: #1a1a1a;   /* nav */
-  --surface: #1e1e1e;       /* cards, top bar, table */
+  --surface-low: #1a1a1a;   /* toolbars and the second neutral */
+  --surface: #1e1e1e;       /* cards, top bar, tables */
   --surface-high: #242424;  /* menus */
 
   /* text (A1) */
@@ -28,7 +30,7 @@
   --hairline: #333333;      /* decorative separators only (A1) */
 
   /* brand and semantic colours (extracted) */
-  --primary: #82b1ff;
+  --primary: #82b1ff;       /* the primary action, the current selection, the focus ring: nothing else */
   --on-primary: #0d1b3e;
   --secondary: #b388ff;     /* RESERVED: only "pending / awaiting a human" (waiting_for_permission) */
   --ok: #81c784;
@@ -37,7 +39,7 @@
   --info: #64b5f6;
   --input-border: #8a8a8a;
 
-  /* chip text colours: the extracted tones, except error (A1 deviation, see A1.2) */
+  /* chip text colours: the extracted tones, except error (A1 deviation, A1.2) */
   --chip-ok: #81c784;
   --chip-info: #64b5f6;
   --chip-secondary: #b388ff;
@@ -52,24 +54,42 @@
   --tint-warn: rgb(255 183 77 / 0.14);
   --tint-neutral: rgb(224 224 224 / 0.14);
 
-  /* shape and density (extracted) */
+  /* spacing on a 4px scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* shape and density (extracted, except the control height: A1.13) */
   --radius-card: 12px;
   --radius-pill: 20px;
-  --nav-w: 248px;
+  --radius-nav: 18px;
   --chip-h: 22px;
-  --ctl-h: 30px;
-  --pad: 12px;
+  --ctl-h: 36px;            /* visual height, inside Hallmark's 32-40px app range */
+  --hit: 44px;              /* hit target for coarse pointers */
   --topbar-h: 48px;
+  --page-max: 96rem;
 
-  /* type: system stack only, no webfont download (A1) */
+  /* type: system stack, one scale at a ratio of about 1.17 (12, 14, 16.4, 19.2 px) */
   --font: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-0: 0.75rem;
+  --fs-1: 0.875rem;
+  --fs-2: 1.025rem;
+  --fs-3: 1.2rem;
+
+  /* motion is state only */
+  --dur-micro: 80ms;
+  --dur-short: 140ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #fafafa;            /* A1 */
-    --surface-low: #fafafa;
+    --surface-low: #f2f2f2;   /* A1 */
     --surface: #ffffff;       /* paper (extracted) */
     --surface-high: #ffffff;
     --text: #212121;          /* neutral (extracted) */
@@ -86,7 +106,7 @@
     --chip-ok: #1b5e20;
     --chip-info: #01579b;
     --chip-secondary: #6200ea;
-    --chip-error: #b71c1c;    /* A1 deviation, see A1.2 */
+    --chip-error: #b71c1c;    /* A1 deviation, A1.2 */
     --chip-warn: #9a4700;
     --chip-neutral: #212121;
     --tint-ok: rgb(27 94 32 / 0.14);
@@ -101,7 +121,7 @@
 /* explicit choice by the optional theme toggle (A1.6 JS-2) wins over the media query */
 :root[data-theme="light"] {
   --bg: #fafafa;
-  --surface-low: #fafafa;
+  --surface-low: #f2f2f2;
   --surface: #ffffff;
   --surface-high: #ffffff;
   --text: #212121;
@@ -131,18 +151,24 @@
 
 /* ---- base ----------------------------------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { scroll-padding-top: calc(var(--topbar-h) + 8px); }
+html { overflow-x: clip; accent-color: var(--primary); }
 body {
+  overflow-x: clip;
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.45 var(--font);
+  font: var(--fs-1) / 1.45 var(--font);
+  caret-color: var(--primary);
+  scrollbar-color: var(--input-border) var(--bg);
 }
-a { color: var(--primary); text-underline-offset: 2px; }
-code, .mono { font-family: var(--mono); font-size: 0.92em; }
-h1 { font-size: 20px; margin: 0 0 var(--pad); }
-h2 { font-size: 15px; margin: 0 0 8px; }
-h3 { font-size: 13px; margin: 0 0 6px; color: var(--text-muted); }
+::selection { background: var(--tint-info); color: var(--text); }
+a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:active { background: var(--tint-neutral); }
+code, .mono { font-family: var(--mono); font-size: var(--fs-0); }
+time, .num { font-variant-numeric: tabular-nums; }
+h1 { font-size: var(--fs-3); line-height: 1.25; margin: 0 0 var(--space-3); text-wrap: balance; }
+h2 { font-size: var(--fs-2); line-height: 1.3; margin: 0 0 var(--space-2); text-wrap: balance; }
+.label { font-size: var(--fs-0); color: var(--text-muted); }
 .muted { color: var(--text-muted); }
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
@@ -150,77 +176,79 @@ h3 { font-size: 13px; margin: 0 0 6px; color: var(--text-muted); }
 }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .skip {
-  position: absolute; left: 8px; top: -100px; z-index: 10;
+  position: absolute; left: var(--space-2); top: -100px; z-index: 10;
   background: var(--primary); color: var(--on-primary);
-  padding: 6px 12px; border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-pill);
 }
-.skip:focus { top: 8px; }
+.skip:focus { top: var(--space-2); }
+.wrap { max-width: var(--page-max); margin-inline: auto; padding-inline: var(--space-4); }
 
-/* ---- layout: top bar, left nav, content ----------------------------------------------------- */
-.app {
-  display: grid;
-  grid-template-columns: var(--nav-w) minmax(0, 1fr);
-  grid-template-rows: var(--topbar-h) 1fr;
-  grid-template-areas: "top top" "nav main";
-  min-height: 100vh;
+/* ---- shell: a top bar, five destinations, a menu under 60rem -------------------------------- */
+.topbar { background: var(--surface); border-bottom: 1px solid var(--hairline); }
+.bar { display: flex; align-items: center; gap: var(--space-3); min-height: var(--topbar-h); flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: var(--fs-2); }
+.bar .spacer { flex: 1; }
+.menu > summary { display: none; list-style: none; cursor: pointer; }
+.menu ul { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-1); }
+.menu a {
+  display: inline-flex; align-items: center; min-height: var(--ctl-h); padding: 0 var(--space-4);
+  border-radius: var(--radius-nav); color: var(--text); text-decoration: none;
+  transition: background-color var(--dur-micro) var(--ease);
 }
-.topbar {
-  grid-area: top; position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 16px; background: var(--surface);
-  border-bottom: 1px solid var(--hairline);
-}
-.brand { font-weight: 700; font-size: 16px; letter-spacing: 0.02em; }
-.topbar .spacer { flex: 1; }
-.nav {
-  grid-area: nav; background: var(--surface-low);
-  border-right: 1px solid var(--hairline); padding: var(--pad);
-}
-.nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.nav a {
-  display: flex; align-items: center; min-height: 36px; padding: 0 14px;
-  border-radius: 18px; color: var(--text); text-decoration: none;
-}
-.nav a:hover { background: var(--tint-neutral); }
-.nav a[aria-current="page"] {
-  background: var(--primary); color: var(--on-primary); font-weight: 600;
-}
-main { grid-area: main; padding: 16px; min-width: 0; }
-.cards { display: grid; gap: var(--pad); }
-.cols { display: grid; gap: var(--pad); grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.menu a:hover { background: var(--tint-neutral); }
+.menu a:active { background: var(--hairline); }
+.menu a[aria-current="page"] { background: var(--primary); color: var(--on-primary); font-weight: 600; }
+main { padding-block: var(--space-4) var(--space-6); min-width: 0; }
+.cards { display: grid; gap: var(--space-3); }
 
-@media (max-width: 900px) {
-  .app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "nav" "main"; grid-template-rows: var(--topbar-h) auto 1fr; }
-  .nav { border-right: 0; border-bottom: 1px solid var(--hairline); padding: 8px; }
-  .nav ul { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; }
+@media (max-width: 60rem) {
+  .menu { flex-basis: 100%; order: 5; }
+  .menu > summary {
+    display: inline-flex; align-items: center; min-height: var(--ctl-h); padding: 0 var(--space-4);
+    border: 1px solid var(--input-border); border-radius: var(--radius-pill);
+  }
+  .menu ul { flex-direction: column; margin-top: var(--space-2); }
 }
 
 /* ---- card, key/value, toolbar --------------------------------------------------------------- */
 .card {
   background: var(--surface); border: 1px solid var(--hairline);
-  border-radius: var(--radius-card); padding: var(--pad); min-width: 0;
+  border-radius: var(--radius-card); padding: var(--space-3); min-width: 0;
 }
 .card > :last-child { margin-bottom: 0; }
-.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; }
-.kv dt { color: var(--text-muted); font-size: 12px; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; }
+.kv dt { color: var(--text-muted); font-size: var(--fs-0); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;
+  margin: 0 0 var(--space-2); padding: var(--space-2); background: var(--surface-low);
+}
 .input, .select {
-  height: var(--ctl-h); padding: 0 10px; color: var(--text); background: var(--surface);
-  border: 1px solid var(--input-border); border-radius: 8px; font: inherit;
+  height: var(--ctl-h); padding: 0 var(--space-2); color: var(--text); background: var(--surface);
+  border: 1px solid var(--input-border); border-radius: var(--space-2); font: inherit;
 }
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; min-height: var(--ctl-h); min-width: 30px;
-  padding: 0 14px; border: 1px solid var(--input-border); border-radius: var(--radius-pill);
+  display: inline-flex; align-items: center; justify-content: center; min-height: var(--ctl-h); min-width: var(--ctl-h);
+  padding: 0 var(--space-4); border: 1px solid var(--input-border); border-radius: var(--radius-pill);
   background: transparent; color: var(--text); font: inherit; cursor: pointer; text-decoration: none;
+  transition: background-color var(--dur-micro) var(--ease);
 }
+.btn:hover { background: var(--tint-neutral); }
+.btn:active { background: var(--hairline); }
 .btn--primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
+.btn--primary:hover { background: var(--primary); }
+.btn:disabled, .input:disabled, .select:disabled, .btn[aria-disabled="true"] {
+  color: var(--text-muted); border-color: var(--hairline); cursor: not-allowed; background: transparent;
+}
 .btn[hidden] { display: none; }
+@media (pointer: coarse) {
+  .btn, .input, .select, .menu a, .menu > summary { min-height: var(--hit); }
+}
 
 /* ---- chips and badges: text on a 0.14 tint of the chip's own colour ------------------------- */
 .chip, .badge {
-  display: inline-flex; align-items: center; gap: 4px; height: var(--chip-h); padding: 0 8px;
-  border-radius: 11px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  display: inline-flex; align-items: center; height: var(--chip-h); padding: 0 var(--space-2);
+  border-radius: 11px; font-size: var(--fs-0); font-weight: 600; white-space: nowrap;
   color: var(--chip-neutral); background: var(--tint-neutral);
 }
 .chip--ok { color: var(--chip-ok); background: var(--tint-ok); }
@@ -229,50 +257,48 @@ main { grid-area: main; padding: 16px; min-width: 0; }
 .chip--error { color: var(--chip-error); background: var(--tint-error); }
 .chip--warn { color: var(--chip-warn); background: var(--tint-warn); }
 .chip--outline { background: transparent; border: 1px solid currentColor; }
-.badge { height: 20px; border-radius: 4px; font-weight: 500; }
+.badge { height: 20px; border-radius: var(--space-1); font-weight: 500; }
 @media (forced-colors: active) {
   .chip, .badge { border: 1px solid CanvasText; }
 }
 
 /* ---- tables --------------------------------------------------------------------------------- */
-.table-wrap { overflow: auto; max-height: calc(100vh - 14rem); border-radius: var(--radius-card); }
+.table-wrap { overflow: auto; max-height: calc(100vh - 14rem); }
 table { width: 100%; border-collapse: collapse; }
-caption { text-align: left; color: var(--text-muted); padding-bottom: 6px; }
-th, td { padding: 6px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--hairline); }
+caption { text-align: left; color: var(--text-muted); padding-bottom: var(--space-2); }
+th, td { padding: var(--space-2) var(--space-3); text-align: left; vertical-align: middle; border-bottom: 1px solid var(--hairline); }
 thead th {
   position: sticky; top: 0; background: var(--surface); z-index: 1;
-  font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap;
+  font-size: var(--fs-0); font-weight: 600; color: var(--text-muted); white-space: nowrap;
 }
 tbody tr:hover { background: var(--tint-neutral); }
-td.path { max-width: 28rem; font-family: var(--mono); font-size: 12px; }
+td.path { max-width: 28rem; font-family: var(--mono); font-size: var(--fs-0); }
 td.path span { overflow-wrap: anywhere; }
 
-/* ---- timeline, liveness, pending permission ------------------------------------------------- */
-.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.timeline li { display: grid; grid-template-columns: max-content max-content 1fr; gap: 10px; align-items: center; }
-.liveness { border-left: 4px solid var(--info); }
-.liveness--stall { border-left-color: var(--warn); }
-.perm { border-left: 4px solid var(--secondary); background: var(--tint-secondary); }
-/* a chip inside the tinted panel must not stack a second tint (dark: 3.94, below 4.5): outline instead */
-.perm .chip { background: transparent; border: 1px solid currentColor; }
+/* ---- the signature: execution timeline with its liveness report ------------------------------ */
+.timeline th, .timeline td { vertical-align: top; }
+.timeline .detail td { padding-block: var(--space-2) var(--space-3); background: var(--surface-low); }
+.timeline .perm-row td { background: var(--tint-secondary); }
+.report { margin: 0 0 var(--space-2); }
+.perm-row .chip { background: transparent; border: 1px solid currentColor; }
 
 /* ---- diff ----------------------------------------------------------------------------------- */
-.files { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; font-family: var(--mono); font-size: 12px; }
+.files { list-style: none; margin: 0 0 var(--space-2); padding: 0; display: grid; gap: var(--space-1); font-family: var(--mono); font-size: var(--fs-0); }
 .stat-add { color: var(--ok); }
 .stat-del { color: var(--error); }
-details.file { border: 1px solid var(--hairline); border-radius: 8px; margin-bottom: 8px; }
-details.file > summary { cursor: pointer; padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
-pre.diff { margin: 0; overflow-x: auto; font: 12px/1.5 var(--mono); border-top: 1px solid var(--hairline); }
-pre.diff .ln { display: block; padding: 0 10px; white-space: pre; }
+details.file { border-top: 1px solid var(--hairline); }
+details.file > summary { cursor: pointer; padding: var(--space-2) var(--space-3); font-family: var(--mono); font-size: var(--fs-0); }
+pre.diff { margin: 0; overflow-x: auto; font: var(--fs-0) / 1.5 var(--mono); }
+pre.diff .ln { display: block; padding: 0 var(--space-3); white-space: pre; }
 pre.diff .add { background: var(--tint-ok); }
 pre.diff .del { background: var(--tint-error); }
 pre.diff .hunk { color: var(--text-muted); }
 
-/* ---- states: empty, error, 503, 404 --------------------------------------------------------- */
-.state { text-align: center; padding: 32px 16px; }
-.state h2 { font-size: 16px; }
-.state--error { border-left: 4px solid var(--error); text-align: left; }
-.state--warn { border-left: 4px solid var(--warn); text-align: left; }
+/* ---- states: empty, error, 503, 404, stale -------------------------------------------------- */
+.state { padding: var(--space-6) var(--space-4); text-align: center; }
+.state--error { border: 1px solid var(--error); text-align: left; padding: var(--space-4); }
+.state--warn { border: 1px solid var(--warn); text-align: left; padding: var(--space-4); }
+.banner { padding: var(--space-2) var(--space-3); border: 1px solid var(--warn); border-radius: var(--space-2); margin-bottom: var(--space-2); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
