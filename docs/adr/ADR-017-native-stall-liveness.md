@@ -248,69 +248,77 @@ All tests use the existing fake runner in `internal/execution`.
 - Changes to ADR-010/011 text. If (a) is accepted, it adds optional output
   fields only.
 
-## Amendment A2 (PROPOSED, 2026-11-21): stall and degradation taxonomy v2 (network, provider, hung subprocess)
+## Amendment A2 (PROPOSED, revised 2026-11-21 after reviews #458/#459): stall and degradation taxonomy v2
 
-Status: **PROPOSED, not accepted.** This amendment answers the maintainer need of 2026-11-21: in
-daily OpenCode / Claude Code use the network drops, the LLM provider connection fails or keeps
-retrying, or a child process the agent started hangs or runs much longer than expected, and the
-supervisor (Claude Chat, through the Bridge) must be able to tell these apart to choose wait,
-interrupt or follow-up. It is additive to the accepted A1 (option (a)); until it is accepted the
-Bridge serves exactly the A1 block. It preserves ADR-010 and ADR-011: **report-only**; no automatic
-Abort, resubmission, guard release, new idempotency key or inferred success; recovery from a
-confirmed stall remains the ADR-010 fenced procedure.
+Status: **PROPOSED, not accepted.** This amendment answers the maintainer need of 2026-11-21: network
+drops, a provider that fails or keeps retrying, and a hung or long-running child tool must be
+distinguishable so the supervisor can wait, interrupt or follow up. It is additive to the accepted A1
+(option (a)); until accepted the Bridge serves exactly A1. It preserves ADR-010/011: **report-only**;
+no automatic Abort, resubmission, guard release, new key or inferred success; recovery from a
+confirmed stall remains the ADR-010 fenced procedure. A2 does **not** take the maintainer decisions in
+A2.14 Q1 (retry vs `stall_suspected`) or Q3 (per-execution thresholds); both are isolated below.
+
+*Revision note (for the delta review): the first draft's claims about OpenCode network attribution,
+the `send_prompt` override, `HARNESS_UNREACHABLE`, retry semantics vs A1 test 3, a stale running tool
+and the dropped wedged-retry case were wrong or overclaimed; the affected sections now state the
+limits and the open decisions, and the code-level citations were re-checked at `e2ac772`.*
 
 ### A2.1 Pinned sources and what the Bridge reads today
 
 **OpenCode 1.19.4**, `anomalyco/opencode` tag `v1.19.4`, revision
-`148842ef7cb1bc34192b3fff57d0f9721ab9c801` (the revision A1 §2 already uses). Additional facts
-read at that revision on 2026-11-21 (paths relative to the repository root):
+`148842ef7cb1bc34192b3fff57d0f9721ab9c801` (the revision A1 §2 uses). Facts read at that revision on
+2026-11-21 (paths relative to the repository root):
 
 | Fact | Source | Status |
 | --- | --- | --- |
 | `session.status` retry carries `attempt`, `message`, `action{reason, provider, title, message, label, link?}`, `next` | `packages/schema/src/session-status-event.ts:13-28` | verified (source) |
-| `RetryReason` is `"free_tier_limit" | "account_rate_limit" | (string & {})`: an **open** string; the two named values come from usage-limit bodies | `packages/opencode/src/session/retry.ts` (`RetryReason`, `Retryable`) | verified (source) |
-| Retryable failures are classified by the retry policy from typed `APIError` (status code, isRetryable, message, headers, body) and from message patterns; a non-retryable error is not retried | `packages/opencode/src/session/retry.ts` (`retryable`, `policy`) | verified (source) |
-| Assistant error union: `ProviderAuthError{providerID,message}`, `UnknownError{message,ref?}`, `MessageOutputLengthError`, `MessageAbortedError`, `StructuredOutputError{message,retries}`, `ContextOverflowError`, `ContentFilterError`, `APIError{message,statusCode?,isRetryable,responseHeaders?,responseBody?,metadata?}` | `packages/schema/src/v1/session.ts` ("AssistantErrorSchema", `Assistant.error`) | verified (source) |
-| The assistant part union includes a `retry` part `{type:"retry", attempt, error: APIError, time.created}` (whether the server persists it while a retry is pending is UNVERIFIED; A2 uses it only if present) | `packages/schema/src/v1/session.ts` (`RetryPart`) | verified (source) |
-| Tool part state: `pending`, `running{input,title?,metadata?,time.start}`, `completed{…,time.start/end}`, `error{…,time.start/end}`; a running tool has **no output timestamp** | `packages/schema/src/v1/session.ts` (`ToolStateRunning`, `ToolPart`) | verified (source) |
+| `RetryReason` is `"free_tier_limit" | "account_rate_limit" | (string & {})`: an **open** string; the retry policy sets `action` only for the two usage-limit bodies, every other retry gets the free-text `message` only | `packages/opencode/src/session/retry.ts` (`RetryReason`, `retryable`, `policy`) | verified (source) |
+| The pinned retry policy stops above `RETRY_MAX_RETRIES = 5`; text patterns classify a retryable error. An operator may raise the bound in other configurations (UNVERIFIED here) | `packages/opencode/src/session/retry.ts` | verified for the constant; no unbounded mode in the pinned source |
+| Assistant error union: `ProviderAuthError{providerID,message}`, `UnknownError{message,ref?}`, `MessageOutputLengthError`, `MessageAbortedError`, `StructuredOutputError{message,retries}`, `ContextOverflowError`, `ContentFilterError`, `APIError{message,statusCode?,isRetryable,responseHeaders?,responseBody?,metadata?}` | `packages/schema/src/v1/session.ts` (`AssistantErrorSchema`, `Assistant.error`) | verified (source) |
+| A `retry` part is in the assistant part union: `{type:"retry", attempt, error: APIError, time.created}`. Whether the server persists it **while** a retry is pending is UNVERIFIED (Q7) | `packages/schema/src/v1/session.ts` (`RetryPart`) | verified (source) for the schema |
+| Tool state: `pending` (no time), `running{input,title?,metadata?,time.start}`, `completed{…,time.start/end}`, `error{…,time.start/end}`; a running tool has **no output timestamp** | `packages/schema/src/v1/session.ts` (`ToolStateRunning`, `ToolPart`) | verified (source) |
 | `/event` carries `session.status`, `session.error`, `message.part.updated`, `message.part.delta` (A1 N12) | `packages/schema/src/session-status-event.ts`, `…/v1/session.ts` | verified (source); not consumed by the Bridge |
 | The Bridge reads `Status{type,attempt,next}` only; `message`/`action` are dropped | `internal/adapters/opencode/client.go:97-104` | verified (code) |
 | Liveness progress uses assistant `time.created/completed` and text/reasoning/tool part timestamps; unknown part types (including `retry`) are ignored | `internal/execution/liveness.go:80-115,151-170` | verified (code) |
 | The assistant error **name** is read for terminal proof (`MessageAbortedError`→interrupted, any other named error→failed) | `internal/execution/reconcile.go:440-464` | verified (code) |
+| `native_status=unavailable` is set on any failed probe **and** on an identity mismatch (`IDENTITY_MISMATCH`); an unrecognized status type also maps to `unavailable` | `internal/execution/reconcile.go:229-235,340-344`; `internal/execution/liveness.go:139-140` | verified (code): a **dedicated** read-failure condition is needed for A2.4 item 1 |
 | The probe already reads status, history and permissions; A2 adds no native read | `internal/execution/reconcile.go:216-345` | verified (code) |
 
 **Claude Code 2.1.325.** The runner already spawns the CLI with `--output-format stream-json
---verbose` (`internal/adapters/claudecode/argv.go:160-164`), so the `system/api_retry` event is
-already on the stream. The decoder keeps `Event.Type`/`Subtype` but parses only `system/init` and
-`result` (`internal/adapters/claudecode/decoder.go:82-91,180-215`); the state machine ignores other
-system subtypes (`internal/adapters/claudecode/state.go:218-244`); no liveness is served for a
-Claude execution. The event fields below are from the public reference
-`code.claude.com/docs/en/headless` (retrieved 2026-11-21), not from the pinned 2.1.325 binary:
+--verbose` (`internal/adapters/claudecode/argv.go:160-164`), so `system/api_retry` is already on the
+stream. `DecodeLine` parses `system/init`, `result`, and assistant `tool_use` / user `tool_result`
+blocks (`internal/adapters/claudecode/decoder.go:180-225`); `Block` carries the tool name and input
+but **no tool_use id**, so S4 must add the id to pair parallel tools (P3-1). The state machine ignores
+other system subtypes (`state.go:218-244`). The event fields are from the public reference
+`code.claude.com/docs/en/headless` (retrieved 2026-11-21), not the pinned binary (UNVERIFIED for 2.1.325):
 
 | `system/api_retry` field | Type | Use |
 | --- | --- | --- |
-| `attempt` | integer, from 1 | retry count |
+| `attempt` | integer from 1 | retry count |
 | `max_retries` | integer | bound for this failure (may be lower than the session budget) |
 | `retry_delay_ms` | integer | delay before the next attempt |
-| `error_status` | integer or null | HTTP status; **null means no HTTP response** (connection-level) |
-| `error` | enum string | documented categories: `rate_limit`, `server_error`, `authentication_failed`, `billing_error`, `invalid_request`, `max_output_tokens`, `unknown` |
-| `uuid` | string | event identity |
+| `error_status` | integer or null | HTTP status; **null = no HTTP response** (connection-level) |
+| `error` | enum string (documented, open in practice) | `rate_limit`, `server_error`, `authentication_failed`, `billing_error`, `invalid_request`, `max_output_tokens`, `unknown`; other observed/documented values include `overloaded`, `oauth_org_not_allowed`, `account_on_hold`, `model_not_found`, `cloud_credential_error` (map per A2.5) |
+| `no_response` | object, optional (docs: v2.1.261+) | `{waited_ms, retry_wait_ms}`: a structured "no response in time" signal (better than `error_status=null`) |
+| `session_id`, `uuid` | strings | identity |
 
-Marked **UNVERIFIED**: the exact 2.1.325 field set (docs may drift), and third-party reports that an
-`apiKeyHelper` 401/403 can be retried silently for the first two attempts (if true, absence of
-`api_retry` is never evidence of no retry). The mapping in A2.7 is lenient for that reason.
+The official page **documents** the silent first two `apiKeyHelper` 401/403 retries (v2.1.246+), so it
+is not a third-party claim; it does not apply to Bridge-run executions, whose init verification
+already requires `apiKeySource=none` (`internal/adapters/claudecode/state.go` `checkInit`). The
+absence of `api_retry` is still not evidence of a healthy provider for a CLI run outside that check;
+the ADR keeps the field set and 2.1.325 behavior UNVERIFIED.
 
-### A2.2 What v1 cannot tell apart (gap table against the maintainer need)
+### A2.2 What A1 cannot tell apart (gap table against the maintainer need)
 
-| Case | v1 signal today | v2 report | Still impossible |
+| Case | A1 signal today | A2 report | Still impossible |
 | --- | --- | --- | --- |
-| Network down (Bridge→provider, while running) | status `retry` with a free-text message, or `busy`, or `unavailable`; A1 reports `NO_PROGRESS` only after 2 min | `PROVIDER_RETRYING` (retry status) or `PROVIDER_ERROR` (typed error without terminal proof), `cause_hint=network` only when the structured status is absent (OpenCode `APIError.statusCode` missing) or `error_status=null` (Claude) | Without a status code, "network" vs an opaque 5xx can be indistinguishable from the API payload; the hint is a class, not a diagnosis |
-| Provider retrying | `native_status=retry`, `retry_attempt`, `retry_next_at`; no reason | `PROVIDER_RETRYING` + `cause_hint` from `action.reason` or the typed error; `retry_max` for Claude | The total retry budget is not exposed by OpenCode; a "watchdog" mode can retry for hours (config-dependent) |
-| Provider hard error | terminal `failed` if the message carries a named error; otherwise `unknown`/`MONITOR_EXPIRED` (R3a) | If terminal: unchanged. If no terminal proof: `PROVIDER_ERROR` + `cause_hint` + `cause_source` | Whether an error without terminal evidence means the native turn ended: only a live repro (R3a N5/N8) would tell |
-| Hung tool child | `busy` + part timestamps; `NO_PROGRESS` at 2 min, which mislabels a legitimately long tool | `TOOL_RUNNING_LONG{tool_name, running_since}`; `NO_PROGRESS` suppressed while a tool runs | No native liveness inside a tool: no output/heartbeat timestamp for a running tool (OpenCode schema has none); "hung" vs "busy build" is intent |
-| Legitimately long tool (a build) | same as above | same signal, plus the per-execution threshold override; the tool name and elapsed time let a human decide | The Bridge must not guess intent; a low threshold + long build still shows `TOOL_RUNNING_LONG` (advisory) |
-| Model thinking a long time | `busy` + no completed part; `NO_PROGRESS` at 2 min | `NO_PROGRESS` (unchanged class; the reason names only "no progress") | No signal distinguishes thinking from a hung model/provider call in either harness; state the ambiguity rather than invent one |
-| Bridge→harness connection lost | `native_status=unavailable`; no reason; a single failed probe clears the block | `HARNESS_UNREACHABLE` after a sustained unavailable window, with `unavailable_since` | Local/remote cause (harness down, socket, Bridge permission, network) is not in the error surface; no retry can prove the old turn ended |
+| Network down (OpenCode, while a prompt runs) | status `retry` with a **free-text** message (no `action` for a network failure), or `busy`, or `unavailable` | A **status-only** retry is `PROVIDER_RETRYING`/`degradation_reason` with `cause_hint=unknown`; `network` requires a structured no-HTTP signal: an assistant `APIError` with no `statusCode`, or a persisted `retry` part (Q7, UNVERIFIED), or Claude `error_status=null`/`no_response` | **Option 1 does not distinguish network from provider for the common OpenCode status-only retry** until Q7 is answered; A2 says so instead of overclaiming |
+| Provider retrying | `native_status=retry`, attempt/next; no reason | `PROVIDER_RETRYING` (degradation), attempt/next/max, `retry_overdue` when the retry is past due and the attempt is not advancing; `cause_hint` from a structured source only | The total retry budget is not exposed by OpenCode (the pinned constant is 5, but config-dependent, UNVERIFIED); the reason does not prove a wedge by itself |
+| Provider hard error | terminal `failed` if the assistant carries a named error; otherwise `unknown`/`MONITOR_EXPIRED` (R3a) | Terminal unchanged; if no terminal proof, a **narrow** `PROVIDER_ERROR` from a typed error (assistant error without `time.completed`, or a `retry` part) with a cause | Whether an error without terminal evidence means the turn ended is UNVERIFIED (R3a N5/N8); R3a itself persisted **no** error |
+| Hung tool child | `busy` + part timestamps; A1 `NO_PROGRESS` at 2 min (also for a legitimate long tool) | `TOOL_RUNNING_LONG{tool_name, running_since}` only when `native_status=busy` and the tool is ≥ `tool_long_s`; any running tool suppresses `NO_PROGRESS` | No native liveness inside a tool (no output timestamp); a stale running part after a harness restart (status absent) is **not** reported as "tool running" — it stays with A1's shape |
+| Legitimately long tool (build) | same | the same signal, plus the operator-configured threshold; the tool name/elapsed time let a human decide | The Bridge must not guess intent; a long build still shows a degradation badge |
+| Model thinking a long time | `busy` + no completed part; `NO_PROGRESS` at 2 min | `NO_PROGRESS` (no distinct signal) | Neither harness distinguishes thinking from a hung model/provider call |
+| Bridge→harness connection lost | `native_status=unavailable` (also set on identity mismatch/unknown type) | `HARNESS_UNREACHABLE` only from a **dedicated native-read failure** (not identity, not unknown type), after the window, with `unavailable_since` stored on the run | The error surface does not name the local/remote cause; no retry proves the old turn ended |
 
 No case gains an automatic action.
 
@@ -320,135 +328,163 @@ All A1 fields keep their names and meanings. New optional fields:
 
 | Field | Type / values | Meaning |
 | --- | --- | --- |
-| `stall_reason` | A1 values plus `PROVIDER_RETRYING`, `PROVIDER_ERROR`, `TOOL_RUNNING_LONG`, `HARNESS_UNREACHABLE` | The one reason this probe reports; closed set; `stall_suspected` stays `true` iff a reason is present |
-| `cause_hint` | `network`, `rate_limit`, `auth`, `server`, `unknown` | Coarse cause of a provider problem, derived as in A2.5; never free text |
-| `cause_source` | `structured`, `bounded_text`, `none` | Provenance of `cause_hint`; v2 (Option 1) emits only `structured` or `none` |
+| `degradation_reason` | `PROVIDER_RETRYING`, `PROVIDER_ERROR` (Variant A) | A provider problem that is not a stall; `degraded` is true iff present. Variant B moves these to `stall_reason` — see Q1 |
+| `degraded` | bool (Variant A) | true iff `degradation_reason` is present; never a terminal state |
+| `stall_reason` | A1 values plus `TOOL_RUNNING_LONG`, `HARNESS_UNREACHABLE` (and `PROVIDER_*` in Variant B) | A stall reason; A1 `stall_suspected` semantics are unchanged in Variant A |
+| `retry_overdue` | bool, optional | true when the current retry's `next` is past by more than `max(30 s, no_progress_s)` **and** the attempt number has not advanced for at least `no_progress_s`; a changed attempt or a future `next` clears it |
+| `cause_hint` | `network`, `rate_limit`, `auth`, `server`, `unknown` | Coarse provider cause from structured fields only (A2.5); never free text |
+| `cause_source` | `structured`, `none` (v2 Option 1); `bounded_text` only if Q5's Option 2 is accepted | Provenance; a structured field that maps to `unknown` is still `structured` |
 | `retry_max` | integer, optional | Claude `max_retries`; absent for OpenCode (not exposed) |
-| `tool` | object, optional | `{tool_name, running_since, last_output_at?}`; the oldest running tool of the newest correlated assistant |
+| `tool` | object, optional | `{tool_name, running_since}` of the oldest running tool of the newest correlated assistant; **only when `native_status=busy`** |
 | `tool.tool_name` | string ≤64 bytes, `[A-Za-z0-9._-]` or `other` | Native tool name, sanitized; untrusted display data, never authority |
 | `tool.running_since` | RFC3339 (native `state.time.start`, never after `observed_at`) | When the running tool started |
-| `tool.last_output_at` | RFC3339, optional | **Never present for OpenCode 1.19.4** (no such field); Claude: omitted (no per-tool output timestamps without partial messages) |
-| `unavailable_since` | RFC3339, optional | First observation of the current `unavailable` window (Bridge clock) |
-| `thresholds` | object | `{no_progress_s, tool_long_s}` actually applied to this execution |
-| `progress_source` | `native`, `bridge` | OpenCode: `native`; Claude: `bridge` (no native per-event timestamps in the stream) |
+| `unavailable_since` | RFC3339, optional | First observation of the current **native-read failure** window (Bridge clock), stored on the execution record, not in the per-probe block; cleared by a successful probe |
+| `thresholds` | object | `{no_progress_s, tool_long_s}` actually applied (operator-configured in Option 1) |
+| `progress_source` | `native`, `bridge` | OpenCode: `native`; Claude: `bridge` |
 
-The block is still absent before submission and on terminal executions, process-local, and never
-changes `state`, `ended_at`, `unresolved`, `error`, the guard or idempotency. A client that does not
-know the fields is unaffected (the object is already additive).
+`tool.last_output_at` is **removed**: neither harness exposes a per-tool output timestamp (A1 N11 is
+per-part `time.start/end`; a running tool has only `start`). A stale running part with status absent
+is not a `TOOL_RUNNING_LONG` (A2.4 item 6).
+
+The block is absent before submission and on terminal executions, process-local, and never changes
+`state`, `ended_at`, `unresolved`, `error`, the guard or idempotency. A client that does not know the
+fields is unaffected.
 
 ### A2.4 Precedence and exact definitions
 
-A pending native permission suppresses **every** reason (A1 unchanged). Otherwise the first match
-wins:
+A pending native permission suppresses **every** reason. Otherwise the first match wins:
 
-1. **`HARNESS_UNREACHABLE`** — this probe's own native reads failed (`native_status=unavailable`,
-   the existing failure signal) and the execution has been continuously unavailable for
-   `unavailable_s` (default 120 s). `cause_hint=unknown`; `unavailable_since` set. A single failed
-   probe reports `native_status=unavailable` with no reason, exactly as A1.
-2. **`COMPLETED_WITHOUT_TERMINAL_EVIDENCE`** — A1 definition unchanged (completed assistant, no
-   finish stop/end_turn, no named error, status absent, no pending permission).
+1. **`HARNESS_UNREACHABLE`** — **only** when every native read of this probe failed with a transport/
+   filesystem error (the `reconcile.go:229-235` failure path), the failure is continuous for
+   `unavailable_s` (default 120 s), and the execution is not terminal. **An identity mismatch
+   (`IDENTITY_MISMATCH`) or an unrecognized native status type never produces it** (they keep the A1
+   liveness, `native_status=unavailable`, with no reason); see P2-3/P2-4. `unavailable_since` is kept
+   on the run and cleared by the first successful probe. `cause_hint=unknown`.
+2. **`COMPLETED_WITHOUT_TERMINAL_EVIDENCE`** — A1 definition unchanged.
 3. **`NO_CORRELATED_ASSISTANT`** — A1 definition unchanged.
-4. **`PROVIDER_ERROR`** — the execution is unresolved (no terminal proof), `native_status` is not
-   `retry`, and a typed provider error is available from a source in A2.5 (OpenCode assistant
-   `error` or a `retry` part if present; Claude terminal-error result events are terminal and cleared).
-   `cause_hint` from that error.
-5. **`PROVIDER_RETRYING`** — `native_status=retry` (OpenCode) or the Claude retry state is active
-   (A2.7). `retry_attempt`/`retry_next_at`/`retry_max` accompany it; `cause_hint` from the retry
-   payload. A future `next` is normal, not a stall: this reason is the "wait" signal.
-6. **`TOOL_RUNNING_LONG`** — the newest correlated assistant has a `tool` part with
-   `state.status=running` and `now - state.time.start ≥ tool_long_s` (default 600 s) and no later
-   completed/error tool part for the same call. `tool` is set. This suppresses `NO_PROGRESS`.
+4. **`PROVIDER_ERROR`** (degradation in Variant A) — the execution is unresolved, `native_status` is
+   not `retry`, and a typed provider error is available (an assistant error without
+   `time.completed`+terminal proof, or a `retry` part if present; a terminal error is already
+   `failed` and clears liveness). This is a **narrow** window (R3a persisted no error), not a common
+   case. `cause_hint` from the typed error.
+5. **`PROVIDER_RETRYING`** (degradation in Variant A) — `native_status=retry` (OpenCode) or the
+   Claude retry state is active. `retry_attempt`/`retry_next_at`/`retry_max` accompany it; set
+   `retry_overdue` as in A2.3. **A1's "retry whose `next` is past" `NO_PROGRESS` is carried by
+   `retry_overdue` rather than silently dropped**: an overdue retry with an unchanged attempt is a
+   possible wedge and A2.9 tells the supervisor to act on it. A changed attempt clears it.
+6. **`TOOL_RUNNING_LONG`** — `native_status=busy` **and** the newest correlated assistant has a
+   `tool` part with `state.status=running`, `now - state.time.start ≥ tool_long_s` (default 600 s),
+   and no later completed/error part for the same call. With `native_status=absent` (for example
+   after a harness restart) the stale running part is **never** reported as `TOOL_RUNNING_LONG`;
+   A1's rules apply (no reason unless another A1 shape matches). **Any running tool — even younger
+   than `tool_long_s` — suppresses `NO_PROGRESS`**, because its `start` is the only progress signal
+   and inventing `NO_PROGRESS` at 2 min would be a false stall; the 200 s case is a test, not a
+   reason.
 7. **`NO_PROGRESS`** — `native_status=busy` with no native progress (A1 `last_native_progress_at` or
-   submission) for longer than `no_progress_s` (default 120 s), and no running tool (item 6). A2
-   supersedes A1's "retry whose `next` is past" branch: every retry status is
-   `PROVIDER_RETRYING` (item 5), so a past `next` is reported as a retry that is due, not as
-   `NO_PROGRESS`.
+   submission) for **more than** `no_progress_s` (default 120 s), and no running tool. Retry status
+   is handled by item 5, not here.
 
-`stall_suspected` keeps its A1 invariant (true iff a reason is present) and therefore also marks
-an active retry. A2 defines that as **degradation**, explicitly not a stall and never terminal; the
-supervisor keeps using `stall_reason`/`native_status`, not the boolean alone. (Open question 1 asks
-whether a separate `degradation` flag is preferable.)
+**Q1 (blocking, not decided): `stall_suspected` vs a routine retry.** A1 says a retry with `next` is
+positive evidence, test 3 "Retry is not a stall", and CONTRACTS says `stall_suspected` is true only
+with a `stall_reason`. Two variants are specified and **A2 does not choose**:
+
+- **Variant A (non-breaking, no A1 text change):** `PROVIDER_RETRYING`/`PROVIDER_ERROR` are reported
+  in `degradation_reason`/`degraded`; `stall_reason` and `stall_suspected` keep A1's meaning, so a
+  routine retry never sets `stall_suspected`. A client that reads the boolean alone keeps its A1
+  behaviour.
+- **Variant B (single field, needs the maintainer):** the provider reasons move into `stall_reason`
+  and `stall_suspected` becomes true for them; A1 test 3 and the CONTRACTS sentence are **superseded**
+  by that decision. This must not be presented as taken.
+
+S1–S5 cannot implement either variant until Q1 is answered; Q1 is recorded as a blocker for
+acceptance, not resolved by this amendment.
 
 ### A2.5 `cause_hint` mapping (recommended: structured fields only)
 
-Structured sources, newest applicable first; the hint is one closed word and `cause_source` records
-where it came from. **No text is ever exported**; `message`, `action.title`, `responseBody`, tool
-names and provider names never enter the liveness block.
+Structured sources, newest applicable first; one closed word, `cause_source` records provenance. **No
+text is ever exported**; `message`, `action.title`, `responseBody`, tool names and provider names never
+enter the block.
 
 | Source (OpenCode) | Mapping |
 | --- | --- |
-| `status.retry.action.reason` | `free_tier_limit`, `account_rate_limit` → `rate_limit`; anything else (open string) → `unknown` |
+| `status.retry.action.reason` | `free_tier_limit`, `account_rate_limit` → `rate_limit`; anything else (open string) → `unknown` (still `cause_source=structured`) |
 | `assistant.error.name == ProviderAuthError` | `auth` |
 | `assistant.error.name == APIError` (or a `retry` part's `error`, same `{name,data}` shape) | `data.statusCode` 401/403 → `auth`; 429 → `rate_limit`; 408/500/502/503/504/529 → `server`; absent/0 → `network`; any other → `unknown` |
-| `assistant.error.name` in `ContextOverflowError`, `ContentFilterError`, `MessageOutputLengthError`, `StructuredOutputError`, `MessageAbortedError`, `UnknownError` | `unknown` (not a provider-transport cause) |
+| `assistant.error.name` in `ContextOverflowError`, `ContentFilterError`, `MessageOutputLengthError`, `StructuredOutputError`, `MessageAbortedError`, `UnknownError` | `unknown` (not a provider transport cause) |
 
 | Source (Claude `api_retry`) | Mapping |
 | --- | --- |
 | `error_status` non-null | 401/403 → `auth`; 429 → `rate_limit`; 408/5xx → `server`; else `unknown` |
-| `error_status == null` | `network` |
-| `error` (documented enum) with no status | `rate_limit`→`rate_limit`; `authentication_failed`→`auth`; `server_error`→`server`; `billing_error`/`invalid_request`/`max_output_tokens`/`unknown`/anything else → `unknown` |
+| `error_status == null` or `no_response` present | `network` (a documented no-response is a structured connection-level signal) |
+| `error` enum with no status | `rate_limit`→`rate_limit`; `authentication_failed`→`auth`; `server_error`/`overloaded`→`server`; `billing_error`/`invalid_request`/`max_output_tokens`/`oauth_org_not_allowed`/`account_on_hold`/`model_not_found`/`cloud_credential_error`/anything else → `unknown` |
 
-Option 2 (not recommended for v2) would add a bounded-text fallback: lowercase at most 4 KiB of the
-retry message, match a **closed** pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection,
-401/403, timeout), and set `cause_source=bounded_text` without exporting the text. It duplicates the
-upstream retry policy, is version-brittle, and is unnecessary while the structured sources exist.
+**Option 2 (bounded text, not recommended now).** Lowercase at most 4 KiB of the retry message, match a
+closed pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403, timeout), set
+`cause_source=bounded_text` without exporting the text. The earlier justification ("buys little over
+unknown") was wrong for OpenCode status-only retries, where it is the only network signal. It is
+deferred until Q5; if accepted it is its own change, because it duplicates the upstream policy and is
+version-brittle.
 
-### A2.6 Thresholds and per-execution override
+### A2.6 Thresholds (operator-configured in Option 1) and the deferred per-execution input
 
-| Threshold | Default | Bounds (proposed) | Scope |
+| Threshold | Default | Bounds (proposed) | Where |
 | --- | --- | --- | --- |
-| `no_progress_s` | 120 s (A1) | 30–900 s | one execution |
-| `tool_long_s` | 600 s | 60–3600 s | one execution |
-| `unavailable_s` | 120 s | fixed in the first slice | operator/config (not per execution) |
+| `no_progress_s` | 120 s (A1) | 30–900 s | operator config/flag (Option 1) |
+| `tool_long_s` | 600 s | 60–3600 s, and ≤ the Claude `RUN_MAX` when the Claude adapter is on (a child is killed at `RUN_MAX`, default 15 m; a larger tool threshold can never fire) | operator config/flag |
+| `unavailable_s` | 120 s | fixed in the first slice | operator config |
 
-The per-execution override is a new optional input on `send_prompt`, for example
-`liveness: {"no_progress_s": 600, "tool_long_s": 1800}`: validated by the Bridge, recorded on the
-execution, echoed in `liveness.thresholds`, immutable after admission, and returned unchanged by a
-replay. Absent → defaults. Out-of-bounds values are `INVALID_INPUT` (never silently clamped). A
-threshold never changes `state`, the guard or a native call, and it never retroactively changes an
-execution. A1's "the threshold is fixed in this release" note is superseded only for executions
-created after the override exists.
+Option 1 is **output-only**: it adds no input to `send_prompt` (A1 accepted output fields only), so the
+accepted A1 statement stays true. A **per-execution override is a separate decision (Q3)**, not part
+of Option 1 or slices S1–S5. If the maintainer later wants it, the proposal is a new optional input
+named `liveness_thresholds` (not `liveness`, which is the response object; CONTRACTS says input
+schemas are unchanged today), and it must be **part of the ADR-010 idempotency fingerprint**: the same
+key with different thresholds is `IDEMPOTENCY_CONFLICT`, and a replay returns the recorded thresholds
+unchanged. That rule is stated here so the future change cannot be ambiguous; it is not accepted by
+this amendment.
+
+A threshold never changes `state`, the guard or a native call, and never retroactively changes an
+execution.
 
 ### A2.7 Claude Code mapping
 
-The runner already streams the events; A2 adds a decoder/state lookup, no argv change (no
-`--include-partial-messages`; text/thinking deltas stay unavailable, so a long model turn can only
-be `NO_PROGRESS`).
+No argv change (`--include-partial-messages` is not used; text/thinking deltas stay unavailable, so a
+long model turn can only be `NO_PROGRESS`). S4 adds the `tool_use` id to the decoder's block so
+parallel tools pair with their `tool_result` (P3-1).
 
 | Event / state | Liveness |
 | --- | --- |
-| Child admitted, before `init` | no block (as A1 before submission) |
-| `system/init` seen | `native_status=busy`; `progress_source=bridge`; start time |
-| `system/api_retry` | `PROVIDER_RETRYING`; `retry_attempt=attempt`, `retry_max=max_retries`, `retry_next_at=now+retry_delay_ms` (Bridge clock); `cause_hint` per A2.5; a later event of any kind clears the retry state |
-| `assistant` with a `tool_use` block | running tool: `tool_name`, `running_since` = Bridge receive time; `TOOL_RUNNING_LONG` after `tool_long_s` |
+| Child admitted, before `init` | no block |
+| `system/init` seen | `native_status=busy`; `progress_source=bridge`; start |
+| `system/api_retry` | `PROVIDER_RETRYING` (degradation in Variant A); `retry_attempt`, `retry_max`, `retry_next_at=now+retry_delay_ms`; `cause_hint` per A2.5 (including `no_response`); a later event clears the retry state; `retry_overdue` follows A2.3 |
+| `assistant` with a `tool_use` block | running tool; `tool_name`, `running_since` = Bridge receive time; `TOOL_RUNNING_LONG` after `tool_long_s` only while the child runs (`native_status=busy`) |
 | `user` with the matching `tool_result` | tool cleared; progress updated |
-| `stream_event` (only if a later slice enables partial messages) | would update progress; not in v2 |
-| `result` / terminal verdict (existing rows) | execution terminal; liveness cleared by A1's rule |
-| broken/undecodable stream bounded out, or the reader stops | `native_status=unavailable`; `HARNESS_UNREACHABLE` after `unavailable_s`; the existing child/verdict logic is untouched |
-| no native status endpoint | `native_status=busy` while the child runs; `absent` is never emitted for Claude (there is no status map to be absent from) |
+| `result` / terminal verdict (existing rows) | terminal; liveness cleared by A1's rule |
+| the reader/stream fails (bounded out, broken stream) | `native_status=unavailable`; `HARNESS_UNREACHABLE` only from that read-failure condition after `unavailable_s` (`unavailable_since` on the run); the child/verdict logic is untouched. An `api_retry` is **not** a read failure |
+| no native status endpoint | `busy` while the child runs; `absent` is never emitted for Claude |
 
-`progress_source=bridge` makes explicit that Claude progress times are the Bridge's receive clock,
-not native timestamps. Liveness is served on `get_execution_status`, `get_execution_result` and the
-replay response, like OpenCode, and is process-local.
+`progress_source=bridge` makes the receive-clock provenance explicit. Liveness is served on
+`get_execution_status`, `get_execution_result` and the replay response, as for OpenCode, and is
+process-local.
 
 ### A2.8 Dashboard display
 
-Execution list/detail rows gain a read-only badge: `retrying` (attempt/max, next), `tool running`
-(name, elapsed), `stalled` (reason `NO_PROGRESS`/`TOOL_RUNNING_LONG`), `provider error` (cause),
-`unreachable` (since). The detail shows `stall_reason`, `cause_hint`, `cause_source`, the retry
-fields, the tool fields and `observed_at`; the existing poll JSON gains the same optional fields.
-No new route, no write, no token, no free text; an unknown value renders `unknown`, never a guess.
-Archived-session behavior and the audit ring are unchanged.
+Execution rows/detail gain a read-only badge: `retrying` (attempt/max, next; `overdue` when
+`retry_overdue`), `provider error` (cause), `tool running` (name, elapsed), `stalled` (`NO_PROGRESS`,
+`TOOL_RUNNING_LONG`), `unreachable` (since). The detail shows the reason fields, `cause_hint`,
+`cause_source`, retry/tool fields and `observed_at`; the poll JSON gains the same optional fields. No
+new route, write, token or free text; unknown renders `unknown`. Archived-session and audit behavior
+are unchanged. In Variant A the badge separates `retrying`/`degraded` from `stalled`, so a routine
+retry does not read as a stall.
 
 ### A2.9 Supervisor guidance (unchanged safety rules)
 
 | Signal | Wait | Interrupt | Follow-up |
 | --- | --- | --- | --- |
-| `PROVIDER_RETRYING` | until `retry_next_at` + one probe; attempts may grow (watchdog) | no | only after the execution is terminal |
+| `PROVIDER_RETRYING` | until `retry_next_at` + one probe; if `retry_overdue` and the attempt is unchanged across two probes, treat it as a possible wedge and choose explicitly | explicit decision on a suspected wedge (never automatic) | only after terminal |
 | `PROVIDER_ERROR` | read status/result/history; a terminal verdict wins | no | only after terminal; unknown → fenced recovery |
-| `TOOL_RUNNING_LONG` | yes for a known build (raise the threshold on the next prompt) | explicit supervisor decision if it persists | only after terminal |
-| `NO_PROGRESS` | one more probe interval | if it persists and no tool is running | no |
-| `HARNESS_UNREACHABLE` | retry the poll; check the harness/network | no (the Bridge cannot signal a child it cannot see) | no |
+| `TOOL_RUNNING_LONG` | yes for a known build (raise the operator threshold, respecting `RUN_MAX`) | explicit decision if it persists | only after terminal |
+| `NO_PROGRESS` | one more probe interval | if it persists | no |
+| `HARNESS_UNREACHABLE` | retry the poll; check the Bridge's native client, the harness process and the transport | no (the Bridge cannot signal a child it cannot see) | no |
 | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` | no | no | ADR-010 fenced recovery; never a new key while the guard is held |
 
 Never resubmit an uncertain prompt, never reuse a key, never infer success, never release the guard
@@ -457,106 +493,130 @@ explicit supervisor action.
 
 ### A2.10 What stays impossible
 
-- Chat cannot be woken: it only sees this on poll; a silent stall is silent until polled.
-- No native signal proves "dead" (A1 §2); `HARNESS_UNREACHABLE` is a network/observation fact, not a
-  death certificate.
-- Network vs opaque server failure without a status code; "provider error" vs "overflow/filter" are
-  distinguishable only by the typed error when the harness exposes it.
-- Hung tool vs legitimately long tool, and thinking vs a hung model call, are intent/policy
-  questions; the hint narrows them, it does not decide.
-- A Bridge restart loses liveness with the execution (NOT_FOUND); old keys stay dead (ADR-010).
+- Chat cannot be woken; it only sees this on poll.
+- No native signal proves death; `HARNESS_UNREACHABLE` is an observation fact about the Bridge's own
+  reads, not the provider, and not a death certificate.
+- **OpenCode network vs provider** cannot be told from a status-only retry: the status `message` is
+  free text and `action` exists only for the two usage-limit reasons; without a structured no-HTTP
+  error (assistant `APIError` without `statusCode`, a persisted `retry` part — Q7 — or Claude
+  `error_status=null`/`no_response`) the hint is `unknown`.
+- Hung tool vs legitimately long tool, and thinking vs a hung model call, are intent/policy questions;
+  a stale running tool part with status absent is not reported as "running" (it is not).
+- A Bridge restart loses liveness with the execution; old keys stay dead (ADR-010).
 - Native clocks can skew; A1's future-timestamp rule stays.
-- Claude's silent first retries (if the 2.1.325 behavior matches the third-party report) mean absence
-  of `api_retry` is not evidence of a healthy provider.
+- The total OpenCode retry budget is not exposed (the pinned constant is 5; configuration-dependent
+  behavior is UNVERIFIED). A retry that never advances is detected only by `retry_overdue` + the
+  attempt-unchanged rule, which is advisory.
+- The Claude `api_retry` field set and the 2.1.325 behavior are UNVERIFIED; the parser is lenient and
+  maps unknown enum values to `unknown`.
 
 ### A2.11 Options and recommendation
 
-- **Option 1 (recommended): structured-only v2.** The A2.3 fields, A2.4 precedence, A2.5 structured
-  mapping, A2.6 thresholds, A2.7 Claude mapping and A2.8 dashboard. No free-text parsing; no new
-  native read (status/action and retry parts come from responses already read).
-- **Option 2: structured + bounded-text fallback.** Adds the A2.5 fallback (`cause_source=
-  bounded_text`). Not recommended for v2: version-brittle, duplicates upstream retry policy, buys
-  little over `unknown`.
-- **Option 3: consume `/event` for liveness.** Push progress (`message.part.updated`,
-  `session.status`, `session.error`) would reduce polling lag and expose transient errors. Deferred:
-  delivery/ordering/durability are UNVERIFIED (A1 N12: "the Bridge does not consume these"); it adds
-  a subscription and lifetime to the writer, and can be a later amendment that feeds the same
-  fields.
+- **Option 1 (recommended, output-only):** the A2.3 fields, A2.4 precedence (both Q1 variants
+  specified), A2.5 structured mapping, A2.6 operator thresholds, A2.7 Claude mapping, A2.8 dashboard.
+  No free-text parsing; no new input on `send_prompt`; no new native read.
+  **Conditional:** it does **not** claim network-vs-provider for an OpenCode status-only retry until
+  Q7 is answered (a live check of retry-part persistence) or Option 2 is accepted. The maintainer
+  should not treat "tells network from provider" as delivered for OpenCode before that.
+- **Option 2: structured + bounded-text fallback** (A2.5). Not recommended now; deferred to Q5, and
+  specifically the path that could close the OpenCode network gap.
+- **Option 3: consume `/event`** for push progress. Deferred: delivery/ordering/durability are
+  UNVERIFIED (A1 N12); later it can feed the same fields.
 
-Accept Option 1 in slices; keep A1's report-only contract and ADR-010/011 untouched.
+Accept Option 1 in slices after Q1 (and Q3, if the override is wanted); keep A1's report-only contract
+and ADR-010/011 untouched.
 
 ### A2.12 Test plan (RED-first, no live services)
 
-Fabricated streams/status/history; no live CLI, provider or host. Each case gets a RED test before
-the code, and the mutation below is run against the finished slices.
+Fabricated streams/status/history; no live CLI, provider or host. Each case gets a RED test first and a
+mutation below.
 
-1. Retry with `action.reason=account_rate_limit` → `PROVIDER_RETRYING`, `cause_hint=rate_limit`,
-   attempt/next recorded.
-2. Retry with an unknown `action.reason` → `cause_hint=unknown`, no text in any field.
-3. `busy` + a running tool 1 s old → no reason; 601 s → `TOOL_RUNNING_LONG`, tool name/start, and
-   `NO_PROGRESS` suppressed even past its threshold.
-4. `busy`, no tool, 119 s → no reason; 121 s → `NO_PROGRESS`.
-5. Completed assistant without finish/error (A1 shape) → `COMPLETED_WITHOUT_TERMINAL_EVIDENCE`
+1. Retry with `action.reason=account_rate_limit` → `PROVIDER_RETRYING` (or `degradation_reason`),
+   `cause_hint=rate_limit`, attempt/next recorded.
+2. Retry with an unknown `action.reason` → `cause_hint=unknown`, `cause_source=structured`, no text.
+3. Retry network (no `action`, no structured error) → `cause_hint=unknown`; the ADR's limitation is
+   asserted, not a `network` guess.
+4. `busy` + running tool 1 s and 200 s → no `NO_PROGRESS`, no `TOOL_RUNNING_LONG`; 600 s (boundary) →
+   `TOOL_RUNNING_LONG`; `absent` status + a stale running part → **no** `TOOL_RUNNING_LONG` and no
+   reason (A1 behavior).
+5. `busy`, no tool, 119 s → no reason; 121 s → `NO_PROGRESS` (the `>` boundary).
+6. Completed assistant without finish/error (A1 shape) → `COMPLETED_WITHOUT_TERMINAL_EVIDENCE`
    (unchanged), state/guard unchanged.
-6. Assistant `ProviderAuthError` with no terminal proof → `PROVIDER_ERROR`, `cause_hint=auth`.
-7. Typed APIError statuses 401/403/429/500/503/529/none → auth/rate_limit/server/network as A2.5.
-8. All reads fail → `native_status=unavailable` (no reason); after `unavailable_s` →
-   `HARNESS_UNREACHABLE` + `unavailable_since`; a successful probe clears it.
-9. A pending permission suppresses every reason.
-10. Threshold override: valid values recorded and echoed on replay; 29/901 s and 59/3601 s are
-    `INVALID_INPUT`; the execution's state/guard never change.
-11. Claude `system/api_retry` stream → `PROVIDER_RETRYING` with attempt/max/next and the mapped hint;
-    a later event clears the retry state.
-12. Claude `tool_use` without `tool_result` → running tool; `tool_result` clears it; over
-    `tool_long_s` → `TOOL_RUNNING_LONG`.
-13. Malformed/unknown events, oversized parts/lines and hostile timestamps are ignored without panic;
+7. Assistant `ProviderAuthError` without terminal proof → `PROVIDER_ERROR`, `cause_hint=auth`.
+8. Typed APIError statuses 401/403/429/500/503/529/absent → auth/rate_limit/server/network as A2.5.
+9. `native_status=unavailable` from an identity mismatch → **no** `HARNESS_UNREACHABLE` ever; an
+   unrecognized status type → no; continuous read failures for 120 s → yes, `unavailable_since` set;
+   a successful probe clears it. The read-failure marker is the reconcile failure path only.
+10. A pending permission suppresses every reason.
+11. Retry `next` past with an unchanged attempt for ≥ `no_progress_s` → `retry_overdue=true`; an
+    advanced attempt or a future `next` clears it; the overdue signal is not `NO_PROGRESS` and not a
+    PASS.
+12. Claude `system/api_retry` → `PROVIDER_RETRYING` with attempt/max/next and the mapped hint; a
+    `no_response` object → `network`; `overloaded` → `server`; a later event clears the retry state.
+13. Claude `tool_use` without `tool_result` → running tool; `tool_result` clears it; over `tool_long_s`
+    while the child runs → `TOOL_RUNNING_LONG`; a reader/stream failure (not an `api_retry`) is the
+    only source of `HARNESS_UNREACHABLE`.
+14. Malformed/unknown events, oversized parts/lines and hostile timestamps are ignored without panic;
     a timestamp after `observed_at` is ignored.
-14. No native mutation: zero Prompt/Abort calls across all probes; state, guard, idempotency and
-    replay unchanged; a different payload still conflicts.
-15. JSON compatibility: old parsers decode the block; new fields optional and omitempty.
-16. `go test -race -count=20` on the touched packages with concurrent probes/polls.
+15. No native mutation: zero Prompt/Abort calls; state, guard, idempotency and replay unchanged; a
+    different payload still conflicts.
+16. JSON compatibility: old parsers decode the block; new fields optional and omitempty.
+17. For Variant A: a retry never sets `stall_suspected`; for Variant B (only if Q1 chooses it): test 3
+    and CONTRACTS are superseded and a retry sets it. The suite is parameterized so the chosen variant
+    is explicit, not implied.
+18. If Q3 later adds `liveness_thresholds`: same key + different thresholds →
+    `IDEMPOTENCY_CONFLICT`; a replay returns the recorded thresholds. (Not in Option 1.)
+19. `go test -race -count=20` on the touched packages with concurrent probes/polls.
 
-Mutations (must be killed): retry never reported (old behavior); 429 mapped to `server`; tool
-condition dropped so `NO_PROGRESS` fires during a build; `unavailable_s` ignored; the free-text
-message copied into a field; a stale retry reason not cleared; liveness touching state/guard; the
-Claude `retry_max` not carried; the dashboard rendering a raw tool name untruncated.
+Mutations (must be killed): retry reported as `NO_PROGRESS` or never reported; 429 mapped to `server`;
+a running tool does not suppress `NO_PROGRESS`; a stale running part reports `TOOL_RUNNING_LONG`;
+identity mismatch produces `HARNESS_UNREACHABLE`; `unavailable_since` lost per probe; `retry_overdue`
+never set; the free-text message copied into a field; a stale retry reason not cleared; liveness
+touching state/guard; the Claude `retry_max` not carried; `no_response` mapped to `unknown`; the
+dashboard rendering a raw tool name untruncated; a replay flag or threshold fingerprint wrong.
 
-### A2.13 Slices (one PR each, docs first where the contract changes)
+### A2.13 Slices (one PR each; docs first where the contract changes)
 
-1. **S1 — OpenCode structured retry/error:** parse status `message`/`action` and persisted `retry`
-   parts; `PROVIDER_RETRYING`/`PROVIDER_ERROR`; `cause_hint`/`cause_source`; CONTRACTS update.
-2. **S2 — running tool:** `tool` object, `TOOL_RUNNING_LONG`, NO_PROGRESS suppression.
-3. **S3 — unreachable + thresholds:** `HARNESS_UNREACHABLE`, `unavailable_since`, the per-execution
-   override and its bounds.
-4. **S4 — Claude mapping:** decode `api_retry`, tool pairs, liveness object for Claude executions;
-   no argv change.
-5. **S5 — dashboard:** badges/detail and poll JSON; read-only.
+1. **S1 — OpenCode structured retry/error:** parse status `message`/`action` and a `retry` part if
+   present; `PROVIDER_RETRYING`/`PROVIDER_ERROR` in the Q1-chosen field; `cause_hint`/`cause_source`;
+   `retry_overdue` with the attempt-unchanged rule; CONTRACTS update.
+2. **S2 — running tool:** `tool` object, `TOOL_RUNNING_LONG` under `busy`, NO_PROGRESS suppression and
+   the absent-status case.
+3. **S3 — unreachable + operator thresholds:** the dedicated read-failure condition,
+   `unavailable_since` on the run, operator-configured thresholds; **not** the per-execution input
+   (Q3).
+4. **S4 — Claude mapping:** decode `api_retry`/`no_response`, add the `tool_use` id, tool pairs,
+   liveness for Claude executions, the reader-failure condition; no argv change.
+5. **S5 — dashboard:** badges/detail and poll JSON; read-only; Variant A separates degraded from
+   stalled.
 
-Each slice is RED-first with the A2.12 cases and mutations it owns; no live service is needed for a
-slice to be accepted (the live run only confirms the upstream event shapes).
+Each slice is RED-first with the cases/mutations it owns; no live service is needed for acceptance.
 
 ### A2.14 Open questions for the maintainer
 
-1. **Retry and `stall_suspected`:** is `stall_suspected=true` acceptable for an active provider
-   retry (a degradation, not a stall), or do you want a separate `degradation` flag? Option 1 above
-   assumes the former with `stall_reason` naming the state.
-2. **Tool name exposure:** bounded 64-byte name or only a class/hash? Option 1 exposes the bounded
-   name (never in audit).
-3. **Per-execution thresholds:** new `send_prompt` input fields as in A2.6, or operator config only?
-   The sitting's long builds are the reason for the former.
-4. **`HARNESS_UNREACHABLE`:** time-based (`unavailable_s`, recommended) or N consecutive failed
+1. **Q1 (blocking): `stall_suspected` vs a routine retry.** Variant A (separate
+   `degradation_reason`/`degraded`, A1 unchanged) or Variant B (move the provider reasons into
+   `stall_reason` and supersede A1 test 3/CONTRACTS)? A2 does not decide; S1–S5 need the answer.
+2. **Q2 tool name exposure:** bounded 64-byte name or only a class/hash? (Proposed: bounded name,
+   never in audit.)
+3. **Q3 per-execution thresholds:** keep Option 1 output-only (operator config), or add a
+   `send_prompt` input later? If added, it is `liveness_thresholds`, part of the idempotency
+   fingerprint (different thresholds → `IDEMPOTENCY_CONFLICT`), and a separate decision/slice.
+4. **Q4 `HARNESS_UNREACHABLE`:** time-based (`unavailable_s`, recommended) or N consecutive failed
    probes? Probe cadence varies.
-5. **Free-text hints:** keep structured-only (Option 1) for v2, and revisit Option 2 only with
-   evidence that the structured fields are insufficient?
-6. **Claude 2.1.325:** do we need a live confirmation of the `api_retry` field set (and the silent
-   first retries) before S4, or is a lenient parser with `unknown` sufficient? (The docs are the
-   only source I could read; the pinned binary was not run.)
-7. **OpenCode retry parts:** is a `retry` part persisted while the retry is pending, or only after?
-   The schema allows it; whether the server writes it mid-retry is UNVERIFIED. S1 must treat it as
-   optional.
-8. **Cause precedence:** if the status `action.reason` and the persisted APIError disagree, which
-   wins? A2.5 uses the newest applicable source; confirm that is the intended tie-break.
-9. **Dashboard wording:** the five badges above, and `unknown` instead of a guess; any labels to
-   avoid in operator-facing text?
-10. **Per-tool defaults:** one global `tool_long_s`, or per-tool defaults (for example Bash longer
-    than Read)? Option 1 keeps one global default plus the override.
+5. **Q5 free-text hints:** keep structured-only (Option 1) for v2, or accept Option 2's closed-pattern
+   fallback to close the OpenCode network gap? (Option 1 alone does not distinguish network for a
+   status-only retry.)
+6. **Q6 Claude 2.1.325:** require a live confirmation of the `api_retry`/`no_response` field set before
+   S4, or accept the lenient parser with `unknown`?
+7. **Q7 OpenCode retry parts:** is a `retry` part persisted while a retry is pending, or only after?
+   (UNVERIFIED; a live check would make network attribution possible via the typed `APIError`.)
+8. **Q8 cause precedence:** if `action.reason` and the typed error disagree, newest wins — confirm.
+9. **Q9 dashboard wording:** the badges (`retrying`, `overdue`, `provider error`, `tool running`,
+   `stalled`, `unreachable`) and `unknown` instead of a guess.
+10. **Q10 per-tool defaults:** one global `tool_long_s`, or per-tool defaults (for example Bash longer
+    than Read)?
+11. **Q11 `retry_overdue`:** the grace (`max(30 s, no_progress_s)`) and the attempt-unchanged window;
+    should an overdue retry be a separate `PROVIDER_RETRY_OVERDUE` reason?
+12. **Q12 Claude `tool_long_s` vs `RUN_MAX`:** cap the threshold at `RUN_MAX` automatically, or leave
+    it to the operator and document that a larger value never fires?
