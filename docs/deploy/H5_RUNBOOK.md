@@ -114,9 +114,10 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ExecStart=/usr/local/libexec/harness-bridge-h5
    Environment=BRIDGE_READ_ONLY=0
    Environment=BRIDGE_TOKEN_MAX_LIFETIME=168h
-   # Empty on purpose: neutralise an inherited BRIDGE_TOKEN; readSecret refuses BOTH forms set and
-   # treats an empty value as unset (cmd/bridge/secret.go:15-23). An inherited non-empty value would
-   # otherwise make the H5 start fail with "BRIDGE_TOKEN and BRIDGE_TOKEN_FILE are mutually exclusive".
+   # Empty on purpose: a later drop-in's Environment= assignment of the same variable wins, so this
+   # neutralises a BRIDGE_TOKEN inherited through Environment=. readSecret refuses BOTH forms set and
+   # treats an empty value as unset (cmd/bridge/secret.go:15-23). It does NOT override an
+   # EnvironmentFile= value (systemd.exec: EnvironmentFile overrides Environment=); check that below.
    Environment=BRIDGE_TOKEN=
    Environment=BRIDGE_TOKEN_FILE=/etc/harness-bridge/h5/token
    Environment=BRIDGE_TOKEN_EXPIRES=<RFC3339 expiry, at most +7 days>
@@ -151,11 +152,28 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
      `zzzz-h5.conf` carries its **path** (`BRIDGE_TOKEN_FILE`) and the expiry
      (`BRIDGE_TOKEN_EXPIRES`), never the value, so the drop-in may stay `0644`. `BRIDGE_TOKEN` and
      `BRIDGE_TOKEN_FILE` are **mutually exclusive**, and an empty value counts as unset
-     (`cmd/bridge/secret.go:15-23`): the `Environment=BRIDGE_TOKEN=` line above is what neutralises a
-     value inherited from the H4 drop-in/base unit. The host's current form is **UNVERIFIED**; before
-     the restart, `systemctl show -p Environment harness-bridge-private.service` shows what the unit
-     carries — a non-empty `BRIDGE_TOKEN` there is neutralised by the empty line in `zzzz-h5.conf`
-     (and by nothing else).
+     (`cmd/bridge/secret.go:15-23`).
+   - The empty `Environment=BRIDGE_TOKEN=` neutralises a `BRIDGE_TOKEN` that reaches the unit through
+     `Environment=` (for one variable a later drop-in's assignment wins). It does **not** clear a value
+     read from an `EnvironmentFile=`: per `systemd.exec`, settings from those files override those made
+     with `Environment=`. If the H4 unit/base delivers `BRIDGE_TOKEN` in an `EnvironmentFile=`, H5
+     refuses to start with "mutually exclusive" (fail closed; the global rollback still works). The
+     host's form is **UNVERIFIED**.
+   - Check this before the restart **without printing any value** (key names/counts only):
+     ```sh
+     systemctl show -p Environment harness-bridge-private.service \
+       | tr ' ' '\n' | grep -c '^\(Environment=\)\?BRIDGE_TOKEN='
+     systemctl show -p EnvironmentFiles harness-bridge-private.service   # file paths only
+     sudo grep -l '^BRIDGE_TOKEN=' <each listed file>                    # file names only, never values
+     ```
+     A non-zero first count is neutralised by the empty line above. If a listed file holds
+     `BRIDGE_TOKEN`, remove that line from the file for the H5 sitting (restore it on rollback), or the
+     empty `Environment=` line cannot win; never print the value.
+   - Check reachability as the service user, without printing the content: `namei -m
+     /etc/harness-bridge/h5/token` and `sudo -u <service-user> test -r /etc/harness-bridge/h5/token &&
+     echo readable`. A pre-existing `/etc/harness-bridge` that is not traversable by a non-root service
+     user blocks the token; its mode and the unit's `User=` are **UNVERIFIED** (this runbook does not
+     read them).
    - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; the explicit `BRIDGE_TOKEN_EXPIRES` must be RFC3339 and no
      more than **+7 days** (168h) from the sitting (`cmd/bridge/ingress.go:35-46`;
      `internal/security/remote.go:39-66`). The ≥43-character rule applies above 24h; the generated
@@ -502,10 +520,15 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
    token file and `BRIDGE_TOKEN_EXPIRES` live in `zzzz-h5.conf`, so removing it makes H4 start with
    its own (superseded, possibly expired) token settings: copy the new `BRIDGE_TOKEN_FILE`
    (`/etc/harness-bridge/h5/token`) and `BRIDGE_TOKEN_EXPIRES` into `zzz-h4.conf` (H4 accepts the
-   same 168h and ≥43 characters) or rotate a fresh H4 token as part of the rollback. In either case
-   also put **`Environment=BRIDGE_TOKEN=`** (empty) into `zzz-h4.conf` beside them: the H4/base unit
-   may still carry a `BRIDGE_TOKEN`, and `readSecret` refuses both forms while an empty value counts
-   as unset (`cmd/bridge/secret.go:15-23`).
+   same 168h and ≥43 characters) or rotate a fresh H4 token as part of the rollback.
+   **If you use the file form**, also put **`Environment=BRIDGE_TOKEN=`** (empty) into `zzz-h4.conf`
+   beside them: the H4/base unit may still carry a `BRIDGE_TOKEN`, `readSecret` refuses both forms, and
+   an empty value counts as unset (`cmd/bridge/secret.go:15-23`). **If you instead set a fresh direct
+   `BRIDGE_TOKEN` value** in an earlier drop-in, do **not** add the empty line: the later `zzz-h4.conf`
+   assignment would erase it and H4 would refuse to start ("BRIDGE_TOKEN must be at least 32
+   characters"). The `EnvironmentFile=` override above applies to H4 too: if a listed file holds
+   `BRIDGE_TOKEN`, the empty line cannot win until that line is removed or the file form is chosen
+   consistently; check with the same value-free commands.
 4. Re-add the H4 connector; remove the H5 one.
 5. If stage 5 was run in a later sitting, revert the OpenCode permission drop-in (R5B Step 4.1).
 6. Keep the workspace and native sessions; `h5/` and `r7-<hex>/` are the only expected new trees.
