@@ -3,9 +3,12 @@
 This PR ships the **code** of slice 3 (ADR-021 §10): init verification wired through the
 runner, the SIGINT → SIGTERM escalation, `Executor.Interrupt`, the hardening argv,
 `BRIDGE_CLAUDE_VERSIONS` parsing and the credential-canary harness code. The adapter stays
-unwired. **Every live item below is NOT_EXERCISED by this PR. A live item that was not run is
-never PASS, and slice 3 cannot ship until the maintainer provisions an authenticated run for
-the canary (ADR-021 "Consequence of D14 Q10"; Q10 is neither answered nor reopened here).**
+unwired. **R6 (the live acceptance) is complete on 2026-11-21**: the runtime, the five runs, the
+per-item verdicts, the fixes and the limitations are in
+[`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../../../docs/evidence/R6_EVIDENCE_2026-11-21.md).
+Item 1 PASS (run 3), items 4 and 6 PASS (run 5), items 2 and 5 OBSERVED, items 7 and 8 PASS, item 3
+not run. A live item that was not run is never PASS; the list below keeps the history of each
+finding and marks the final status.
 
 ## What the PR's own gates cover (all offline, fake CLI)
 
@@ -27,9 +30,10 @@ at most 5, stopping at the first budget breach. It writes verdict lines, event t
 codes only. Item 1 now uses a **control path** (ADR-021 §8.3 amendment, 2026-11-16): the deny rule is
 never lifted; each probe has a control run against an identical decoy outside every denied path, and the
 verdict fails unless `init.mcp_servers` is empty with the pinned argv (finding in ADR-021 §8.3). Item 3 is
-recorded by item 2's runs. **Every item below stays NOT_EXERCISED until the live run task reports.**
+recorded by item 2's runs. **The live items below were run in R6 (2026-11-18..21); each now carries
+its final status and links to the evidence file.**
 
-## Live items (operator-run; evidence file required; all NOT_EXERCISED)
+## Live items (operator-run; R6 complete 2026-11-21; evidence file required)
 
 Run as the Claude service user's isolated test user, in a throwaway root, with a throwaway
 session UUID. Never `--bare`; never copy, read or print a credential; evidence files carry
@@ -72,11 +76,14 @@ verdict lines and event types only.
    behind the flags `-history-dir`, `-canary-dir` and `-sink-addr` of the driver command (operator steps,
    expected evidence lines and the UNVERIFIED list: `docs/deploy/CLAUDE_CODE_RUNBOOK.md` §7a); a flag that is
    left out leaves its check `unknown` and item 1 `INCOMPLETE`.
-   **NOT_EXERCISED: no allowed authenticated run exists (D14 Q10).**
+   **EXERCISED — item 1 PASS in R6 run 3** (2026-11-20): 6/6 probes `rule`, 6/6 controls `none`, all
+   three observations made; see `docs/evidence/R6_EVIDENCE_2026-11-21.md`.
 2. **Result-to-exit lag** of the pinned CLI over several runs: validates or replaces the 10 s
-   exit-grace default. NOT_EXERCISED.
+   exit-grace default. **OBSERVED — R6 run 4**: five runs, 469/496/547 ms min/median/max; the
+   default 10 s grace covers the maximum (the grace was not changed).
 3. **Post-`result` stream capture** over several runs (shared with slice 1): decides whether the
-   ignorable-trailer list stays empty. NOT_EXERCISED.
+   ignorable-trailer list stays empty. **NOT RUN as a separate item**; item 2's run 4 evidence is
+   `post_result types=none`, and slice 1 remains the owner of the broader capture.
 4. **`sudo` relays SIGINT and SIGTERM** to the CLI with a live tool call, and the process-group
    boundary (`setsid -w`) with `sudo`. **R6 run 4 (2026-11-20, #426): FAIL `signal_not_relayed_or_child_alive`,
    but the relay was not tested:** the SIGINT run was relayed (tool_use, signal sent, child gone), the SIGTERM run
@@ -85,15 +92,21 @@ verdict lines and event types only.
    item 1 scope (`--add-dir <run home>`); a run without a tool_use is `INCOMPLETE`
    `signal_not_sent_no_tool_use` (or `signal_not_sent_after_tool_use` when a tool_use happened but the wrapper exited before the signal
    fired), FAIL stays for "sent, but the wrapper did not exit or the child lives". Run 5
-   (`-items 4,6`) is UNVERIFIED. NOT_EXERCISED as a PASS.
-5. **`--safe-mode` versus §8.3 item 2** on the pinned version. NOT_EXERCISED.
+   (`-items 4,6`). **EXERCISED — item 4 PASS in R6 run 5** (`both_signals_relayed_child_gone`:
+   SIGINT relayed, `exit_ms` 3722, child gone; SIGTERM relayed, child exit 143, `exit_ms` 2567, child
+   gone); see `docs/evidence/R6_EVIDENCE_2026-11-21.md`.
+5. **`--safe-mode` versus §8.3 item 2** on the pinned version. **OBSERVED — R6 run 4**:
+   `--safe-mode` accepted, exit 0, `mcp_servers=0`; no change to the pinned argv.
 6. **Managed settings applied in `-p`**, and the deny rule inside the managed file. **R6 run 4 (2026-11-20,
    #426): FAIL `inconclusive_no_tool_use_or_denial`** (`tool_use=false`, `denial=false`, marker not shown: the model
    never called Read; a resumed bootstrap session and no scope). The run is now a fresh session with the item 1
    scope. No tool_use is `INCOMPLETE` `no_tool_use`; a tool_use without a denial and without the marker is
    `INCOMPLETE` `no_denial_no_marker`; a denial that is not the rule's is `INCOMPLETE` `denial_not_rule_<class>`;
    the marker shown is FAIL; **PASS needs `denial_class=rule`** (printed on the `managed` line). Run 5
-   (`-items 4,6`) is UNVERIFIED. NOT_EXERCISED as a PASS.
+   (`-items 4,6`). **EXERCISED — item 6 PASS in R6 run 5** (`managed_deny_applied_no_inline_rules`:
+   the managed-only Read was denied, `denial_class=rule`, no marker shown); see
+   `docs/evidence/R6_EVIDENCE_2026-11-21.md`.
 7. **Live prompt-from-stdin** with `--resume` and `stream-json` (see `ACCEPTANCE_S1.md`).
-   NOT_EXERCISED.
-8. **SIGPIPE ends the child when the Bridge dies** (§5). NOT_EXERCISED.
+   **EXERCISED — PASS in R6 run 4.**
+8. **SIGPIPE ends the child when the Bridge dies** (§5). **EXERCISED — PASS in R6 run 4** (the
+   reader is closed after `init`; its PASS does not depend on a tool call).
