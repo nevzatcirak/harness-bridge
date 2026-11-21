@@ -8,10 +8,10 @@
  * reference stylesheet. Source of truth for the tokens and the component shapes of A1; slice S1 turns
  * it into the embedded internal/dashboard/assets/dashboard.css. The static mock links it.
  *
- * Rules kept (A1.6): no remote resource, no @import, no webfont, no JavaScript needed, no inline style
+ * Rules kept (A1.6): no remote resource, no stylesheet import, no webfont, no JavaScript needed, no inline style
  * attribute expected from the markup. "extracted" = the maintainer's design-token value (D28, values
  * only, no code or asset copied); "A1" = chosen by this amendment (A1.1, A1.2).
- * Hallmark reference: https://github.com/nutlope/hallmark (MIT), rules cited in A1.13, not copied.
+ * Hallmark reference: the nutlope/hallmark project on GitHub (MIT), rules cited in A1.13, not copied.
  */
 
 /* ---- tokens: dark is the default ---------------------------------------------------------- */
@@ -224,7 +224,7 @@ main { padding-block: var(--space-4) var(--space-6); min-width: 0; }
   margin: 0 0 var(--space-2); padding: var(--space-2); background: var(--surface-low);
 }
 .input, .select {
-  height: var(--ctl-h); padding: 0 var(--space-2); color: var(--text); background: var(--surface);
+  min-height: var(--ctl-h); padding: 0 var(--space-2); color: var(--text); background: var(--surface);
   border: 1px solid var(--input-border); border-radius: var(--space-2); font: inherit;
 }
 .btn {
@@ -247,7 +247,7 @@ main { padding-block: var(--space-4) var(--space-6); min-width: 0; }
 
 /* ---- chips and badges: text on a 0.14 tint of the chip's own colour ------------------------- */
 .chip, .badge {
-  display: inline-flex; align-items: center; height: var(--chip-h); padding: 0 var(--space-2);
+  display: inline-flex; align-items: center; min-height: var(--chip-h); padding: 0 var(--space-2);
   border-radius: 11px; font-size: var(--fs-0); font-weight: 600; white-space: nowrap;
   color: var(--chip-neutral); background: var(--tint-neutral);
 }
@@ -257,13 +257,14 @@ main { padding-block: var(--space-4) var(--space-6); min-width: 0; }
 .chip--error { color: var(--chip-error); background: var(--tint-error); }
 .chip--warn { color: var(--chip-warn); background: var(--tint-warn); }
 .chip--outline { background: transparent; border: 1px solid currentColor; }
-.badge { height: 20px; border-radius: var(--space-1); font-weight: 500; }
+.badge { min-height: 20px; border-radius: var(--space-1); font-weight: 500; }
 @media (forced-colors: active) {
   .chip, .badge { border: 1px solid CanvasText; }
 }
 
 /* ---- tables --------------------------------------------------------------------------------- */
-.table-wrap { overflow: auto; max-height: calc(100vh - 14rem); }
+/* a floor for short viewports, and scroll padding so a focused row is not hidden under the sticky head */
+.table-wrap { overflow: auto; max-height: max(calc(100vh - 14rem), 12rem); scroll-padding-top: var(--ctl-h); }
 table { width: 100%; border-collapse: collapse; }
 caption { text-align: left; color: var(--text-muted); padding-bottom: var(--space-2); }
 th, td { padding: var(--space-2) var(--space-3); text-align: left; vertical-align: middle; border-bottom: 1px solid var(--hairline); }

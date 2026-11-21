@@ -55,7 +55,7 @@
         <a class="btn" href="#catalog">Show archived</a>
         <span class="label">4 sessions, updated <time datetime="2026-11-21T17:48:02Z" title="2026-11-21 17:48:02Z">3 s ago</time></span>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-sessions">
         <table>
           <caption class="visually-hidden">Sessions known to this Bridge</caption>
           <thead>
@@ -67,9 +67,9 @@
           </thead>
           <tbody>
             <tr>
-              <td>OpenCode</td>
+              <td><span class="badge">OpenCode</span></td>
               <td><a href="#detail">Fix flaky retry test</a><br><code>ses_demo0001</code></td>
-              <td class="path"><span title="/srv/demo/work/payments-api/services/billing">/srv/demo/work/payments-api/…/services/billing</span></td>
+              <td class="path"><span title="/srv/demo/work/payments-api/services/billing">…/services/billing</span></td>
               <td class="path"><span>/srv/demo/work</span></td>
               <td><span class="chip chip--info">Running</span></td>
               <td>Held, running</td>
@@ -77,7 +77,7 @@
               <td><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time></td>
             </tr>
             <tr>
-              <td>OpenCode</td>
+              <td><span class="badge">OpenCode</span></td>
               <td><a href="#detail">Migrate config loader</a><br><code>ses_demo0002</code></td>
               <td class="path"><span title="/srv/demo/work/tools/config-loader">/srv/demo/work/tools/config-loader</span></td>
               <td class="path"><span>/srv/demo/work</span></td>
@@ -87,7 +87,7 @@
               <td><time datetime="2026-11-21T17:41:30Z" title="2026-11-21 17:41:30Z">6 min ago</time></td>
             </tr>
             <tr>
-              <td>Claude Code</td>
+              <td><span class="badge">Claude Code</span></td>
               <td>Docs pass<br><code>claudecode:4e59c1bd</code></td>
               <td class="path"><span title="/srv/demo/work/site/docs">/srv/demo/work/site/docs</span></td>
               <td class="path"><span>/srv/demo/work</span></td>
@@ -97,7 +97,7 @@
               <td><time datetime="2026-11-21T16:02:44Z" title="2026-11-21 16:02:44Z">1 h ago</time></td>
             </tr>
             <tr>
-              <td>OpenCode</td>
+              <td><span class="badge">OpenCode</span></td>
               <td><a href="#detail">Spike: cache layer</a><br><code>ses_demo0003</code></td>
               <td class="path"><span title="/srv/demo/work/spikes/cache">/srv/demo/work/spikes/cache</span></td>
               <td class="path">None</td>
@@ -117,7 +117,7 @@
     <h1 id="h-detail">Session <code>ses_demo0001</code></h1>
     <div class="card">
       <dl class="kv">
-        <dt>Harness</dt><dd>OpenCode</dd>
+        <dt>Harness</dt><dd><span class="badge">OpenCode</span></dd>
         <dt>Session ID</dt><dd><code>ses_demo0001</code> <button class="btn" type="button" hidden>Copy</button></dd>
         <dt>Title</dt><dd>Fix flaky retry test</dd>
         <dt>Path</dt><dd><code>/srv/demo/work/payments-api/services/billing</code></dd>
@@ -130,7 +130,7 @@
     <div class="card">
       <h2 id="h-tl">Execution timeline</h2>
       <p class="label">Newest first. The liveness report is advisory: it never changes an execution and the Bridge takes no action.</p>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-tl">
         <table class="timeline">
           <caption class="visually-hidden">Executions of this session with the liveness report of the current one</caption>
           <thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
@@ -209,9 +209,9 @@
   <section id="executions" aria-labelledby="h-exec" class="cards">
     <h1 id="h-exec">Executions</h1>
     <div class="card">
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-exec">
         <table>
-          <caption class="visually-hidden">Recent executions recorded by this Bridge process</caption>
+          <caption class="visually-hidden">Recent executions of the sessions listed on the Sessions page</caption>
           <thead><tr><th scope="col">Execution</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Started</th><th scope="col">Duration</th></tr></thead>
           <tbody>
             <tr><td><code>7a2c91e0…</code></td><td><a href="#detail">ses_demo0001</a></td><td><span class="chip chip--info">Running</span></td><td><time datetime="2026-11-21T17:39:12Z">17:39:12Z</time></td><td class="num">8 min 50 s</td></tr>
@@ -219,7 +219,7 @@
           </tbody>
         </table>
       </div>
-      <p class="label">Executions live in the memory of this Bridge process: a restart empties the list (ADR-010).</p>
+      <p class="label">Only executions of the sessions listed on the Sessions page appear here; those of archived sessions appear with the archived filter. Executions live in the memory of this Bridge process: a restart empties the list (ADR-010).</p>
     </div>
   </section>
 
@@ -242,7 +242,7 @@
         <input class="input" id="af" type="search" placeholder="Filter by session or event">
         <span class="label">The ring keeps the last 1000 entries, newest first. No free text is stored.</span>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-audit">
         <table>
           <caption class="visually-hidden">Audit feed</caption>
           <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Detail</th><th scope="col">Actor</th></tr></thead>
