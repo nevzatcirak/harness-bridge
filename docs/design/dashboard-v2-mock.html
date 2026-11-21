@@ -53,7 +53,8 @@
         <label class="visually-hidden" for="f-h">Harness</label>
         <select class="select" id="f-h"><option>All harnesses</option><option>OpenCode</option><option>Claude Code</option></select>
         <a class="btn" href="#catalog">Show archived</a>
-        <span class="label">4 sessions, updated <time datetime="2026-11-21T17:48:02Z" title="2026-11-21 17:48:02Z">3 s ago</time></span>
+        <button class="btn btn--primary" type="button">Refresh</button>
+        <span class="label">5 sessions, updated <time datetime="2026-11-21T17:48:02Z" title="2026-11-21 17:48:02Z">3 s ago</time></span>
       </div>
       <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-sessions">
         <table>
@@ -106,9 +107,20 @@
               <td>None</td>
               <td><time datetime="2026-11-20T09:15:00Z" title="2026-11-20 09:15:00Z">1 d ago</time></td>
             </tr>
+            <tr>
+              <td><span class="badge">OpenCode</span></td>
+              <td><a href="#detail">Old prototype</a> <span class="chip chip--outline">Archived</span><br><code>ses_demo0009</code></td>
+              <td class="path"><span title="/srv/demo/work/prototypes/old">/srv/demo/work/prototypes/old</span></td>
+              <td class="path"><span>/srv/demo/work</span></td>
+              <td><span class="chip">Idle</span></td>
+              <td>None</td>
+              <td>None</td>
+              <td><time datetime="2026-11-12T10:00:00Z" title="2026-11-12 10:00:00Z">9 d ago</time></td>
+            </tr>
           </tbody>
         </table>
       </div>
+      <p class="label">The last row is shown because the archived filter is on (<code>?archived=1</code>); without it archived sessions are hidden.</p>
     </div>
   </section>
 
@@ -144,7 +156,7 @@
             </tr>
             <tr class="detail">
               <td colspan="5">
-                <p class="report">No native progress for more than 2 minutes. This is a report, not a verdict.</p>
+                <p class="report">No native progress for more than 2 minutes. This is a report, not a verdict; the Bridge takes no action.</p>
                 <dl class="kv">
                   <dt>Native status</dt><dd><span class="chip chip--info">Busy</span></dd>
                   <dt>Retry</dt><dd>None</dd>
@@ -245,12 +257,12 @@
       <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-audit">
         <table>
           <caption class="visually-hidden">Audit feed</caption>
-          <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Detail</th><th scope="col">Actor</th></tr></thead>
+          <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Session</th><th scope="col">Detail</th><th scope="col">Actor</th></tr></thead>
           <tbody>
-            <tr><td class="num">17:47:24Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok">New</span></td><td>Execution <code>7a2c91e0…</code></td><td>operator</td></tr>
-            <tr><td class="num">17:47:22Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--warn">Rejected</span></td><td>SESSION_BUSY</td><td>operator</td></tr>
-            <tr><td class="num">17:44:09Z</td><td><span class="chip" title="interrupt">Interrupt</span></td><td><span class="chip chip--ok">Accepted</span></td><td>Execution <code>e41d77b9…</code></td><td>operator</td></tr>
-            <tr><td class="num">17:04:23Z</td><td><span class="chip" title="guard_release">Guard release</span></td><td><span class="chip chip--error">Refused</span></td><td>INVALID_INPUT</td><td>admin:uid=996</td></tr>
+            <tr><td class="num">17:47:24Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok">New</span></td><td><code>ses_demo0001</code></td><td>Execution <code>7a2c91e0…</code></td><td>operator</td></tr>
+            <tr><td class="num">17:47:22Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--warn">Rejected</span></td><td><code>ses_demo0001</code></td><td>SESSION_BUSY</td><td>operator</td></tr>
+            <tr><td class="num">17:44:09Z</td><td><span class="chip" title="interrupt">Interrupt</span></td><td><span class="chip chip--ok">Accepted</span></td><td><code>ses_demo0001</code></td><td>Execution <code>e41d77b9…</code></td><td>operator</td></tr>
+            <tr><td class="num">17:04:23Z</td><td><span class="chip" title="guard_release">Guard release</span></td><td><span class="chip chip--error">Refused</span></td><td>None</td><td>INVALID_INPUT</td><td>admin:uid=996</td></tr>
           </tbody>
         </table>
       </div>

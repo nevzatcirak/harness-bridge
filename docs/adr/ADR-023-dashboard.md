@@ -764,7 +764,7 @@ Facts only (task #289). R-DASH stays **NOT_EXERCISED**; the native shapes stay U
 Status: **PROPOSED, not accepted.** Task #463; maintainer decision **D28 (2026-11-21, in chat):** make
 the dashboard look professional and reuse the *visual language* of the maintainer's Lokman admin UI.
 Revised in task #469 by the **Hallmark sweep (A1.13)**, at the maintainer's request to use Hallmark for the
-dashboard design, and in task #477 for review #476 (one P2 and nine P3, dispositions in A1.14). Acceptance is by the Planning Desk under D19 (an amendment that conforms to the recorded
+dashboard design, in task #477 for review #476 (one P2 and nine P3, dispositions in A1.14), and in task #483 for reviews #480 and #481 (one P2 and nine P3, plus two P3, dispositions in A1.15). Acceptance is by the Planning Desk under D19 (an amendment that conforms to the recorded
 D-items and passed its independent reviews, B mandatory and C second, with no open P0-P2). Until it is
 accepted the dashboard serves exactly the accepted ADR-023 pages.
 
@@ -794,7 +794,7 @@ how existing data looks.
 | CSP stays strict | The header string is **byte-identical** to §3 (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`). A1 adds no inline style, no inline script and no handler (A1.6). |
 | Loopback / unix socket only; Host and Origin checks | Unchanged. |
 | Redaction, size caps, no logging of content | Unchanged. The redaction count stays visible (A1.4). |
-| Session scope: every ACL-authorized session (D17 Q6); archived sessions hidden by default with a filter (D17 Q7, ADR-025) | **Every page that lists sessions or things of a session obeys the same scope.** `/executions` shows only executions of the sessions the Sessions list shows, and an archived session's executions only with `?archived=1` (A1.4 item 3, A1.8). No page widens the scope. |
+| Session scope: every ACL-authorized session (D17 Q6); archived sessions hidden by default with a filter (D17 Q7, ADR-025) | **The Sessions list, the session detail, `/executions`, `/catalog` and their JSON twins obey the same scope.** `/executions` shows only executions of sessions in the scope set of the Sessions list, and an archived session's executions only with `?archived=1` (A1.4 item 3, A1.8). No page widens the scope. **The audit page is the one exception, and A1 leaves it as D17 Q4 recorded it:** the 1000-entry ring is the process audit and is **not** ACL-filtered (`internal/dashboard/audit.go:78-79`: `AuditSource.Entries()` is all the dashboard gets), so it can show an entry that names a session outside the list, such as an admin `guard_release`; the sweep tests do not apply to it (A1.10 item 11). |
 | Distinct harness badges and columns (D17 Q8) | The harness stays a badge plus a column (A1.4 item 1; the mock shows it). |
 | ADR-010/011/017/018: nothing the page shows changes a state | The liveness and pending-permission rows render what the Bridge already holds; they are labelled advisory (A1.4). |
 
@@ -808,8 +808,9 @@ list has no value for it. `docs/design/dashboard-v2.css` holds all of them as CS
 | page background | `#121212` | `#fafafa` | dark extracted; light **A1** |
 | surface low (toolbars, the detail row: the second neutral) / mid (cards, top bar, tables) / high (menus) | `#1a1a1a` / `#1e1e1e` / `#242424` | `#f2f2f2` / `#ffffff` (paper) / `#ffffff` | dark extracted; light mid extracted, low and high **A1** |
 | text / muted text | `#e0e0e0` / `#a6a6a6` | `#212121` / `#595959` | dark **A1**; light text extracted (neutral), light muted **A1** |
-| primary (the primary action, the current selection, the focus ring) / text on primary | `#82b1ff` / `#0d1b3e` | `#2962ff` / `#ffffff` | extracted; light on-primary **A1** |
+| primary (the primary action, the current selection, the focus ring) / text on primary | `#82b1ff` / `#0d1b3e` | `#2962ff` / `#ffffff` | extracted; light on-primary **A1** (the light theme blocks also set `color-scheme: light`) |
 | success / warning / error / info | `#81c784` / `#ffb74d` / `#e57373` / `#64b5f6` | `#1b5e20` / `#9a4700` / `#c62828` / `#01579b` | extracted (light = the tone-text values) |
+| primary pressed fill (a pressed primary button) | `#6a9cf5` | `#1a4fd6` | **A1**: the neutral pressed fill gave text on a pressed primary button 1.34:1 / 1.32:1 (review #480 P2-1); text on this fill is 6.18 / 6.70 (A1.2) |
 | secondary (reserved) | `#b388ff` | `#6200ea` | extracted |
 | input border | `#8a8a8a` | `#767676` | extracted |
 | hairlines (decorative separators only) | `#333333` | `#e0e0e0` | **A1** |
@@ -847,14 +848,18 @@ non-colour cue. The raw closed word stays in the `title` attribute and in the JS
 `retry` warn, `absent` neutral, `unavailable` warn; `stall_reason` chips are warn with a sentence-case label
 from a closed map (`COMPLETED_WITHOUT_TERMINAL_EVIDENCE` "Completed without terminal evidence",
 `NO_CORRELATED_ASSISTANT` "No correlated assistant", `NO_PROGRESS` "No progress"; an unknown value renders
-"Unknown"). Audit event and outcome chips follow the same rule (a fixed label map; an unknown word is shown
+"Unknown"). **Reserved rows, not rendered until ADR-017 A2 is accepted and its slice ships** (A2 is PROPOSED; these
+rows decide nothing for it): `PROVIDER_RETRYING` "Provider retrying", `PROVIDER_ERROR` "Provider error",
+`TOOL_RUNNING_LONG` "Tool running long", `HARNESS_UNREACHABLE` "Harness unreachable"; until then such a value
+renders "Unknown", and the label-map totality test (A1.10 item 7) covers the A1 values only. Audit event and outcome chips follow the same rule (a fixed label map; an unknown word is shown
 escaped, neutral).
 
 ### A1.2 Contrast (WCAG 2.x relative luminance; AA = 4.5:1 text, 3:1 non-text)
 
 Computed from the values of `docs/design/dashboard-v2.css` itself, compositing the 0.14 tint exactly (no
-rounding of the tint colour): **122 token pairs** (text, muted text, six chip tones, input border, focus ring and
-five semantic text colours on the four surfaces, both themes, plus text on primary) and **22 fill pairs**
+rounding of the tint colour): **124 token pairs** (text, muted text, six chip tones, input border, focus ring and
+five semantic text colours on the four surfaces, both themes, plus text on primary and text on the pressed primary
+fill) and **22 fill pairs**
 (listed below), the light media-query block and the toggle block identical: **0 failures. The minimum text pair
 is 4.62:1 (dark secondary chip on the high surface); the minimum non-text pair is 4.06:1 (light input border on
 the low surface).** Chip tint = the chip text colour at alpha 0.14 composited over the surface the chip sits on.
@@ -875,7 +880,8 @@ Slice S1 turns this computation into a test over the embedded CSS (A1.10), so th
 
 Other pairs (dark / light). **Token pairs not in the table:** semantic text on a card: ok 8.28 / 7.87, info
 7.53 / 7.40, error 5.58 / 5.62, secondary 6.26 / 7.76, warn 9.63 / 6.41 (on the light low surface 7.03, 6.61, 5.02,
-6.93 and 5.73); text on primary (the current nav item, the button) 7.79 / 4.90. **The 22 fill pairs** (eleven per
+6.93 and 5.73); text on primary (the current nav item, the button) 7.79 / 4.90 and **text on the pressed primary
+fill 6.18 / 6.70**. **The 22 fill pairs** (eleven per
 theme, the fills a component draws that the tokens alone do not give): text on a row hover 8.73 / 12.19; text on a
 nav hover 9.19 / 10.94; text on the pressed fill 9.57 / 12.20; text on a diff add line 9.56 / 12.89 and muted text on
 it 5.18 / 5.61; text on a delete line 9.69 / 12.67 and muted 5.26 / 5.51; text on the pending-permission row
@@ -893,7 +899,14 @@ border against a card 12.63 / 16.10 (non-text).
    the maintainer's list has only the paper `#ffffff`. Every pair above holds on all four surfaces.
 3. **Nested tints.** A chip inside the tinted pending-permission row would stack two tints (dark 3.96:1,
    fails; light 4.61); inside that row chips are outlines (4.98 dark / 5.92 light).
-4. **Rule:** a chip sits on one of the four surfaces above, never on another tint; links are the text colour,
+4. **Pressed primary button (review #480 P2-1).** `.btn:active` gave every button the neutral pressed fill, and its
+   specificity (0,2,0) out-ranks `.btn--primary` (0,1,0), so a pressed primary button drew `--on-primary` text on
+   `--hairline`: **1.337:1 dark, 1.320:1 light**
+   (unreadable). *After:* a `.btn--primary:active` rule, placed after `.btn:active`, uses the new `--primary-active`
+   token (`#6a9cf5` dark, `#1a4fd6` light); text on it is **6.18 / 6.70**, the pair is in the token set and in the
+   contrast test, and the mutation "primary pressed fill reverted to `--hairline`" is listed (A1.10). The press cue
+   also stays visible against the normal fill (1.26 / 1.37).
+5. **Rule:** a chip sits on one of the four surfaces above, never on another tint; links are the text colour,
    so no accent-on-surface link pair exists.
 
 Not covered by a ratio: hairlines (decorative); the state is always also in text.
@@ -911,7 +924,8 @@ Not covered by a ratio: hairlines (decorative); the state is always also in text
   (36 px, radius 18, `aria-current="page"` fills the current one with the primary colour); an instance label (Q3);
   the connector-token expiry badge in remote mode (A1.8; absent in local mode, where ADR-019 says there is no
   expiry; neutral, warn under 60 minutes, error once expired); the theme toggle (hidden unless JS runs); the word
-  "Read-only".
+  "Read-only". **The instance label and the token-expiry badge arrive in S3 with `Source.Health` and the label
+  variable (A1.9); the S1 and S2 top bars omit them, by the same rule as a destination.**
 - **Below 60rem** the destinations collapse into a `<details>` menu below the wordmark (open without JS, closed by
   the script on narrow screens, JS-6); the content is one column at 320 px (WCAG 1.4.10); tables scroll inside
   their own wrapper, never the page.
@@ -930,7 +944,8 @@ paths in mono, times and durations in tabular numerals, labels in sentence case.
    identically get a stable 6-hex suffix taken from the sha256 of the full path; the full value is in `title`, on the
    detail page and in the copy control), **lifecycle root**, **state chip**,
    **guard**, **current execution**, **last activity** (relative, absolute in `title`), an **Archived** chip.
-   Caps unchanged (200 rows). Tables before cards: the table is the screen.
+   Caps unchanged: the page renders the first 200 rows and says "Showing the first 200 of N sessions" (`maxListRows`,
+   `internal/dashboard/poll.go:96-98`). Tables before cards: the table is the screen.
 2. **Session detail (`GET /session/<harness>/<id>`).** The signature screen (A1.13):
    - A header card: copyable ID, path, lifecycle root, state chip, guard (a key/value list).
    - **The execution timeline**, one table, newest first: state chip, execution, start, duration, and a liveness
@@ -950,17 +965,22 @@ paths in mono, times and durations in tabular numerals, labels in sentence case.
      box, hairline separators), the diff in `<pre>` as text (unified; a split view is Q7), added and removed lines
      with a tint **and** the `+`/`-` character; per-turn diffs behind the existing turn links; the "diff
      unavailable" state with its reason (Claude Code history: ADR-021 pending, unchanged).
-3. **Executions (`GET /executions`).** A flat table, newest first, of **only the executions of the sessions the
-   Sessions list shows**: the same ACL-authorized scope (D17 Q6), and the executions of an **archived** session
-   only with `?archived=1` (D17 Q7, ADR-025), through the same request-context flag the sessions list uses. The
-   **cap (200 rows) is applied after the filter**, so a hidden session can neither appear nor crowd a visible one
-   out. A footnote says a restart empties the list (ADR-010) and that archived sessions' executions are behind
-   the archived filter. Data: A1.8.
+3. **Executions (`GET /executions`).** A flat table, newest first, of **only the executions of sessions in the
+   scope set of the Sessions list**: the same ACL-authorized scope (D17 Q6), and the executions of an **archived**
+   session only with `?archived=1` (D17 Q7, ADR-025), through the same request-context flag the sessions list uses.
+   **The join set is that scope set before the Sessions page's 200-row display cap** (the page truncates what it
+   shows, not what is in scope), so an execution of the 201st session can appear here; a footnote says so
+   ("includes sessions beyond the first 200 shown on the Sessions page"), as it says that a restart empties the list
+   (ADR-010) and that archived sessions' executions are behind the archived filter. The **cap of 200 rows is
+   applied to the executions after the filter**, so a hidden session can neither appear nor crowd a visible one out.
+   The **Session** column and its link are built from the harness-qualified session ID carried on the row (A1.8). Data:
+   A1.8.
 4. **Catalog and archived (`GET /catalog`).** Sessions grouped by lifecycle root (the existing label) with the
    archived filter; read-only; it widens nothing (ADR-022 §6.1).
 5. **Audit (`GET /audit`, `?page=N`).** The bounded ring in pages of 100 (a server-side page parameter, GET,
    bounded); the **event** as a neutral chip, the **outcome** as a chip from a fixed label map, the error code,
-   session, execution, principal and the "other" attributes as today; the client-side filter stays.
+   session, execution, principal and the "other" attributes as today; the client-side filter stays. **The ring is the
+   D17 Q4 process audit and is not ACL-filtered** (A1.0): an entry can name a session that is not in the Sessions list.
 6. **About and health (`GET /health`).** A key/value list: version, build (the VCS revision when the binary
    carries one, else unknown), connector token expiry (remote mode only), lifecycle, permission relay and Claude
    Code as On/Off chips (one row each, no joined strings), harness reachability **taken from the outcome of the last
@@ -1046,7 +1066,8 @@ today; the method sweep returns 405 on every route including the new ones; no ne
 | Addition | Source | Notes |
 | --- | --- | --- |
 | `Execution.Liveness` (the ADR-017 A1 fields) and a pending-permission summary on the dashboard `Execution` | the existing `execution.Execution` copies in `DashboardSnapshot()` (`internal/execution/dashboard.go`), mapped in `internal/mcp/dashsource.go` | no native read; same copy-under-`m.mu`-then-each-`x.mu` order (T10); permission summary = what ADR-024 already shows Chat, never a pattern |
-| `Source.Executions(ctx)` | `DashboardSnapshot().Executions` (which holds **every** execution of the Manager and applies no cap, `internal/execution/dashboard.go:33-36`), **filtered in the Source implementation by the set of sessions the same call chain lists** (the ACL scope of D17 Q6, the archived flag of D17 Q7, joined on the harness-qualified session ID), then sorted newest first, then capped at 200 | the filter comes **before** the cap; an execution whose session is not in the list is dropped, never shown; the T11 method-set pin test lists the new reader |
+| `Source.Executions(ctx)` | `DashboardSnapshot().Executions` (which holds **every** execution of the Manager and applies no cap, `internal/execution/dashboard.go:33-36`), **filtered in the Source implementation by the scope set the same call chain produces** (the ACL scope of D17 Q6, the archived flag of D17 Q7, joined on the harness-qualified session ID), **before** the Sessions page's 200-row display cap, then sorted newest first, then capped at 200 | the filter comes **before** the executions cap; an execution whose session is not in the scope set is dropped, never shown; the page's JSON twin calls this same reader, never a second implementation; the T11 method-set pin test lists the new reader |
+| the dashboard `Execution` row type (`internal/dashboard/source.go:22-30` today: `ID`, `State`, `Started`, `Updated`, `Ended`, `Current`) | S3 adds the **harness-qualified session ID** (`opencode:ses_…` or `claudecode:…`, copied from `execution.Execution.SessionID`) to the row; the Session column shows the session ID and links to `/session/<harness>/<id>` built by splitting the qualified ID at the first colon | the field is display data; the T11 type test pins it; an ID the sessions list does not know renders without a link |
 | `Source.Health(ctx)` | version and build from the binary, features from configuration, connector token **expiry timestamp** (never the token, never the Host or origin) from the remote settings through a read-only getter, harness reachability from the last list read | no new native probe; absent fields are omitted, never defaulted |
 | instance label | optional **`CIRAK_DASHBOARD_LABEL`** (ADR-026 §2 renames the environment prefix `BRIDGE_*` to `CIRAK_*`; ADR-026 and ADR-027 are still PROPOSED, so this is a cross-reference, not a decision: Q16), <= 40 bytes, `[A-Za-z0-9 ._-]`, default none | startup error on an invalid value, like the redaction variable (Q3); ADR-027's config schema would carry the same key |
 | audit `?page=N` | the existing ring, pages of 100 | bounded GET parameter; an invalid value is page 1 |
@@ -1065,8 +1086,9 @@ The dashboard package still depends on the `Source` interface only; the T11 test
   execution timeline with its liveness and permission rows, the diff with file list and `<details>`), JS-1,
   per-page snapshots with fixtures for every liveness reason, hostile-input fixtures.
 - **S3 — audit, health, executions, catalog, light theme.** The audit restyle and `?page=N`, `Source.Health` and
-  `/health`, `Source.Executions` and `/executions` (scoped to the listed sessions, A1.4 item 3, with the A1.10
-  scope tests), `/catalog`, the light token blocks, `theme.js` and the toggle
+  `/health`, **the top bar's token-expiry badge and instance label (`CIRAK_DASHBOARD_LABEL`, with the read-only
+  expiry getter)**, `Source.Executions` and `/executions` (scoped to the scope set, A1.4 item 3, with the session
+  field on the row and the A1.10 scope tests), `/catalog`, the light token blocks, `theme.js` and the toggle
   (JS-2), the light contrast checks and snapshots. S3 may be split into S3a (pages) and S3b (light theme) by the
   implementer.
 
@@ -1078,8 +1100,8 @@ confirmed by the operator in R-DASH (below).
 1. **Golden HTML snapshots** of every screen and state with a fixed clock and fixture source, committed under
    `internal/dashboard/testdata/`, one per theme where it applies.
 2. **Contrast as code:** parse the custom properties of the embedded CSS, composite the 0.14 tints, compute the
-   WCAG ratio, assert every pair of A1.2 (>= 4.5 text, >= 3 non-text) for each theme present; the test fails
-   when a token changes.
+   WCAG ratio, assert every pair of A1.2 (>= 4.5 text, >= 3 non-text) for each theme present, **including the
+   states a component draws (the pressed primary fill)**; the test fails when a token changes.
 3. **CSP header test:** the exact string of §3 on every response; **no `<style>`, no `style=`, no `on*=`
    attribute, no inline `<script>`** in any rendered page (all screens, all states).
 4. **No external URL:** the templates, CSS and JS **code** (comments stripped before the scan, or the embedded
@@ -1101,7 +1123,13 @@ confirmed by the operator in R-DASH (below).
     escaped text or ignored); **an execution of an archived session is absent from `/executions` without
     `?archived=1` and present with it; an execution of a session outside the ACL scope is never listed, with or
     without the flag; the cap applies after the filter** (a hidden session's executions never push a visible one
-    out); `/executions` never lists an execution whose session is not in the sessions list (a subset property test); route table lists only GET/HEAD; every route answers 405 to POST/PUT/PATCH/DELETE; T10 and T11 tests
+    out); `/executions` never lists an execution whose session is not in the scope set (a subset property test);
+    **a fixture with more than 200 in-scope sessions: an execution of the 201st session is listed on `/executions`
+    (the join set is the scope set before the display cap) while the Sessions page shows 200 rows and the truncation
+    note; the JSON twin `/api/state/executions` goes through the same `Source.Executions` and passes the same
+    archived, out-of-scope, cap-after-filter and subset assertions; a request with `?archived=1` followed within
+    1 s by one without never serves the first response (the cache key carries the flag), for the page and the
+    twin;** the audit page is out of these tests (A1.0); route table lists only GET/HEAD; every route answers 405 to POST/PUT/PATCH/DELETE; T10 and T11 tests
     updated for the new readers; the dashboard still produces no AUDIT-01 mutation line.
 12. **Refresh and URL state:** a fake clock test that no request is sent while hidden, one on becoming visible,
     back-off and `Retry-After` bounds **with the floor at the page's own interval** (a first failure never retries
@@ -1114,8 +1142,10 @@ confirmed by the operator in R-DASH (below).
     has `scroll-padding-top` and a `max-height` with a floor.
 14. **Race:** `go test -race -count=20 ./internal/dashboard ./internal/mcp`.
 
-Mutations (each must be killed): `/executions` lists the executions of an archived session without the flag; the
-cap applied before the filter; an execution of an out-of-scope session listed; the CSP string weakened; an inline `style=` emitted; the dark error chip colour
+Mutations (each must be killed): the primary pressed fill reverted to `--hairline`; `/executions` lists the
+executions of an archived session without the flag; the cap applied before the filter; an execution of an
+out-of-scope session listed; the JSON twin served from an unfiltered list; the cache key without the archived flag
+(a stale-flag response); the join set cut at 200 sessions; the CSP string weakened; an inline `style=` emitted; the dark error chip colour
 reverted to `#e57373`; a chip label rendered in capitals; `letter-spacing` added to a table head; a raw state
 word shown as a label; the secondary colour used for a non-pending state; polling continued while hidden;
 `template.HTML` used for a title; a remote `url()` in the CSS; `th scope` or `lang` dropped; the liveness row keyed
@@ -1133,6 +1163,10 @@ on `stall_suspected` alone; an unknown liveness reason rendered as if known.
   headers, the `<details>` menu, `rgb(r g b / a)` colour syntax support and the 44 px coarse-pointer rule are
   UNVERIFIED until S1 is viewed in R-DASH.
 - Keyboard, screen-reader and zoom behaviour are design claims, not test results.
+- The static mock is one page with **seven `<h1>`** (one per screen, as its header comment says; each real screen is
+  its own page). The A1.10 tests that need one page per document (one `h1`, landmarks, the no-JS render) run on the
+  real per-page templates, not on the mock; the mock is checked by script for tag balance, IDs, anchors, styled
+  classes and forbidden constructs only.
 - The filter text written to the URL stays in the browser history of the operator's browser (local, and kept out of
   requests by `no-referrer`); it is search text, never a credential.
 - System fonts render differently per OS; relative-time and path-shortening text depends on the clock and the
@@ -1152,25 +1186,27 @@ on `stall_suspected` alone; an unknown liveness reason rendered as if known.
 5. **Executions page.** Add the `Source.Executions` reader (recommended; the data is already in
    `DashboardSnapshot`), or keep executions inside the session detail only?
 6. **Error-chip text colours.** Approve the A1 deviation (`#ef9a9a` dark, `#b71c1c` light) and the A1 light
-   surfaces, or provide other values?
+   surfaces, or provide other values? **Recommended: approve**; the extracted values fail AA on three surfaces (A1.2).
 7. **Diff view.** Unified only in S2 (recommended), with a split view as a later slice (a `?diff=split` GET link,
    no JS)?
 8. **No-JS auto refresh.** Offer the opt-in `?refresh=N` meta refresh (recommended off by default), or only the
    Refresh link?
 9. **CSS delivery.** Confirm the embedded stylesheet under `style-src 'self'` (no inline CSS, no hash, no nonce)
-   instead of the task's "inline CSS with a hash/nonce".
+   instead of the task's "inline CSS with a hash/nonce". **Recommended: confirm the embedded stylesheet** (stricter,
+   and it keeps the ETag and the 1 s cache).
 10. **Source of truth.** Keep `docs/design/dashboard-v2.css` as the reference and copy it in S1 (recommended), or
     treat `assets/dashboard.css` as the only copy once S1 merges and delete the design file then?
 11. **Wordmark and name.** "Cirak" as text only in the top bar and in each page `<title>` suffix; is a logo
-    needed (an inline SVG would be allowed by the CSP)?
+    needed (an inline SVG would be allowed by the CSP)? **Recommended: text only** in v2; no logo asset.
 12. **Relative time.** Relative text with the absolute time in `title` (plus the absolute time in the detail
-    view), or absolute only?
+    view), or absolute only? **Recommended: relative text with the absolute time in `title` and in the detail view.**
 13. **Menu behaviour.** A `<details>` menu closed below 60rem by a six-line script (recommended; open and usable
     without JS), or a CSS-only pattern that needs newer browser features (`::details-content`)?
 14. **Hallmark in the loop.** Keep `sloplint --scope app` as a manual gate run by the author of each slice
     (recommended; it needs Node and is not a repository dependency), or add it to CI?
 15. **Label maps.** Approve the sentence-case labels of A1.1 (state, liveness reason, audit event and outcome) as
-    the display vocabulary, with the raw word in `title`?
+    the display vocabulary, with the raw word in `title`? **Recommended: approve** (sentence case is Hallmark Floor 9;
+    the raw closed word stays available).
 16. **Name of the instance-label variable.** `CIRAK_DASHBOARD_LABEL` (ADR-026's prefix; recommended, since ADR-026
     renames the whole `BRIDGE_*` family), or `BRIDGE_DASHBOARD_LABEL` until ADR-026 is accepted, with the legacy-name
     rule ADR-026 proposes? ADR-026 and ADR-027 are PROPOSED: A1 cross-references them and decides nothing for them.
@@ -1252,8 +1288,8 @@ Reflex findings were fixed, not waived: off-scale spacing (gate 24b), missing `:
 wrapper), and three Finish-list warnings (balanced heads, typographic quotes, the missing meta description).
 
 **What did not change.** Everything in A1.0; the data model; the routes except the additive ones of A1.8; the
-reserved secondary rule; the contrast result (122 token pairs and 22 fill pairs, 0 failures, minimum text 4.62:1,
-minimum non-text 4.06:1).
+reserved secondary rule; the contrast result (now 124 token pairs and 22 fill pairs, 0 failures, minimum text 4.62:1,
+minimum non-text 4.06:1; the two added pairs are text on the pressed primary fill, A1.15).
 
 ### A1.14 Review #476 dispositions (task #477, 2026-11-21)
 
@@ -1285,3 +1321,35 @@ conformed to, not reopened.
 **Out of scope, recorded:** nothing new. Review #476's UNVERIFIED items (the mock is not rendered; the 216-pair
 count and D28 are not verifiable from the repository) stay as stated in A1.11; the "216" count is replaced by the
 reproducible count above.
+
+### A1.15 Review #480 and #481 dispositions (task #483, 2026-11-21)
+
+Review #480 (Worker B, mandatory): PASS-WITH-NITS, one P2 and nine P3. Delta re-review #481 (Worker C): PASS-WITH-NITS,
+two new P3. Every cited line was re-checked on main `cdaf5bd` and on the PR head `839ba4a`: `.btn:active`
+(`dashboard-v2.css:237`) and `.btn--primary` (`:238`) as described, `Execution` without a session field
+(`internal/dashboard/source.go:22-30`), `AuditSource.Entries()` only (`internal/dashboard/audit.go:78-79`),
+`maxListRows = 200` and the truncation note (`internal/dashboard/views.go:20`, `poll.go:96-98`). No finding was false.
+
+**P2-1, before and after (recomputed with the WCAG 2.x formula).** *Before:* a pressed primary button drew `--on-primary`
+on `--hairline`: dark `#0d1b3e` on `#333333` = **1.337:1**, light `#ffffff` on `#e0e0e0` = **1.320:1**. *After:* a
+`.btn--primary:active` rule after `.btn:active` with the new token `--primary-active` (`#6a9cf5` dark, `#1a4fd6`
+light): **6.18:1 dark, 6.70:1 light**, both tested; the pair joins the token set (**124 token pairs + 22 fill pairs**,
+0 failures; the minima are unchanged: text 4.62, non-text 4.06); the mutation "primary pressed fill reverted to
+`--hairline`" is in A1.10.
+
+| Finding | Disposition | Where |
+| --- | --- | --- |
+| **#480 P2-1** pressed primary button 1.34:1 / 1.32:1 | **FIXED** (token, rule, tested pair, mutation, counts restated) | A1.1, A1.2, A1.10, the CSS |
+| #480 P3-1 + #481 P3-1 `/executions` join set vs the 200-row display cap | **FIXED**: the join set is the scope set **before** the display cap; a footnote on the page; a fixture with more than 200 in-scope sessions | A1.4 item 3, A1.8, A1.10 item 11 |
+| #480 P3-2 no session field on the dashboard `Execution` | **FIXED**: S3 adds the harness-qualified session ID to the row; the Session column and link are built from it | A1.8, A1.9 S3 |
+| #480 P3-3 A1.0 scope vs the D17 Q4 audit ring | **FIXED**: the scope sentence is limited to the session and execution pages and the audit page is named as the D17 Q4 exception (not ACL-filtered, cited); D17 is conformed to, not reopened | A1.0, A1.4 item 5 |
+| #480 P3-4 mock gaps | **FIXED** in the mock: the liveness note says "the Bridge takes no action"; the audit table has a Session column; an archived row with its chip and the filter note; **declined** for the seven `h1`: the mock is a one-page stand-in, stated in A1.11 with the tests that run on real templates instead | the mock, A1.11 |
+| #480 P3-5 token-expiry badge and instance label have no slice | **FIXED**: both are S3 (with `Source.Health` and the label variable); S1/S2 omit them | A1.3, A1.9 |
+| #480 P3-6 questions without a recommendation | **FIXED**: explicit "Recommended:" on Q6, Q9, Q11, Q12 and Q15 (the questions stay open) | A1.12 |
+| #480 P3-7 A1.1 vs A1.4 reserved labels | **FIXED**: the four reserved A2 labels are listed in A1.1 as not rendered until ADR-017 A2 is accepted | A1.1 |
+| #480 P3-8 `color-scheme: light` | **FIXED** in both light blocks of the CSS | the CSS, A1.1 |
+| #480 P3-9 + #481 P3-2 the JSON twin and the cache key | **FIXED**: the twin uses the same `Source.Executions`; tests on the twin, a cache-key test (`?archived=1` then without within 1 s), and three mutations (unfiltered twin, flagless key, join set cut at 200) | A1.8, A1.10 item 11 and mutations |
+
+**Out of scope, recorded:** nothing new. #481's UNVERIFIED items (the pending-permission row, the archived outline
+token and the nested-tint stack are not recomputable from the tokens alone) stay listed in A1.2 as fills; the nested
+tint is still not a used pair.

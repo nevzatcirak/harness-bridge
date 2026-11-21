@@ -32,6 +32,7 @@
   /* brand and semantic colours (extracted) */
   --primary: #82b1ff;       /* the primary action, the current selection, the focus ring: nothing else */
   --on-primary: #0d1b3e;
+  --primary-active: #6a9cf5; /* the pressed primary fill: text on it 6.18:1 (A1.2) */
   --secondary: #b388ff;     /* RESERVED: only "pending / awaiting a human" (waiting_for_permission) */
   --ok: #81c784;
   --warn: #ffb74d;
@@ -88,6 +89,7 @@
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
+    color-scheme: light;
     --bg: #fafafa;            /* A1 */
     --surface-low: #f2f2f2;   /* A1 */
     --surface: #ffffff;       /* paper (extracted) */
@@ -97,6 +99,7 @@
     --hairline: #e0e0e0;
     --primary: #2962ff;       /* extracted */
     --on-primary: #ffffff;
+    --primary-active: #1a4fd6; /* text on it 6.70:1 (A1.2) */
     --secondary: #6200ea;
     --ok: #1b5e20;
     --warn: #9a4700;
@@ -120,6 +123,7 @@
 
 /* explicit choice by the optional theme toggle (A1.6 JS-2) wins over the media query */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg: #fafafa;
   --surface-low: #f2f2f2;
   --surface: #ffffff;
@@ -129,6 +133,7 @@
   --hairline: #e0e0e0;
   --primary: #2962ff;
   --on-primary: #ffffff;
+  --primary-active: #1a4fd6;
   --secondary: #6200ea;
   --ok: #1b5e20;
   --warn: #9a4700;
@@ -237,6 +242,8 @@ main { padding-block: var(--space-4) var(--space-6); min-width: 0; }
 .btn:active { background: var(--hairline); }
 .btn--primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .btn--primary:hover { background: var(--primary); }
+/* after .btn:active (same specificity, later wins): a pressed primary button must not fall back to the neutral pressed fill (1.34:1) */
+.btn--primary:active { background: var(--primary-active); border-color: var(--primary-active); }
 .btn:disabled, .input:disabled, .select:disabled, .btn[aria-disabled="true"] {
   color: var(--text-muted); border-color: var(--hairline); cursor: not-allowed; background: transparent;
 }
