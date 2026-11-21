@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cirak dashboard v2 mock</title>
+<meta name="description" content="Static mock of the ADR-023 Amendment A1 dashboard screens, with fictional sample data. Not served by the dashboard.">
+<!--
+  Static mock of ADR-023 Amendment A1 (PROPOSED), revised by the Hallmark sweep A1.13. It is NOT served by
+  the dashboard and has no behaviour: every value is fictional sample data. It links the reference
+  stylesheet next to it and keeps the rules the real pages keep: no inline <style>, no style="" attribute,
+  no event handler, no script, no remote resource. To see the light theme change data-theme to "light" on
+  <html>, or remove it and switch the OS to light. One scroll shows every screen of A1.4; in the real
+  dashboard each screen is its own page.
+-->
+<link rel="stylesheet" href="dashboard-v2.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar">
+  <div class="wrap bar">
+    <span class="brand">Cirak</span>
+    <details class="menu" open>
+      <summary>Menu</summary>
+      <nav aria-label="Main">
+        <ul>
+          <li><a href="#sessions" aria-current="page">Sessions</a></li>
+          <li><a href="#executions">Executions</a></li>
+          <li><a href="#catalog">Catalog and archived</a></li>
+          <li><a href="#audit">Audit</a></li>
+          <li><a href="#health">About and health</a></li>
+        </ul>
+      </nav>
+    </details>
+    <span class="spacer"></span>
+    <span class="badge" title="Instance label, set by the operator">bridge-a, unix socket</span>
+    <span class="badge chip--warn" title="Connector token expiry, remote mode only: 2026-11-21 18:40Z">Token expires in 52 min</span>
+    <button class="btn" type="button" hidden>Theme</button>
+    <span class="label">Read-only</span>
+  </div>
+</header>
+
+<main id="content" tabindex="-1" class="wrap">
+  <!-- ============ Screen 1: Sessions ============ -->
+  <section id="sessions" aria-labelledby="h-sessions" class="cards">
+    <h1 id="h-sessions">Sessions</h1>
+    <div class="card">
+      <div class="toolbar" role="search">
+        <label class="visually-hidden" for="q">Search sessions</label>
+        <input class="input" id="q" type="search" placeholder="Search title, path or ID">
+        <label class="visually-hidden" for="f-state">State</label>
+        <select class="select" id="f-state"><option>All states</option><option>Running</option><option>Waiting for permission</option><option>Idle</option><option>Unknown</option></select>
+        <label class="visually-hidden" for="f-h">Harness</label>
+        <select class="select" id="f-h"><option>All harnesses</option><option>OpenCode</option><option>Claude Code</option></select>
+        <a class="btn" href="#catalog">Show archived</a>
+        <span class="label">4 sessions, updated <time datetime="2026-11-21T17:48:02Z" title="2026-11-21 17:48:02Z">3 s ago</time></span>
+      </div>
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-sessions">
+        <table>
+          <caption class="visually-hidden">Sessions known to this Bridge</caption>
+          <thead>
+            <tr>
+              <th scope="col">Harness</th><th scope="col">Session</th><th scope="col">Repository and path</th>
+              <th scope="col">Lifecycle root</th><th scope="col">State</th><th scope="col">Guard</th>
+              <th scope="col">Current execution</th><th scope="col">Last activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge">OpenCode</span></td>
+              <td><a href="#detail">Fix flaky retry test</a><br><code>ses_demo0001</code></td>
+              <td class="path"><span title="/srv/demo/work/payments-api/services/billing">…/services/billing</span></td>
+              <td class="path"><span>/srv/demo/work</span></td>
+              <td><span class="chip chip--info">Running</span></td>
+              <td>Held, running</td>
+              <td><code>7a2c91e0…</code></td>
+              <td><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time></td>
+            </tr>
+            <tr>
+              <td><span class="badge">OpenCode</span></td>
+              <td><a href="#detail">Migrate config loader</a><br><code>ses_demo0002</code></td>
+              <td class="path"><span title="/srv/demo/work/tools/config-loader">/srv/demo/work/tools/config-loader</span></td>
+              <td class="path"><span>/srv/demo/work</span></td>
+              <td><span class="chip chip--secondary">Waiting for permission</span></td>
+              <td>Held, waiting for permission</td>
+              <td><code>b81f03d4…</code></td>
+              <td><time datetime="2026-11-21T17:41:30Z" title="2026-11-21 17:41:30Z">6 min ago</time></td>
+            </tr>
+            <tr>
+              <td><span class="badge">Claude Code</span></td>
+              <td>Docs pass<br><code>claudecode:4e59c1bd</code></td>
+              <td class="path"><span title="/srv/demo/work/site/docs">/srv/demo/work/site/docs</span></td>
+              <td class="path"><span>/srv/demo/work</span></td>
+              <td><span class="chip chip--warn">Unknown</span></td>
+              <td>None</td>
+              <td>None</td>
+              <td><time datetime="2026-11-21T16:02:44Z" title="2026-11-21 16:02:44Z">1 h ago</time></td>
+            </tr>
+            <tr>
+              <td><span class="badge">OpenCode</span></td>
+              <td><a href="#detail">Spike: cache layer</a><br><code>ses_demo0003</code></td>
+              <td class="path"><span title="/srv/demo/work/spikes/cache">/srv/demo/work/spikes/cache</span></td>
+              <td class="path">None</td>
+              <td><span class="chip">Idle</span></td>
+              <td>None</td>
+              <td>None</td>
+              <td><time datetime="2026-11-20T09:15:00Z" title="2026-11-20 09:15:00Z">1 d ago</time></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Screen 2: Session detail (the signature: the execution timeline) ============ -->
+  <section id="detail" aria-labelledby="h-detail" class="cards">
+    <h1 id="h-detail">Session <code>ses_demo0001</code></h1>
+    <div class="card">
+      <dl class="kv">
+        <dt>Harness</dt><dd><span class="badge">OpenCode</span></dd>
+        <dt>Session ID</dt><dd><code>ses_demo0001</code> <button class="btn" type="button" hidden>Copy</button></dd>
+        <dt>Title</dt><dd>Fix flaky retry test</dd>
+        <dt>Path</dt><dd><code>/srv/demo/work/payments-api/services/billing</code></dd>
+        <dt>Lifecycle root</dt><dd><code>/srv/demo/work</code></dd>
+        <dt>State</dt><dd><span class="chip chip--info">Running</span></dd>
+        <dt>Guard</dt><dd>Held by execution <code>7a2c91e0…</code>, running</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2 id="h-tl">Execution timeline</h2>
+      <p class="label">Newest first. The liveness report is advisory: it never changes an execution and the Bridge takes no action.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-tl">
+        <table class="timeline">
+          <caption class="visually-hidden">Executions of this session with the liveness report of the current one</caption>
+          <thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="chip chip--info">Running</span> <span class="label">current</span></td>
+              <td><code>7a2c91e0…</code></td>
+              <td><time datetime="2026-11-21T17:39:12Z" title="2026-11-21 17:39:12Z">17:39:12Z</time></td>
+              <td class="num">8 min 50 s</td>
+              <td><span class="chip chip--warn" title="NO_PROGRESS">No progress</span></td>
+            </tr>
+            <tr class="detail">
+              <td colspan="5">
+                <p class="report">No native progress for more than 2 minutes. This is a report, not a verdict.</p>
+                <dl class="kv">
+                  <dt>Native status</dt><dd><span class="chip chip--info">Busy</span></dd>
+                  <dt>Retry</dt><dd>None</dd>
+                  <dt>Last native progress</dt><dd><time datetime="2026-11-21T17:44:50Z" title="2026-11-21 17:44:50Z">3 min ago</time>, 2026-11-21 17:44:50Z</dd>
+                  <dt>Observed</dt><dd><time datetime="2026-11-21T17:48:01Z" title="2026-11-21 17:48:01Z">4 s ago</time></dd>
+                </dl>
+              </td>
+            </tr>
+            <tr class="perm-row">
+              <td colspan="5">
+                <span class="chip chip--secondary">Awaiting a human</span>
+                1 pending native permission request. It is not attributed to an execution by this Bridge, so no details are shown. Answer it in OpenCode.
+              </td>
+            </tr>
+            <tr>
+              <td><span class="chip chip--ok">Completed</span></td>
+              <td><code>5d03aa17…</code></td>
+              <td><time datetime="2026-11-21T17:21:40Z" title="2026-11-21 17:21:40Z">17:21:40Z</time></td>
+              <td class="num">6 min 02 s</td>
+              <td class="label">Ended</td>
+            </tr>
+            <tr>
+              <td><span class="chip chip--error">Failed</span></td>
+              <td><code>0c9be452…</code></td>
+              <td><time datetime="2026-11-21T17:02:11Z" title="2026-11-21 17:02:11Z">17:02:11Z</time></td>
+              <td class="num">1 min 15 s</td>
+              <td class="label">Ended</td>
+            </tr>
+            <tr>
+              <td><span class="chip chip--warn">Interrupted</span></td>
+              <td><code>e41d77b9…</code></td>
+              <td><time datetime="2026-11-21T16:48:03Z" title="2026-11-21 16:48:03Z">16:48:03Z</time></td>
+              <td class="num">3 min 30 s</td>
+              <td class="label">Ended</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Changes in the working tree</h2>
+      <p class="label">Native snapshot. 3 files, <span class="stat-add">+42</span> <span class="stat-del">−7</span>, 1 value redacted.</p>
+      <ul class="files">
+        <li>Modified services/billing/retry.go <span class="stat-add">+30</span> <span class="stat-del">−5</span></li>
+        <li>Modified services/billing/retry_test.go <span class="stat-add">+11</span> <span class="stat-del">−2</span></li>
+        <li>Added docs/NOTE.md <span class="stat-add">+1</span> <span class="stat-del">−0</span></li>
+      </ul>
+      <details class="file" open>
+        <summary>services/billing/retry_test.go</summary>
+<pre class="diff"><span class="ln hunk">@@ -18,6 +18,15 @@ func TestRetryBackoff(t *testing.T) {</span><span class="ln">     clock := fakeClock()</span><span class="ln del">-    time.Sleep(50 * time.Millisecond)</span><span class="ln add">+    clock.Advance(50 * time.Millisecond)</span><span class="ln add">+    if got := r.Attempts(); got != 3 {</span><span class="ln add">+        t.Fatalf("attempts = %d, want 3", got)</span><span class="ln add">+    }</span></pre>
+      </details>
+      <details class="file">
+        <summary>services/billing/retry.go</summary>
+<pre class="diff"><span class="ln hunk">@@ -40,4 +40,6 @@</span><span class="ln add">+    token := "[redacted]"</span></pre>
+      </details>
+      <p class="label">Per-turn diffs: <a href="#detail">12:17:09Z</a>, <a href="#detail">12:16:46Z</a></p>
+    </div>
+  </section>
+
+  <!-- ============ Screen 3: Executions, Catalog and archived ============ -->
+  <section id="executions" aria-labelledby="h-exec" class="cards">
+    <h1 id="h-exec">Executions</h1>
+    <div class="card">
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-exec">
+        <table>
+          <caption class="visually-hidden">Recent executions of the sessions listed on the Sessions page</caption>
+          <thead><tr><th scope="col">Execution</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Started</th><th scope="col">Duration</th></tr></thead>
+          <tbody>
+            <tr><td><code>7a2c91e0…</code></td><td><a href="#detail">ses_demo0001</a></td><td><span class="chip chip--info">Running</span></td><td><time datetime="2026-11-21T17:39:12Z">17:39:12Z</time></td><td class="num">8 min 50 s</td></tr>
+            <tr><td><code>5d03aa17…</code></td><td><a href="#detail">ses_demo0001</a></td><td><span class="chip chip--ok">Completed</span></td><td><time datetime="2026-11-21T17:21:40Z">17:21:40Z</time></td><td class="num">6 min 02 s</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="label">Only executions of the sessions listed on the Sessions page appear here; those of archived sessions appear with the archived filter. Executions live in the memory of this Bridge process: a restart empties the list (ADR-010).</p>
+    </div>
+  </section>
+
+  <section id="catalog" aria-labelledby="h-cat" class="cards">
+    <h1 id="h-cat">Catalog and archived</h1>
+    <div class="card">
+      <h2>/srv/demo/work</h2>
+      <p class="label">Lifecycle root, 5 sessions.</p>
+      <p><span class="chip chip--outline">Archived</span> <a href="#detail">Old prototype</a> <code>ses_demo0009</code></p>
+      <p class="label">Showing archived sessions is a filter. It changes nothing on the Bridge.</p>
+    </div>
+  </section>
+
+  <!-- ============ Screen 4: Audit ============ -->
+  <section id="audit" aria-labelledby="h-audit" class="cards">
+    <h1 id="h-audit">Audit</h1>
+    <div class="card">
+      <div class="toolbar">
+        <label class="visually-hidden" for="af">Filter audit events</label>
+        <input class="input" id="af" type="search" placeholder="Filter by session or event">
+        <span class="label">The ring keeps the last 1000 entries, newest first. No free text is stored.</span>
+      </div>
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-audit">
+        <table>
+          <caption class="visually-hidden">Audit feed</caption>
+          <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Detail</th><th scope="col">Actor</th></tr></thead>
+          <tbody>
+            <tr><td class="num">17:47:24Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok">New</span></td><td>Execution <code>7a2c91e0…</code></td><td>operator</td></tr>
+            <tr><td class="num">17:47:22Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--warn">Rejected</span></td><td>SESSION_BUSY</td><td>operator</td></tr>
+            <tr><td class="num">17:44:09Z</td><td><span class="chip" title="interrupt">Interrupt</span></td><td><span class="chip chip--ok">Accepted</span></td><td>Execution <code>e41d77b9…</code></td><td>operator</td></tr>
+            <tr><td class="num">17:04:23Z</td><td><span class="chip" title="guard_release">Guard release</span></td><td><span class="chip chip--error">Refused</span></td><td>INVALID_INPUT</td><td>admin:uid=996</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Screen 5: About and health ============ -->
+  <section id="health" aria-labelledby="h-health" class="cards">
+    <h1 id="h-health">About and health</h1>
+    <div class="card">
+      <dl class="kv">
+        <dt>Version</dt><dd>0.0.0-demo</dd>
+        <dt>Build</dt><dd><code>0123456789ab</code> (the VCS revision, or unknown)</dd>
+        <dt>Connector token</dt><dd><span class="chip chip--warn">Expires in 52 min</span> 2026-11-21 18:40Z (remote mode only; local mode has no expiry)</dd>
+        <dt>Lifecycle</dt><dd><span class="chip chip--ok">On</span></dd>
+        <dt>Permission relay</dt><dd><span class="chip">Off</span></dd>
+        <dt>Claude Code</dt><dd><span class="chip chip--ok">On</span></dd>
+        <dt>Harness reachability</dt><dd><span class="chip chip--ok">Reachable</span> from the last session list read, 4 s ago (no extra native probe)</dd>
+        <dt>Audit feed</dt><dd><span class="chip chip--ok">Enabled</span> 412 of 1000 entries</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============ States: empty, error, stale, 503, 404 ============ -->
+  <section aria-labelledby="h-states" class="cards">
+    <h1 id="h-states">Empty, error, stale and unavailable states</h1>
+    <div class="card state"><h2>No sessions</h2><p class="muted">No session is listed for this Bridge. Archived sessions are hidden. <a href="#catalog">Show archived</a></p></div>
+    <div class="card state"><h2>No executions</h2><p class="muted">This Bridge process has not recorded an execution for this session yet.</p></div>
+    <div class="card state"><h2>No changes</h2><p class="muted">The native snapshot shows no changed file in the working tree.</p></div>
+    <div class="banner" role="status">Showing the data from 17:47:58Z. The last refresh failed; trying again in 10 s.</div>
+    <div class="card state--warn"><h2>Temporarily unavailable (503)</h2><p>The data source did not answer in time. This page tries again in 10 s (Retry-After).</p></div>
+    <div class="card state--error"><h2>This view cannot be read</h2><p>The native harness is unavailable. Nothing is shown rather than a guess. <a href="#sessions">Back to Sessions</a></p></div>
+    <div class="card state"><h2>Diff unavailable</h2><p class="muted">The reason is shown here: snapshot disabled, binary, truncated or history pending (Claude Code, ADR-021).</p></div>
+    <div class="card state"><h2>Not found (404)</h2><p class="muted">No such session. The requested identifier is never echoed.</p></div>
+  </section>
+
+  <p class="label">This page is a static mock. Every value in it is fictional sample data.</p>
+</main>
+</body>
+</html>
