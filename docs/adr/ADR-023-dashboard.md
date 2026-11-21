@@ -758,3 +758,339 @@ Facts only (task #289). R-DASH stays **NOT_EXERCISED**; the native shapes stay U
   still marked a slice-5a proposal name.
 - **Not here.** The archive overlay and ADR-022 S6/S8, the O2 flag, Claude Code history and diffs,
   any new native endpoint, and the live R-DASH run.
+
+## Amendment A1 (PROPOSED, 2026-11-21): dashboard visual system v2 ("Cirak")
+
+Status: **PROPOSED, not accepted.** Task #463; maintainer decision **D28 (2026-11-21, in chat):** make
+the dashboard look professional and reuse the *visual language* of the maintainer's Lokman admin UI.
+Acceptance is by the Planning Desk under D19 (an amendment that conforms to the recorded D-items and
+passed its independent reviews, B mandatory and C second, with no open P0-P2). Until it is accepted the
+dashboard serves exactly the accepted ADR-023 pages.
+
+**What it is.** A presentation amendment: tokens, layout, screens, accessibility, CSP and JavaScript
+inventory, refresh behaviour, three implementation slices and a test plan. It supersedes the ASCII
+layouts of §5 **as visual design only**; §5's data, columns and semantics stay. Reference files, both
+docs only and not served: `docs/design/dashboard-v2.css` (the tokens and component shapes; slice S1 turns
+it into the embedded `assets/dashboard.css`) and `docs/design/dashboard-v2-mock.html` (a static mock with
+fictional data that links that stylesheet). **No code changes in this task.** The design values below are
+the maintainer's token values (values only); no Lokman code or asset is copied.
+
+### A1.0 Invariants that stay (ADR-023 §3, §4, §6, T1-T11)
+
+| Invariant | How A1 keeps it |
+| --- | --- |
+| Read-only: only GET/HEAD, no form, no write route (T5, T11) | No form, no button that submits. The only controls are links, a client-side filter, a copy button and a theme toggle, none of which sends anything to a Bridge write path. New routes are GET/HEAD. |
+| Server-rendered Go `html/template` | Unchanged. No `template.HTML`/`template.JS`/`template.URL` for native data (T1). |
+| No JavaScript framework, no build step, no external fetch | The one embedded `dashboard.js` stays vanilla; no bundler, no CDN, no webfont download, no remote image. |
+| CSP stays strict | The header string is **byte-identical** to §3 (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`). A1 adds no inline style, no inline script and no handler (A1.6). |
+| Loopback / unix socket only; Host and Origin checks | Unchanged. |
+| Redaction, size caps, no logging of content | Unchanged. The redaction count stays visible (A1.4). |
+| ADR-010/011/017/018: nothing the page shows changes a state | The liveness and pending-permission panels render what the Bridge already holds; they are labelled advisory (A1.4). |
+
+### A1.1 Design tokens
+
+Dark is the default. "Extracted" = the maintainer's value (D28); "A1" = chosen here, because the extracted
+list has no value for it. `docs/design/dashboard-v2.css` holds all of them as CSS custom properties.
+
+| Token | Dark | Light | Provenance |
+| --- | --- | --- | --- |
+| page background | `#121212` | `#fafafa` | dark extracted; light **A1** (`#f5f5f5` would drop the light link colour to 4.495:1, A1.2) |
+| surface low (nav) / mid (cards, top bar, tables) / high (menus) | `#1a1a1a` / `#1e1e1e` / `#242424` | `#fafafa` / `#ffffff` (paper) / `#ffffff` | extracted; light low/high **A1** |
+| text / muted text | `#e0e0e0` / `#a6a6a6` | `#212121` / `#595959` | dark **A1**; light text extracted (neutral), light muted **A1** |
+| primary (links, focus ring, current nav) / text on primary | `#82b1ff` / `#0d1b3e` | `#2962ff` / `#ffffff` | extracted; light on-primary **A1** |
+| success / warning / error / info | `#81c784` / `#ffb74d` / `#e57373` / `#64b5f6` | `#1b5e20` / `#9a4700` / `#c62828` / `#01579b` | extracted (light = the tone-text values) |
+| secondary (reserved) | `#b388ff` | `#6200ea` | extracted |
+| input border | `#8a8a8a` | `#767676` | extracted |
+| hairlines (decorative separators only) | `#333333` | `#e0e0e0` | **A1** |
+| radius: card / pill and nav / chip height / control height / card padding / nav width | 12 / 20 (nav 18) / 22 / 30 / 12 / 248 px | same | extracted; chip text 12 px, table header 12 px |
+| focus ring | 2 px primary, offset 2 px | same | extracted |
+| type | `system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif`; mono `ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace` for IDs, paths, diffs | same | extracted; no webfont (Q2) |
+
+**Reserved colour rule.** Secondary purple means **only** "pending / awaiting a human": a session or an
+execution in `waiting_for_permission`, and the pending-permission panel. Nothing else uses it (a test
+fails if any other class refers to `--secondary` or `--chip-secondary`).
+
+**State chips** (text on a tint of its own colour at alpha 0.14; the label word is always present, a glyph
+is `aria-hidden`, so colour is never the only cue):
+
+| State | Tone | | State | Tone |
+| --- | --- | --- | --- | --- |
+| `completed` | ok | | `failed` | error |
+| `running` | info | | `interrupted`, `unknown` | warn |
+| `waiting_for_permission` | secondary | | `idle` | neutral |
+| `archived` | neutral outline | | any unknown value | neutral, the escaped word (never a guess) |
+
+`idle` is **not** success (ADR-023 §5.1, ADR-011); it stays neutral. Liveness chips: native `busy` info,
+`retry` warn, `absent` neutral, `unavailable` warn; a `stall_reason` chip is warn.
+
+### A1.2 Contrast (WCAG 2.x relative luminance; AA = 4.5:1 text, 3:1 non-text)
+
+Computed from the values of `docs/design/dashboard-v2.css` itself (195 pairs, both themes, the light
+media-query block and the toggle block identical): **0 failures, minimum 4.62:1.** Chip tint = the chip
+text colour at alpha 0.14 composited over the surface the chip sits on. Slice S1 turns this computation
+into a test over the embedded CSS (A1.10), so the table cannot drift from the file.
+
+| Pair (dark) | bg | low | mid | high | | Pair (light) | bg | low | mid | high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| text | 14.19 | 13.18 | 12.63 | 11.76 | | text | 15.43 | 15.43 | 16.10 | 16.10 |
+| muted text | 7.70 | 7.15 | 6.85 | 6.38 | | muted text | 6.71 | 6.71 | 7.00 | 7.00 |
+| primary link | 8.64 | 8.02 | 7.69 | 7.16 | | primary link | 4.69 | 4.69 | 4.90 | 4.90 |
+| chip ok | 7.26 | 6.61 | 6.24 | 5.80 | | chip ok | 6.05 | 6.05 | 6.28 | 6.28 |
+| chip info | 6.70 | 6.09 | 5.82 | 5.41 | | chip info | 5.67 | 5.67 | 5.89 | 5.89 |
+| chip secondary | 5.70 | 5.26 | 4.97 | 4.62 | | chip secondary | 5.69 | 5.69 | 5.91 | 5.91 |
+| chip error | 6.86 | 6.24 | 5.97 | 5.49 | | chip error | 4.97 | 4.97 | 5.16 | 5.16 |
+| chip warn | 8.24 | 7.47 | 7.12 | 6.53 | | chip warn | 4.99 | 4.99 | 5.18 | 5.18 |
+| chip neutral | 10.14 | 9.15 | 8.75 | 8.10 | | chip neutral | 11.74 | 11.74 | 12.20 | 12.20 |
+| input border (3:1) | 5.43 | 5.04 | 4.83 | 4.50 | | input border (3:1) | 4.35 | 4.35 | 4.54 | 4.54 |
+| focus ring (3:1) | 8.64 | 8.02 | 7.69 | 7.16 | | focus ring (3:1) | 4.69 | 4.69 | 4.90 | 4.90 |
+
+Other pairs (dark / light): semantic text on card: ok 8.28 / 7.87, info 7.53 / 7.40, error 5.58 / 5.62,
+secondary 6.26 / 7.76, warn 9.63 / 6.41; text on primary (button, current nav) 7.79 / 4.90; text on a
+row or nav hover 8.75 / 12.20; text on a diff add line 9.52 / 12.85 and on a delete line 9.74 / 12.65;
+muted text on those lines 5.16 / 5.59 and 5.28 / 5.50; text on the pending-permission panel 10.03 / 12.27;
+archived outline against a card 12.63 / 16.10.
+
+**Where the extracted values were not enough (the reasons for the "A1" cells):**
+
+1. **Error chip text.** The extracted error colour as chip text gives dark 4.55:1 on a card but **4.24:1 on
+   the `high` surface (fails)**; light `#c62828` gives **4.501:1 on white (no margin)** and 4.34 / 4.14 on
+   the page backgrounds (fails). The chip text therefore uses `#ef9a9a` (dark) and `#b71c1c` (light); the error
+   tint used behind a chip and behind a removed diff line is that same colour at alpha 0.14. Error as plain text
+   (the `-M` count, an error message) keeps the extracted value (5.58 / 5.62 on a card).
+2. **Light page background `#fafafa`.** With `#f5f5f5` the light link colour is 4.495:1, below 4.5.
+3. **Nested tints.** A chip inside the tinted pending-permission panel stacks two tints (dark 3.94:1,
+   fails); inside that panel chips are outlines (4.97 dark / 5.91 light).
+4. **Rule:** a chip sits on a card or table surface or the page background, never on a surface not in the
+   table above; links and chips are not placed on any tinted panel except as stated.
+
+Not covered by a ratio: the decorative left accents (info, warn, error, secondary) and hairlines; the state is
+always also in text.
+
+### A1.3 Layout
+
+```
+┌ Cirak ── bridge-a (unix socket) ────── token expires in 52 min ── [Theme] ── read-only ┐  top bar, 48 px, sticky
+├─────────────┬────────────────────────────────────────────────────────────────────────────┤
+│ ( Sessions )│  main content, 16 px padding, cards 12 px radius                           │
+│   Executions│                                                                            │
+│   Catalog / │                                                                            │
+│   Archived  │                                                                            │
+│   Audit     │                                                                            │
+│   About /   │                                                                            │
+│   health    │                                                                            │
+│  nav 248 px │                                                                            │
+└─────────────┴────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Top bar:** the "Cirak" wordmark (text, no image), an instance label (Q3), the connector-token expiry
+  badge when the Bridge runs in remote mode (data and rules in A1.8; absent in local mode, where ADR-019
+  says there is no expiry), the theme toggle (hidden unless JS runs, A1.6) and the word "read-only". The
+  expiry tone: neutral, warn under 60 minutes, error once expired.
+- **Left nav:** Sessions, Executions, Catalog / Archived, Audit, About / health, as pills (radius 18);
+  `aria-current="page"` marks the current one. A link appears only when its page exists (no dead links in S1).
+- **Narrow screens (<= 900 px):** the nav becomes a horizontal strip above the content; the content reflows
+  to one column at 320 px (WCAG 1.4.10); tables scroll inside their own wrapper, never the page.
+
+### A1.4 Screens
+
+All screens: a `<main>` landmark, one `<h1>`, tables with `<caption>` (visually hidden) and `th scope`,
+absolute time in `title` and in the detail view's text beside the relative form
+(`<time datetime>`), IDs and paths in mono.
+
+1. **Sessions (`GET /`).** Toolbar: search (client-side), state filter, harness filter, archived link (the
+   existing `?archived=1`). Sticky-header table, columns: **harness** (an inline-SVG mark plus the label;
+   no remote image), **title + ID**, **repository / path** (mono; long paths shortened in the middle by the
+   server: the first 12 and last 32 runes joined by an ellipsis, rune-safe, full value in `title` and on the
+   detail page), **lifecycle root**, **state chip**, **guard**, **current execution**, **last activity**
+   (relative, absolute in `title`), an **archived** badge. Caps unchanged (200 rows).
+2. **Session detail (`GET /session/<harness>/<id>`).**
+   - A header card: copyable ID, path, lifecycle root, state chip, guard.
+   - **Executions** as a timeline: state chip, short ID, start time and duration; the current one marked.
+   - **Liveness block (ADR-017), prominent:** native status chip; retry attempt and next attempt time;
+     last native progress (relative and absolute); `stall_suspected` shown as the **reason chip**, never as a
+     bare boolean; observed-at; the fixed sentence "This is a report. It does not change the execution
+     state and the Bridge takes no action." The dashboard keys on `stall_reason`, **not** on
+     `stall_suspected` alone (review #459 P2-1: ADR-017 A2 may make the boolean true for a retry). A closed
+     map from reason to a plain-language line is held in the template data; an unknown value renders
+     `unknown`. Values of ADR-017 A2 (`PROVIDER_RETRYING`, `PROVIDER_ERROR`, `TOOL_RUNNING_LONG`,
+     `HARNESS_UNREACHABLE`, `cause_hint`, `tool`, `thresholds`) are **reserved rows in that map, rendered
+     only after A2 is accepted and its slice ships**; A1 depends on A1 fields only.
+   - **Pending-permission panel** (secondary colour): the count of pending native permissions and, only when
+     the Bridge attributes one to an execution (ADR-024), the fields ADR-024 already exposes to Chat (tool,
+     kind, pattern count, digest). Never a pattern, never native text. With the default incarnation mode off
+     it says "not attributed: answer it in OpenCode".
+   - **Changes:** a file list with status letter and `+N -M` counts (text, not colour only), the totals, the
+     **redaction count**, per file a `<details>` (collapsed except the first), the diff in `<pre>` as text
+     (unified; a split view is Q7), added and removed lines with a tint **and** the `+`/`-` character; per-turn
+     diffs behind the existing turn links; "unavailable" with the reason when there is no diff (Claude Code
+     history: ADR-021 pending, unchanged).
+3. **Executions (`GET /executions`).** A flat table of the executions the Bridge holds, newest first, capped;
+   a footnote that a restart empties it (ADR-010). Data: A1.8.
+4. **Catalog / Archived (`GET /catalog`).** Sessions grouped by lifecycle root (the existing label), with the
+   archived filter; read-only; it widens nothing (ADR-022 §6.1).
+5. **Audit (`GET /audit`).** The same bounded ring; the **event** as a neutral chip, the **outcome** as a chip
+   from a fixed map of the known outcome words (unknown word: neutral, escaped text), the error code, session,
+   execution, principal and the "other" attributes as today; the client-side filter stays.
+6. **About / health (`GET /health`).** Version, build (the VCS revision when the binary carries one, else
+   `unknown`), connector token expiry (remote mode only), enabled features (lifecycle, permission relay,
+   Claude Code: booleans from configuration), harness reachability **taken from the outcome of the last
+   session-list read** (no extra native probe), audit feed on/off and fill.
+7. **States.** *Empty* (no sessions; archived hidden), *error* (a view that cannot be read says so and shows
+   nothing rather than a guess), *503* (page text plus `Retry-After`, as §4), *404* (fixed text, never echoes
+   the identifier). All have a heading, a sentence and a link back.
+
+### A1.5 Accessibility (WCAG 2.2 AA)
+
+- **Contrast:** A1.2, both themes, as a test. **Not colour alone (1.4.1):** every chip has its word.
+  **Non-text contrast (1.4.11):** input border, focus ring, outline chip, all >= 3:1 (A1.2).
+- **Keyboard:** every control reachable in DOM order; a visible 2 px focus ring on every focusable element;
+  a "Skip to content" link first; the sticky top bar uses `scroll-padding-top` so a focused element is not
+  hidden behind it (2.4.11).
+- **Target size (2.5.8):** controls 30 px, nav links 36 px (the minimum is 24 px); chips are not interactive.
+- **Structure:** `lang`, landmarks (`header`, `nav` with a label, `main`), heading order, table captions
+  and `th scope`, `aria-current`, `<time datetime>`; a glyph in a chip is `aria-hidden`; no information only
+  in `title`.
+- **Reflow and spacing:** usable at 320 px width and 200% zoom (1.4.10, 1.4.4), no fixed heights on text, text
+  spacing overrides do not clip (1.4.12).
+- **Motion:** `prefers-reduced-motion: reduce` disables every animation and transition (the page has none
+  that carries meaning). `forced-colors: active` gives chips a `CanvasText` border.
+- Not claimed without a real screen-reader pass (UNVERIFIED, A1.11).
+
+### A1.6 CSP, security and JavaScript
+
+**CSS.** The stylesheet is the one embedded `/dashboard.css` served under `style-src 'self'`; the pages carry
+**no inline `<style>` and no `style=""` attribute**, so the CSP needs no hash and no nonce. A nonce would
+need per-request state and would defeat the ETag/304 and the 1 s view cache of §4; a hash would need a build
+step. **This departs from the task text ("inline CSS with a hash/nonce") in favour of a strictly tighter
+policy; Q9 asks for confirmation.** Bars and proportions use classes or SVG presentation attributes
+(`fill`, `width` on an `<svg>` element are not governed by `style-src`; a test pins that no `style=` is
+emitted). Icons are inline `<svg aria-hidden="true">` with fixed paths; no `url()` to a remote host, no
+`@import`, no `@font-face`.
+
+**JavaScript inventory** (the single embedded `dashboard.js`, <= 16 KiB, plus `theme.js`, <= 1 KiB; the
+existing rules stay: values set with `textContent`, no markup built from data, nothing evaluated, `GET` only):
+
+| # | Behaviour | CSP impact | No-JS fallback |
+| --- | --- | --- | --- |
+| JS-1 | Copy-ID button (`navigator.clipboard.writeText`) | none (`script-src 'self'`) | the ID is selectable text (`user-select: all`); the button is `hidden` until the script runs |
+| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1) |
+| JS-3 | Poll refresh of `/api/state` (existing), now pausing when hidden (A1.7) | none (`connect-src 'self'`) | a "Refresh" link; optional `?refresh=N` (Q8) |
+| JS-4 | Client-side filter and search for the sessions, executions and audit tables | none | the full table is shown |
+| JS-5 | Re-render `<time>` relative text from `datetime` every 30 s; no network | none | the server-rendered relative text and the absolute time in `title` |
+
+Forbidden by test in the shipped JS: `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`,
+`new Function`, string arguments to `setTimeout`/`setInterval`, dynamic `import()`, any `http:`/`https:` literal,
+`localStorage` for anything but the theme key. No third-party code.
+
+**Security checks that stay or are added:** escaping fixtures (T1) for every new template field (titles, paths,
+labels, tool names); response headers on every response including errors; no CORS headers; Host/Origin as
+today; the method sweep returns 405 on every route including the new ones; no new native read (A1.8).
+
+### A1.7 Auto-refresh (amends §4's hidden-tab cadence)
+
+- Visible: the list polls every 5 s, the detail every 2 s (as §4), `If-None-Match`, `304` when unchanged.
+- **Hidden tab: paused** (no timer, no request, the in-flight request aborted) and **one immediate refresh
+  when the tab becomes visible again**. §4's "every 10 s when hidden" is superseded.
+- Errors: `503` honours `Retry-After`; otherwise back off x2 from 2 s up to 60 s; reset on success. The
+  interval is bounded below by 2 s so a bad `Retry-After` cannot make it faster.
+- No-JS: no automatic refresh by default; a visible "Refresh" link; an opt-in `?refresh=N` meta refresh
+  (10 <= N <= 300, validated server-side, an invalid value ignored) is Q8.
+
+### A1.8 Data and Source additions (all read-only, all from memory the Bridge already holds)
+
+| Addition | Source | Notes |
+| --- | --- | --- |
+| `Execution.Liveness` (the ADR-017 A1 fields) and a pending-permission summary on the dashboard `Execution` | the existing `execution.Execution` copies in `DashboardSnapshot()` (`internal/execution/dashboard.go`), mapped in `internal/mcp/dashsource.go` | no native read; same copy-under-`m.mu`-then-each-`x.mu` order (T10); permission summary = what ADR-024 already shows Chat, never a pattern |
+| `Source.Executions(ctx)` | `DashboardSnapshot().Executions`, newest first, capped | the T11 method-set pin test lists the new reader |
+| `Source.Health(ctx)` | version and build from the binary, features from configuration, connector token **expiry timestamp** (never the token, never the Host or origin) from the remote settings through a read-only getter, harness reachability from the last list read | no new native probe; absent fields are omitted, never defaulted |
+| instance label | optional `BRIDGE_DASHBOARD_LABEL`, <= 40 bytes, `[A-Za-z0-9 ._-]`, default none | startup error on an invalid value, like the redaction variable (Q3) |
+
+The dashboard package still depends on the `Source` interface only; the T11 test lists the exact reader set.
+
+### A1.9 Slices (one PR each; the first commit of S1 marks this amendment ACCEPTED per D19 with a dated note)
+
+- **S1 — tokens, layout, sessions.** `assets/dashboard.css` from the reference file (dark only; `color-scheme:
+  dark`), the new page shell (top bar, nav with Sessions and Audit only), the sessions table with chips, path
+  shortening, relative time, filters, the A1.7 pause-on-hidden behaviour, golden snapshots, the CSP / no-inline
+  / no-external-URL tests, the contrast test over the dark tokens, A1.0 route and method sweeps.
+- **S2 — detail.** `Execution.Liveness` and the permission summary in `Source`, the detail page (header,
+  timeline, liveness block, pending-permission panel, diff with file list and `<details>`), JS-1, per-page
+  snapshots with fixtures for every liveness reason, hostile-input fixtures.
+- **S3 — audit, health, executions, catalog, light theme.** The audit restyle, `Source.Health` and `/health`,
+  `Source.Executions` and `/executions`, `/catalog`, the light token blocks, `theme.js` and the toggle (JS-2),
+  the light contrast checks and snapshots. S3 may be split into S3a (pages) and S3b (light theme) by the
+  implementer.
+
+Each slice is RED-first with the A1.10 cases it owns. No slice needs a live service; the visual result is
+confirmed by the operator in R-DASH (below).
+
+### A1.10 Test plan (RED-first)
+
+1. **Golden HTML snapshots** of every screen and state with a fixed clock and fixture source, committed under
+   `internal/dashboard/testdata/`, one per theme where it applies.
+2. **Contrast as code:** parse the custom properties of the embedded CSS, composite the 0.14 tints, compute the
+   WCAG ratio, assert every pair of A1.2 (>= 4.5 text, >= 3 non-text) for each theme present; the test fails
+   when a token changes.
+3. **CSP header test:** the exact string of §3 on every response; **no `<style>`, no `style=`, no `on*=`
+   attribute, no inline `<script>`** in any rendered page (all screens, all states).
+4. **No external URL:** the templates, CSS and JS contain no `http:`/`https:`/protocol-relative URL, no
+   `@import`, no `@font-face`, no `url(` to a non-embedded path.
+5. **JS hygiene:** the forbidden-API scan of A1.6; a size cap on `dashboard.js` and `theme.js`.
+6. **Reserved colour:** no class other than the pending ones refers to the secondary tokens.
+7. **No-JS render:** the same pages with the script blocked show the full tables, the Refresh link and no
+   dead control (the toggle and copy button stay hidden).
+8. **Accessibility structure:** `lang`, landmarks, one `h1`, `caption` and `th scope` on every table,
+   `aria-current` on exactly one nav link, glyphs `aria-hidden`, labels on every input.
+9. **Security:** XSS fixtures in titles, paths, labels, tool names and audit values for every new template
+   field; route table lists only GET/HEAD; every route answers 405 to POST/PUT/PATCH/DELETE; T10 and T11 tests
+   updated for the new readers; the dashboard still produces no AUDIT-01 mutation line.
+10. **Refresh:** a fake clock test that no request is sent while hidden, one on becoming visible, back-off and
+    `Retry-After` bounds.
+11. **Race:** `go test -race -count=20 ./internal/dashboard ./internal/mcp`.
+
+Mutations (each must be killed): the CSP string weakened; an inline `style=` emitted; the dark error chip
+colour reverted to `#e57373`; the light page background set to `#f5f5f5`; the secondary colour used for a
+non-pending state; a chip placed on an unlisted surface; polling continued while hidden; `template.HTML` used for
+a title; a remote `url()` in the CSS; `th scope` or `lang` dropped; the liveness block keyed on `stall_suspected`
+alone; an unknown liveness reason rendered as if known.
+
+### A1.11 Limitations / UNVERIFIED
+
+- The design values are the maintainer's token list as given in task #463; the Lokman source was not read.
+  The "A1" values (light page background, text and muted colours, hairlines, error chip text) are chosen here.
+- Contrast is computed with the WCAG 2.x relative-luminance formula (not APCA) on the CSS file; browsers were
+  **not** used. The static mock was checked for well-formedness, duplicate IDs, dangling anchors, unstyled
+  classes and forbidden constructs by a script, but **was not rendered in any browser** (none is installed on
+  the host): layout, `rgb(r g b / a)` colour syntax support, sticky headers, `<details>` and the inline-SVG
+  presentation-attribute claim of A1.6 are UNVERIFIED until S1 is viewed in R-DASH.
+- Keyboard, screen-reader and zoom behaviour are design claims, not test results.
+- System fonts render differently per OS; relative-time and path-shortening text depends on the clock and the
+  fixture.
+- ADR-017 A2 is PROPOSED with open review findings (#459): A1 renders A1 fields only and keys on `stall_reason`.
+- The sources and native shapes of §1 remain as stated there; nothing here adds a native read.
+
+### A1.12 Open questions (answers needed; recommendation first)
+
+1. **Light theme.** Media query plus an optional toggle stored in `localStorage` (JS-2), or media query only?
+   Recommended: both (the toggle is progressive; without JS the system preference applies).
+2. **Fonts.** System stack only (recommended), or embed Roboto under its OFL licence (about 100-150 KB per
+   weight, a licence notice to ship)?
+3. **Instance label.** A new optional `BRIDGE_DASHBOARD_LABEL` (recommended, default none), or show the host name?
+4. **Token-expiry badge.** Fed by a read-only getter of the connector token's expiry (remote mode only, never the
+   token), recommended; or drop the badge from v2?
+5. **Executions page.** Add the `Source.Executions` reader (recommended; the data is already in
+   `DashboardSnapshot`), or keep executions inside the session detail only?
+6. **Error-chip text colours.** Approve the A1 deviation (`#ef9a9a` dark, `#b71c1c` light) and the `#fafafa` light
+   background, or provide other values?
+7. **Diff view.** Unified only in S2 (recommended), with a split view as a later slice (a `?diff=split` GET link,
+   no JS)?
+8. **No-JS auto refresh.** Offer the opt-in `?refresh=N` meta refresh (recommended off by default), or only the
+   Refresh link?
+9. **CSS delivery.** Confirm the embedded stylesheet under `style-src 'self'` (no inline CSS, no hash, no nonce)
+   instead of the task's "inline CSS with a hash/nonce".
+10. **Source of truth.** Keep `docs/design/dashboard-v2.css` as the reference and copy it in S1 (recommended), or
+    treat `assets/dashboard.css` as the only copy once S1 merges and delete the design file then?
+11. **Wordmark and name.** "Cirak" as text only in the top bar and in each page `<title>` suffix; is a logo
+    needed (an inline SVG would be allowed by the CSP)?
+12. **Relative time.** Relative text with the absolute time in `title` (plus the absolute time in the detail
+    view), or absolute only?
