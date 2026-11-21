@@ -1391,3 +1391,14 @@ through a fetch tool; quotes were shortened, and the CLI, headless, permissions,
 authentication, sessions, managed-settings and env-vars quotes were read from raw
 page text while the settings-reference entries and the `terminal_reason` list
 passed through a summarizer.
+
+## As accepted live (R6), 2026-11-21
+
+The live acceptance is **complete**, on the runtime and with the evidence recorded in
+[`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../evidence/R6_EVIDENCE_2026-11-21.md): item 1 PASS
+(run 3, 6/6 probes `rule`, 6/6 controls `none`), item 2 OBSERVED and item 5 OBSERVED (run 4),
+items 4 and 6 PASS (run 5), items 7 and 8 PASS (run 4); item 3 was not run as a separate item (it is
+item 2's `post_result types=none` line, shared with slice 1). The runs used one host, one CLI version
+(Claude Code 2.1.325) and form A; the test-user wrapper pattern and the `child_home` operator
+precondition are documented in the runbook §7a (the driver does not verify them). This note records
+the acceptance; it does not change the decision text above.
