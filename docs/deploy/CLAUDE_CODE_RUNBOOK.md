@@ -1,10 +1,9 @@
 # Claude Code adapter: deployment runbook (ADR-021)
 
-**Status: reference only. Nothing in this runbook has been performed. Every statement about
-live behaviour is UNVERIFIED until the operator-run acceptance of ADR-021 slices 3 and 5 has
-passed.** The adapter is not wired into the Bridge (`claudecode:` session IDs are refused
-"not enabled"), the live credential canary has not run (no allowed authenticated run exists,
-D14 Q10), and slice 3 cannot ship until it can. The steps below are for the operator; the
+**Status: reference only. The operator-run R6 live acceptance of ADR-021 slices 3 and 5 is
+complete (2026-11-21; §7a and `docs/evidence/R6_EVIDENCE_2026-11-21.md`): the hostile-root
+credential canary passed in run 3 (item 1).** The adapter is still not wired into the Bridge
+(`claudecode:` session IDs are refused "not enabled"). The steps below are for the operator; the
 Bridge, its tests and its authors perform none of them.
 
 ## 0. Preconditions
@@ -69,9 +68,9 @@ user's service environment (never in a committed file, never a secret):
 must be listed there too). Optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS`,
 `BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX`. A `BRIDGE_CLAUDE_*` value without the command, a
 missing required value or an unusable file stops the Bridge at start with an error (no partial
-enablement); a read-only ingress ignores the adapter. **The credential canary has not run and cannot
-without an authenticated run (D14 Q10): do not enable this against a real login until the maintainer has
-provisioned one.**
+enablement); a read-only ingress ignores the adapter. **The hostile-root credential canary passed
+in R6 run 3 against the decoy tree (item 1); the adapter is still unwired. Do not enable this
+against a real login until the maintainer has provisioned an authenticated run (D14 Q10).**
 
 ## 6. Operating it (once wired; UNVERIFIED)
 - Interrupt: SIGINT, then SIGTERM after 10 s, then the Bridge gives up after 5 s more
@@ -90,13 +89,14 @@ provisioned one.**
   systemd scope or cgroup of the Claude user's commands (ADR-021 section 4) before a release.
 - Restart gap: killing the Bridge mid-turn leaves a turn the next start marks `restart_gap`.
 
-## 7. Live acceptance still open (operator-run, NOT_EXERCISED)
+## 7. Live acceptance (operator-run; R6 complete 2026-11-21)
 See `internal/adapters/claudecode/ACCEPTANCE_S3.md` and ADR-021 §10 slice 5 (R6).
 
 ## 7a. R6 live acceptance: complete (2026-11-21)
 
 **R6 is complete.** The runtime, the five runs (runs 1 and 2 FAIL/INCOMPLETE before their fixes, run 3
-item 1 PASS, run 4 items 2/5 OBSERVED and 7/8 PASS, run 5 items 4/6 PASS), the per-item verdicts, what
+item 1 PASS, run 4 items 4/6 FAIL (inconclusive: not tested — resumed session and no read scope) and
+items 2/5 OBSERVED and 7/8 PASS, run 5 items 4/6 PASS (fixed by #426/#427)), the per-item verdicts, what
 each fix changed and the limitations are in
 [`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../evidence/R6_EVIDENCE_2026-11-21.md). This section keeps
 the operator command and the evidence contract; the history below (runs 1-4 and the expected run 5
@@ -210,8 +210,9 @@ was added. Run-3 behaviour of the real CLI (the same two texts, the paths, the o
 the text or the path the CLI returns differs from run 2 (read the redacted history record, never the evidence
 line, which carries only the class).
 
-**R6 run 3 (2026-11-20 about 16:1xZ, run by the maintainer; recorded here from the Planning Desk's state log #117,
-not reproduced by the author).** Driver `54314e7` with `-tags live` (sha256 `ed973c79…4834`), form A test user
+**R6 run 3 (2026-11-20 16:09Z, relayed: the Planning Desk's state log said "about 16:1xZ";
+run by the maintainer; recorded here from that state log #117, not reproduced by the author).**
+Driver `54314e7` with `-tags live` (sha256 `ed973c79…4834`), form A test user
 `hbcanary`, Claude Code 2.1.325. **Item 1 (canary) PASS** `why=all_probes_denied_controls_read`, exit 0: 6/6 probes
 `denial_class=rule`, 6/6 controls `none`, no decoy leak, no file canary, no sink request, `mcp_servers=0` and
 `apiKeySource` `none` on 12/12 runs, all three observations made. That also settles review #424 P3-2 for the real CLI: a Grep/Glob
@@ -281,8 +282,11 @@ the wrapper exited before the signal fired: repeat the run, do not read it as a 
 `both_signals_relayed_child_gone`: the SIGINT run was relayed (`exit_ms` 3722, child gone) and the
 SIGTERM run was relayed (child exit 143, `exit_ms` 2567, child gone). **Item 6 PASS**
 `managed_deny_applied_no_inline_rules`: the managed-only Read was denied, `denial_class=rule`, no marker
-shown. Every run also recorded `no_file_canary=true`, `no_sink_request=true`, `no_decoy_leak=true`,
-`mcp_servers=0` and `api_key_source=none`; the hostile-root traps never fired. The run 5 driver contains
+shown. Runs 4 and 5 recorded the per-run `mcp_servers=0` and `api_key_source=none`
+(`driver.go:279`) only. The item 1 lines `no_file_canary`, `no_sink_request` and `no_decoy_leak`
+(`canary.go:540`) were recorded on every item 1 run (runs 1-3), not on runs 4-5. The hostile-root
+traps did not fire on the item 1 runs, but the "traps never fired" claim for runs 4-5 is
+**UNVERIFIED** (no file-canary, sink or leak observation was made there). The run 5 driver contains
 the #426/#427 fixes (fresh session plus the item 1 scope for items 4 and 6, the probe argv guard and the
 run-home pre-flight); this is the direct live confirmation of them. **R6 is complete** with this run;
 item 3 remains the one item not run as a separate item (it is item 2's `post_result types=none` line,

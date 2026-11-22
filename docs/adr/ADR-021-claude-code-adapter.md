@@ -1024,6 +1024,7 @@ MCP schemas; allowlist file loading (§6).
   being refused (**fixed in slice 3**).
 
 - **As built (slice 3, code part; the live acceptance is operator-run and NOT_EXERCISED).**
+  **Superseded by the R6 live acceptance note (below).**
   Still unwired: `claudecode:` IDs are refused "not enabled", nothing in `cmd/bridge`, the
   manager or the MCP dispatch calls the `Executor`, and `interrupt_execution` support exists
   inside `runner.Executor.Interrupt` only (authorization and the MCP exposure are the wiring
@@ -1075,7 +1076,7 @@ MCP schemas; allowlist file loading (§6).
     Committed evidence is verdict lines only (`CanaryReport.Lines`). Its unit tests use
     FABRICATED streams. **It was not run**: with D14 Q10 there is no allowed authenticated run,
     so the live canary is NOT_EXERCISED and slice 3 cannot ship (paragraph below; Q10 is not
-    reopened or answered here).
+    reopened or answered here). **Superseded by the R6 live acceptance note (below).**
   - **Review carry-overs.** Error and reason vocabulary (#236 P3-5): a history store or size
     refusal is `UPSTREAM_FAILURE` (the CONTRACTS enum has no `INTERNAL`); the Claude-only
     `unresolved.reason` values `EXIT_UNCONFIRMED`, `PROCESS_ENDED_WITHOUT_RESULT` and the
@@ -1088,7 +1089,8 @@ MCP schemas; allowlist file loading (§6).
     and the escalation still end a child that then blocks on a full pipe. Not here (wiring slice):
     the double writer lock (#236 P3-4) and the wrapper-side descendant check (#242 residual: the
     wrapper exits with a known status while the CLI behind `sudo` keeps running).
-  - **Live acceptance still open (operator-run, NOT_EXERCISED):** the hostile-root test with the
+  - **Live acceptance still open (operator-run, NOT_EXERCISED); superseded by the R6 live
+    acceptance note (below):** the hostile-root test with the
     credential canary, the result-to-exit lag measurement (validates or replaces the 10 s grace),
     the post-`result` stream capture, `sudo` relay of SIGINT and SIGTERM with a live tool call,
     `--safe-mode` versus item 2, managed settings applied in `-p`, live prompt-from-stdin,
