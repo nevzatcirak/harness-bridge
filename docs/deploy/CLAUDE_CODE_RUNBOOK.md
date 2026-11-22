@@ -1,10 +1,9 @@
 # Claude Code adapter: deployment runbook (ADR-021)
 
-**Status: reference only. Nothing in this runbook has been performed. Every statement about
-live behaviour is UNVERIFIED until the operator-run acceptance of ADR-021 slices 3 and 5 has
-passed.** The adapter is not wired into the Bridge (`claudecode:` session IDs are refused
-"not enabled"), the live credential canary has not run (no allowed authenticated run exists,
-D14 Q10), and slice 3 cannot ship until it can. The steps below are for the operator; the
+**Status: reference only. The operator-run R6 live acceptance of ADR-021 slices 3 and 5 is
+complete (2026-11-21; §7a and `docs/evidence/R6_EVIDENCE_2026-11-21.md`): the hostile-root
+credential canary passed in run 3 (item 1).** The adapter is still not wired into the Bridge
+(`claudecode:` session IDs are refused "not enabled"). The steps below are for the operator; the
 Bridge, its tests and its authors perform none of them.
 
 ## 0. Preconditions
@@ -69,9 +68,9 @@ user's service environment (never in a committed file, never a secret):
 must be listed there too). Optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS`,
 `BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX`. A `BRIDGE_CLAUDE_*` value without the command, a
 missing required value or an unusable file stops the Bridge at start with an error (no partial
-enablement); a read-only ingress ignores the adapter. **The credential canary has not run and cannot
-without an authenticated run (D14 Q10): do not enable this against a real login until the maintainer has
-provisioned one.**
+enablement); a read-only ingress ignores the adapter. **The hostile-root credential canary passed
+in R6 run 3 against the decoy tree (item 1); the adapter is still unwired. Do not enable this
+against a real login until the maintainer has provisioned an authenticated run (D14 Q10).**
 
 ## 6. Operating it (once wired; UNVERIFIED)
 - Interrupt: SIGINT, then SIGTERM after 10 s, then the Bridge gives up after 5 s more
@@ -90,14 +89,20 @@ provisioned one.**
   systemd scope or cgroup of the Claude user's commands (ADR-021 section 4) before a release.
 - Restart gap: killing the Bridge mid-turn leaves a turn the next start marks `restart_gap`.
 
-## 7. Live acceptance still open (operator-run, NOT_EXERCISED)
+## 7. Live acceptance (operator-run; R6 complete 2026-11-21)
 See `internal/adapters/claudecode/ACCEPTANCE_S3.md` and ADR-021 §10 slice 5 (R6).
 
-## 7a. R6 live run: item 1 with the production Observer (operator-run; NOT_EXERCISED until reported)
+## 7a. R6 live acceptance: complete (2026-11-21)
 
-This is the operator command and the evidence to expect for ACCEPTANCE_S3.md item 1 (ADR-021 §8.3).
-**Nothing on this page was run by the author**: no live CLI, wrapper, `sudo` or host was used; every
-line below that depends on the host or on the real Claude CLI is **UNVERIFIED**.
+**R6 is complete.** The runtime, the five runs (runs 1 and 2 FAIL/INCOMPLETE before their fixes, run 3
+item 1 PASS, run 4 items 4/6 FAIL (inconclusive: not tested — resumed session and no read scope) and
+items 2/5 OBSERVED and 7/8 PASS, run 5 items 4/6 PASS (fixed by #426/#427)), the per-item verdicts, what
+each fix changed and the limitations are in
+[`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../evidence/R6_EVIDENCE_2026-11-21.md). This section keeps
+the operator command and the evidence contract; the history below (runs 1-4 and the expected run 5
+lines) was written before the run and is superseded by the run 5 result. **Nothing on this page was run
+by the author of the text**: no live CLI, wrapper, `sudo` or host was used by the author; the runs were
+the maintainer's.
 
 **What the three observations measure** (ADR-021 §8.3, "Hostile-root test"; each flag is optional, and a
 flag that is left out leaves its check `unknown` and item 1 `INCOMPLETE`, exit code 3, never PASS):
@@ -205,8 +210,9 @@ was added. Run-3 behaviour of the real CLI (the same two texts, the paths, the o
 the text or the path the CLI returns differs from run 2 (read the redacted history record, never the evidence
 line, which carries only the class).
 
-**R6 run 3 (2026-11-20 about 16:1xZ, run by the maintainer; recorded here from the Planning Desk's state log #117,
-not reproduced by the author).** Driver `54314e7` with `-tags live` (sha256 `ed973c79…4834`), form A test user
+**R6 run 3 (2026-11-20 16:09Z, relayed: the Planning Desk's state log said "about 16:1xZ";
+run by the maintainer; recorded here from that state log #117, not reproduced by the author).**
+Driver `54314e7` with `-tags live` (sha256 `ed973c79…4834`), form A test user
 `hbcanary`, Claude Code 2.1.325. **Item 1 (canary) PASS** `why=all_probes_denied_controls_read`, exit 0: 6/6 probes
 `denial_class=rule`, 6/6 controls `none`, no decoy leak, no file canary, no sink request, `mcp_servers=0` and
 `apiKeySource` `none` on 12/12 runs, all three observations made. That also settles review #424 P3-2 for the real CLI: a Grep/Glob
@@ -258,16 +264,43 @@ without the `--add-dir <run home>` scope that item 1 got in #411.
   itself uses for item 1 (the same checks, the same wording), so the two cannot drift apart; item 1's behaviour is
   unchanged. The line is `run_home item=<4|6> preflight=pass|fail` (never a path).
 
-**Expected lines for run 5 (`-items 4,6`; UNVERIFIED).** Each item's `run_home` line comes before that item's own `run` lines (`run_home item=4 preflight=pass`, the two item 4 `run` lines, `run_home item=6 preflight=pass`, the item 6 `run` line; with `-items 4,6` only item 4's line precedes every run; `preflight=fail` ends that item with no run). The three `run` lines are `label=signal_interrupt`,
+**Expected lines for run 5 (`-items 4,6`; historical plan — the run 5 result below confirms them).** Each item's `run_home` line comes before that item's own `run` lines (`run_home item=4 preflight=pass`, the two item 4 `run` lines, `run_home item=6 preflight=pass`, the item 6 `run` line; with `-items 4,6` only item 4's line precedes every run; `preflight=fail` ends that item with no run). The three `run` lines are `label=signal_interrupt`,
 `label=signal_terminated`, `label=managed_only_read`, each with `tool_uses=1` or more; two `signal` lines with
 `wrapper_exited=true` and `child_gone=true` (`sent=interrupt`, plus `terminated` in the SIGINT run if the escalation
 fired before the wrapper exited); `verdict item=4 name=sudo_signal_relay result=PASS why=both_signals_relayed_child_gone`;
 `managed tool_use=true denial=true marker_shown=false denial_class=rule mcp_servers=0`; `verdict item=6
-name=managed_settings_in_p result=PASS why=managed_deny_applied_no_inline_rules`. **Whether `--add-dir <run home>` is
-honoured under `-p --permission-mode default --permission-prompts none`, whether the model calls the tool in a fresh
-session, the text of the refusals and the managed file's effect in these two items are all UNVERIFIED.** An INCOMPLETE
+name=managed_settings_in_p result=PASS why=managed_deny_applied_no_inline_rules`. **Run 5 confirmed all four for items 4 and 6**:
+`--add-dir <run home>` was honoured under `-p --permission-mode default --permission-prompts none`, the model called
+the tool in the fresh session, the refusals carried the managed rule's class and the managed file's deny applied
+(`denial_class=rule`). An INCOMPLETE
 with `signal_not_sent_no_tool_use` or `no_tool_use` means the model did not call the tool, and `signal_not_sent_after_tool_use` means it did but
 the wrapper exited before the signal fired: repeat the run, do not read it as a product result. A `denial_not_rule_scope` means the scope was not granted for that read.
+
+**R6 run 5 (2026-11-21 15:20Z, run by the maintainer; recorded here from the Planning Desk's issue
+#470, not reproduced by the author).** Driver `8406b18` with `-tags live`, sha256
+`9bc2385ffe5091f2040afd75d901fc652a5d7ee397fa84bb5e73999f22421991`, `-items 4,6`. **Item 4 PASS**
+`both_signals_relayed_child_gone`: the SIGINT run was relayed (`exit_ms` 3722, child gone) and the
+SIGTERM run was relayed (child exit 143, `exit_ms` 2567, child gone). **Item 6 PASS**
+`managed_deny_applied_no_inline_rules`: the managed-only Read was denied, `denial_class=rule`, no marker
+shown. Runs 4 and 5 recorded the per-run `mcp_servers=0` and `api_key_source=none`
+(`driver.go:279`) only. The item 1 lines `no_file_canary`, `no_sink_request` and `no_decoy_leak`
+(`canary.go:540`) were recorded on every item 1 run (runs 1-3), not on runs 4-5. The hostile-root
+traps did not fire on the item 1 runs, but the "traps never fired" claim for runs 4-5 is
+**UNVERIFIED** (no file-canary, sink or leak observation was made there). The run 5 driver contains
+the #426/#427 fixes (fresh session plus the item 1 scope for items 4 and 6, the probe argv guard and the
+run-home pre-flight); this is the direct live confirmation of them. **R6 is complete** with this run;
+item 3 remains the one item not run as a separate item (it is item 2's `post_result types=none` line,
+shared with slice 1).
+
+**Test-user wrapper pattern (the runtime R6 used).** The driver is started as root once, then every
+CLI run goes through the operator's wrapper (`/usr/local/libexec/hb-canary-wrapper` in R6, selected with
+`-wrapper`), which runs `sudo -n -u hbcanary -H -- claude …` (or the equivalent for the configured test
+user) with `HOME` equal to `-run-home`, inside `setsid -w`. The test user is **not** the Claude service
+user (uid 1002 in R6); the service user's HOME and login files are never the child's HOME. The run home
+is the isolated test user's HOME, holds only decoys, and is the single `--add-dir` scope of items 1, 4
+and 6. The managed deny rule is never lifted. That the wrapper really sets that HOME is an operator
+precondition, not a driver check (the driver prints `operator_precondition_not_verified`); the
+`/usr/local/libexec/hb-canary-wrapper` name is the operator's, not a repository artifact.
 
 **Preconditions (all operator steps; the author edited no host file):**
 1. The isolated test user, its HOME and the wrapper/sudo that makes the child run as that user with that HOME

@@ -1024,6 +1024,7 @@ MCP schemas; allowlist file loading (§6).
   being refused (**fixed in slice 3**).
 
 - **As built (slice 3, code part; the live acceptance is operator-run and NOT_EXERCISED).**
+  **Superseded by the R6 live acceptance note (below).**
   Still unwired: `claudecode:` IDs are refused "not enabled", nothing in `cmd/bridge`, the
   manager or the MCP dispatch calls the `Executor`, and `interrupt_execution` support exists
   inside `runner.Executor.Interrupt` only (authorization and the MCP exposure are the wiring
@@ -1075,7 +1076,7 @@ MCP schemas; allowlist file loading (§6).
     Committed evidence is verdict lines only (`CanaryReport.Lines`). Its unit tests use
     FABRICATED streams. **It was not run**: with D14 Q10 there is no allowed authenticated run,
     so the live canary is NOT_EXERCISED and slice 3 cannot ship (paragraph below; Q10 is not
-    reopened or answered here).
+    reopened or answered here). **Superseded by the R6 live acceptance note (below).**
   - **Review carry-overs.** Error and reason vocabulary (#236 P3-5): a history store or size
     refusal is `UPSTREAM_FAILURE` (the CONTRACTS enum has no `INTERNAL`); the Claude-only
     `unresolved.reason` values `EXIT_UNCONFIRMED`, `PROCESS_ENDED_WITHOUT_RESULT` and the
@@ -1088,7 +1089,8 @@ MCP schemas; allowlist file loading (§6).
     and the escalation still end a child that then blocks on a full pipe. Not here (wiring slice):
     the double writer lock (#236 P3-4) and the wrapper-side descendant check (#242 residual: the
     wrapper exits with a known status while the CLI behind `sudo` keeps running).
-  - **Live acceptance still open (operator-run, NOT_EXERCISED):** the hostile-root test with the
+  - **Live acceptance still open (operator-run, NOT_EXERCISED); superseded by the R6 live
+    acceptance note (below):** the hostile-root test with the
     credential canary, the result-to-exit lag measurement (validates or replaces the 10 s grace),
     the post-`result` stream capture, `sudo` relay of SIGINT and SIGTERM with a live tool call,
     `--safe-mode` versus item 2, managed settings applied in `-p`, live prompt-from-stdin,
@@ -1391,3 +1393,14 @@ through a fetch tool; quotes were shortened, and the CLI, headless, permissions,
 authentication, sessions, managed-settings and env-vars quotes were read from raw
 page text while the settings-reference entries and the `terminal_reason` list
 passed through a summarizer.
+
+## As accepted live (R6), 2026-11-21
+
+The live acceptance is **complete**, on the runtime and with the evidence recorded in
+[`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../evidence/R6_EVIDENCE_2026-11-21.md): item 1 PASS
+(run 3, 6/6 probes `rule`, 6/6 controls `none`), item 2 OBSERVED and item 5 OBSERVED (run 4),
+items 4 and 6 PASS (run 5), items 7 and 8 PASS (run 4); item 3 was not run as a separate item (it is
+item 2's `post_result types=none` line, shared with slice 1). The runs used one host, one CLI version
+(Claude Code 2.1.325) and form A; the test-user wrapper pattern and the `child_home` operator
+precondition are documented in the runbook §7a (the driver does not verify them). This note records
+the acceptance; it does not change the decision text above.
