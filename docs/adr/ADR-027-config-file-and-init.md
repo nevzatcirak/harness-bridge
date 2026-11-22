@@ -7,11 +7,12 @@ ADR; acceptance is under D19. It depends on **ADR-026** (Cirak rename, D26, **ac
 minor release; the `OPENCODE_*` names stay unrenamed (upstream). Acceptance changes no code by itself:
 until the slices land, the binary keeps its current flags and environment; the config file only replaces
 the *input* surface. It changes no runtime authority: ADR-010/011/012/020/022/023/024/025 keep their
-contracts. The one **runtime exception** is the S1 remote-mode trigger: a token expiry (`token.expires`)
-no longer implies a remote transport (P2-1 below); the transport is remote only with a public
-origin/principal or TLS. That amends ADR-019's **trigger** sentence only (its token-lifetime contract and
-the remote boundary—TLS, host, origin, path, per-request expiry—are unchanged), and local mode keeps
-having no runtime expiry (ADR-019). The token/guard/audit authority is unchanged.
+contracts. The **runtime exceptions** are (a) the S1 remote-mode trigger: a token expiry
+(`token.expires`) no longer implies a remote transport (P2-1 below); the transport is remote only
+with a public origin/principal or TLS; and (b) the local `token.expires` parse/warning (P3-1), which
+does not enforce expiry. That amends ADR-019's **trigger** sentence only (its token-lifetime contract
+and the remote boundary—TLS, host, origin, path, per-request expiry—are unchanged), and local mode
+keeps having no runtime expiry (ADR-019). The token/guard/audit authority is unchanged.
 
 Base inspected: `main` `daac8de` (the #473 citations were re-checked there; the code did not change for
 them). Nothing here was executed live.
@@ -77,31 +78,50 @@ shown as `set`, never as a value). A `--help` note states the order. Env interpo
 (`${VAR}`) inside the file is **not** supported in v1 (it invites surprising indirection and
 secret expansion); the file holds literal paths.
 
-**Security-relevant keys and a differing environment (P2-3).** For `server.listen`,
-`server.read_only`, `server.public_origin`, `server.principal`, `server.tls.*`, `acl.*`, `token.*`,
-`limits.token_max_lifetime`, `dashboard.*`, `permission.*` and `writer.lock_dir`, an environment
-value that **differs** from a present file value is a **startup refusal** (the same fail-closed rule
-as the new/legacy conflict), naming the key and the two sources, never a value; an equal value is
-accepted with one warning. A stale `BRIDGE_READ_ONLY=0` or an old `BRIDGE_ALLOWED_ROOTS` can therefore
-not silently override a hardened file. Lists **replace**, never merge (a file list is the complete
-list; an env list replaces it, and a differing env list is refused as above).
+**Every key and a differing environment (P2-A, #498).** The rule is inverted from an allow-list of
+security keys: **every key in §1.3 refuses a differing env/file pair**, except the single
+display-only key `harness.claude.lang`, which keeps the plain env-wins order. This covers
+`lifecycle.config_file`, `overlay.dir`, `writer.admin_socket`, `harness.claude.sessions_file`,
+`harness.claude.command`, `harness.opencode.url` and its credential keys, and
+`limits.claude_max_budget_usd`/`claude_max_turns`/`claude_run_max`, as well as the previously
+listed `server.*`, `acl.*`, `token.*`, `limits.token_max_lifetime`, `dashboard.*`, `permission.*`
+and `writer.lock_dir`. A differing value is a **startup refusal** (the same fail-closed rule as the
+new/legacy conflict), naming the key and the two sources, never a value; an equal value is accepted
+with one warning. A stale `BRIDGE_READ_ONLY=0`, `BRIDGE_LIFECYCLE_CONFIG=…`,
+`BRIDGE_CLAUDE_SESSIONS=…` or `BRIDGE_CLAUDE_MAX_BUDGET_USD=…` can therefore not silently override a
+hardened file. Lists **replace**, never merge (a file list is the complete list; an env list
+replaces it, and a differing env list is refused as above).
 
-**Empty values (the ADR-026 §2.3 interaction).** ADR-026 §2.3: an empty `CIRAK_X`/`BRIDGE_X` counts
-as unset for the **environment** compatibility rule. In the **file**, missing = default and `""` is
-an explicit unset; an empty environment variable does not override a file value (it is unset) and a
-`""` file value is an explicit unset. The one table:
+**Empty values (the ADR-026 §2.3 interaction, P3-2, #498).** ADR-026 §2.3: an empty `CIRAK_X`/`BRIDGE_X`
+counts as unset for the **environment** compatibility rule. In the **file**, missing = default and
+`""` (strings) or `[]` (lists) is an explicit unset; an empty environment variable does not override
+a file value (it is unset). For the **guarded** keys (every key except `harness.claude.lang`), a
+file `""`/`[]` is a present explicit unset, so a **differing** env value is a refusal; the env value
+wins only when the file key is missing. `harness.claude.lang` is display-only and keeps the plain
+order. The one table:
 
-| Env | File | Result |
-| --- | --- | --- |
-| unset or empty | missing | default |
-| unset or empty | `""` | explicit unset (no default) |
-| unset or empty | value | the file value |
-| value | missing/`""` | the env value (one source) |
-| value | value, equal | the value, one warning |
-| value | value, different | **refusal** (security key) or the env value (non-security key; stated here) |
+| Env | File | Guarded keys (all except `harness.claude.lang`) | `harness.claude.lang` |
+| --- | --- | --- | --- |
+| unset or empty | missing | default | default |
+| unset or empty | `""`/`[]` | explicit unset (no default) | explicit unset (no default) |
+| unset or empty | value | the file value | the file value |
+| value | missing | the env value | the env value |
+| value | `""`/`[]` | **refusal** (explicit unset vs env) | the env value |
+| value | value, equal | the value, one warning | the env value |
+| value | value, different | **refusal** | the env value |
 
-Non-security keys keep the plain flag/env/file/default order (env wins); only the security-relevant
-keys above refuse a differing env/file pair. Tests cover both.
+For bool/duration/int keys an explicit empty is not expressible; missing is the default. Lists
+replace, never merge. Tests cover both columns.
+
+**The P2-1 boundary (P3-1, #498).** The remote-mode trigger is exactly a public origin/principal or a TLS
+cert/key, **not** `token.expires`. Each of the four remote settings alone still forces remote mode
+and therefore its TLS/principal/expiry checks; a cert or key alone, or a partial TLS pair, is
+refused. `token.expires` alone is local only on a loopback listen address:
+`ValidateListen(addr, false)` still refuses a non-loopback address (`internal/security/listen.go`),
+so `TOKEN_EXPIRES` alone with a private or public address remains a startup refusal. A local
+`token.expires` must be RFC3339; an unparseable value is a startup error; an already-passed value is
+accepted with **one** startup warning (it is a rotation deadline, not an enforced expiry), and the
+warning contains no value.
 
 ### 1.3 Schema (every current environment variable)
 
@@ -199,8 +219,15 @@ the S1 trigger keeps it local):
   password files keep today's `readSecret` rule** (P3-3): the `_FILE` path is absolute; the file is a
   private **regular** file, mode `& 0077 == 0` (so `0400` is accepted), no symlink, 1–16384 bytes, and
   no CR/LF/NUL in the value; there is **no owner check** beyond the process being able to read it
-  (`cmd/bridge/secret.go:13-43`). The ADR does not tighten this rule. `init` creates new files `0600`.
-  A credential is resolved from `$CREDENTIALS_DIRECTORY/<name>` only when systemd set it.
+  (`cmd/bridge/secret.go:13-43`). The one exemption is a file in the systemd credential directory
+  (`$CREDENTIALS_DIRECTORY`, `/run/credentials/<unit>`) that passes `systemdCredential`
+  (`cmd/bridge/secret.go:34`): root-owned `0440` on the read-only credential tmpfs/ramfs, with the
+  ACL for the service uid; the directory's systemd-owned boundary is the rule, not `0600` (P3-3,
+  #498).
+  The ADR does not tighten this rule. `init` creates new files `0600`. A credential name
+  (`token.credential` or the OpenCode password) is resolved from `$CREDENTIALS_DIRECTORY/<name>`
+  only when systemd set it; the packaged unit's `CIRAK_TOKEN_FILE=%d/token` is the same token file
+  (ADR-026 §4.4) and is read through the same `readSecret` rule.
 - The config file itself: absolute canonical path, no symlink in any component, regular file, owned
   by the process UID (or root when the process runs as root), mode exactly `0600`; the parent
   directory not group/world-writable. `cirak config check` refuses otherwise, before any listener.
@@ -221,13 +248,18 @@ the S1 trigger keeps it local):
 
 Static validation, no network, no listener: parse and strict-check; every field's existing validator
 (reusing the runtime validators, not a copy); config/token/password/TLS file rules (the config file's
-owner/mode/parent check; the token/password file's today's `readSecret` rule); token length and
-expiry (against the injected clock); root ownership `root` or the service user, canonical path, and
+owner/mode/parent check; the token/password file's today's `readSecret` rule, including the systemd
+credential exemption); token length and expiry (against the injected clock); root ownership `root` or
+the service user, canonical path, and
 the service user's `r-x` via `stat`/ACL (the optional `--as <user>` read-only probe, D30 Q8);
 lifecycle file rules; overlay directory rules; dashboard socket parent; Claude files/versions shape;
-unknown `CIRAK_*`/`BRIDGE_*` environment names as warnings (names only); the security-key env/file
-conflict check of §1.2. Output is a redacted summary (each secret `set`/`unset`), exit `0` clean, `2`
-refused, `1` warnings. This is the command an operator runs before `systemctl restart` and in CI.
+unknown `CIRAK_*`/`BRIDGE_*` environment names as warnings (names only); the every-key env/file
+conflict check of §1.2. `config check` accepts the same `--from-unit <name>`/`--env-file` source as
+`doctor` (P2-B) for the unit's environment and token/credential source; without a source, a token
+that exists only in the unit's `EnvironmentFile=` or as a systemd credential is `unverified` (exit 1),
+not PASS. Output is a
+redacted summary (each secret `set`/`unset`), exit `0` clean, `2` refused, `1` warnings. This is the
+command an operator runs before `systemctl restart` and in CI.
 
 ## 2. `cirak init`
 
@@ -262,8 +294,12 @@ if `--token-file` names a new file.
    trigger (P2-1):** a token expiry no longer switches to remote; remote needs a public
    origin/principal or TLS. The value is a **rotation deadline** in the local config, not a runtime
    expiry: local mode has no expiry (ADR-019), and `doctor` warns when the recorded deadline passes.
-   An env-only `TOKEN_EXPIRES` without remote settings now starts local with a startup warning
-   instead of today's refusal; that is the one behaviour change needed to keep D30's local 7-day
+   The local value is parsed: an unparseable value is a startup error, and an already-passed value
+   starts with **one** warning (no value). The trigger boundary of §1.2 is unchanged — origin,
+   principal, cert or key each alone still forces remote, and `TOKEN_EXPIRES` alone on a
+   non-loopback address is still refused. An env-only `TOKEN_EXPIRES` without remote settings now
+   starts local with a startup warning
+   instead of today's refusal; that is the trigger behaviour change needed to keep D30's local 7-day
    default, and the remote boundary is unchanged. So `init --local` passes `config check`, and the S1
    test "an `init --local` config passes `config check`" and the ingress test "`TOKEN_EXPIRES` alone
    stays local" pin it.
@@ -280,16 +316,23 @@ if `--token-file` names a new file.
    up front; never implied):
    - **Linux/systemd:** unit `cirak.service` with the hardening: **`LoadCredential=`,
      `RuntimeDirectory=` and `StateDirectory=` are proven live (F-H5-3); the other hardening keys are
-     proposed** (P2-2). `User=`/`Group=`, `ExecStart=/usr/local/bin/cirak serve`,
+     proposed** (P2-2). If the packaged unit `/usr/lib/systemd/system/cirak.service` (ADR-026 §4.4)
+     exists, the wizard writes the **drop-in** `/etc/systemd/system/cirak.service.d/zz-cirak-init.conf`
+     and adds or overrides only the settings this install needs (including the adapter variant);
+     otherwise it writes the full `/etc/systemd/system/cirak.service`. It prints the file it wrote,
+     never writes both, and never silently shadows the package unit (P3-4, #498). The full unit has
+     `User=cirak`, `Group=cirak`,
+     `ExecStart=/usr/bin/cirak` (bare `cirak` and `cirak serve` are the same command),
      `Environment=CIRAK_CONFIG=/etc/cirak/config.json`, `StateDirectory=cirak cirak/writer-locks
      cirak/overlay` + `StateDirectoryMode=0700` (the writer lock is persistent, never `/run`, P3-6),
      `RuntimeDirectory=cirak-admin cirak-dashboard` + `RuntimeDirectoryMode=0700`,
-     `LoadCredential=mcp-token:/etc/cirak/token` (config `token.credential: "mcp-token"`),
+     `LoadCredential=token:/etc/cirak/token` (the ADR-026 §4.4 credential **name**),
      `ProtectSystem=strict`, `PrivateTmp=yes`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
      and `NoNewPrivileges=yes` **only when the Claude adapter is off**. With the adapter on, the
      child runs under `sudo -u hbclaude` (`docs/deploy/CLAUDE_CODE_RUNBOOK.md:20`); `sudo` is setuid
-     and `NoNewPrivileges=yes` would break every run, so the unit **omits `NoNewPrivileges`** and
-     uses `ProtectHome=off` (or `ReadWritePaths=<claude home>`); the wizard says which it chose. The
+     and `NoNewPrivileges=yes` would break every run, so the full unit **omits `NoNewPrivileges`**
+     (a drop-in sets `NoNewPrivileges=no` to override the package unit) and uses `ProtectHome=off`
+     (or `ReadWritePaths=<claude home>`); the wizard says which it chose. The
      unit is written, not started, unless the operator confirms; `systemctl daemon-reload` and the
      restart hint are printed.
    - **macOS/launchd:** a `LaunchAgent` (`~/Library/LaunchAgents/dev.cirak.agent.plist`) for the
@@ -300,10 +343,17 @@ if `--token-file` names a new file.
      `0600` file owned by the run user.
    - It **never needs root** unless installing a *system* unit/daemon; a user-level setup runs
      entirely as the operator. The wizard says which case applies before asking for anything.
-   - Token source follows the chosen install: with the systemd unit, the config keeps
-     `token.credential: "mcp-token"` (and `token.file: ""`) so `LoadCredential` is the only source
-     (D30 Q5: systemd credential by default); without a unit (or on macOS), it keeps `token.file`
-     with the `0600` file. The two are mutually exclusive, and `config check` refuses both set.
+   - Token source follows the chosen install. With the wizard's **full** unit (no packaged unit),
+     `LoadCredential=token:/etc/cirak/token` delivers the ADR-026 credential **name** `token`; the
+     config keeps `token.credential: "token"` (and `token.file: ""`), and the runtime resolves
+     `$CREDENTIALS_DIRECTORY/token`. `token.credential: "token"` is the config-file spelling of the
+     same ADR-026 credential, not a second mechanism. When the **packaged** unit exists, its own
+     `LoadCredential=token` + `Environment=CIRAK_TOKEN_FILE=%d/token` (ADR-026 §4.4) supplies the
+     same file; the config **omits `token.file` and `token.credential`** in that case, so the env
+     path applies. Both point at the same `/etc/cirak/token`; the wizard prints which form it used.
+     Without a unit (or on macOS), the config sets `token.file` with the `0600` file.
+     `token.file`, `token.credential` and an inline `CIRAK_TOKEN` are mutually exclusive, and
+     `config check` refuses both set.
 6. **Print the Claude connector values**: the listener URL (or the remote origin), the header name
    `Authorization`, and the token **only if it has not already been printed in this run** (at most one
    TTY print in the whole run) with `set +o history` and a warning; in `--yes` mode only the token file
@@ -333,10 +383,16 @@ Read-only diagnostics, safe to paste, no secret values (each is `set`/`unset` or
    content).
 6. **Environment** — a list of `CIRAK_*`/`BRIDGE_*` variables in effect (names only; the
    `OPENCODE_*` names are listed as unchanged, not legacy), unknown names as warnings, the
-   new/legacy conflict check, and the security-key env/file conflicts (§1.2). The **unit** source is
-   available with `doctor --from-unit <name>` (P2-5): the effective environment from
-   `systemctl show -p Environment -p EnvironmentFiles` and the named files, value-free; it is the
-   same source the import uses.
+   new/legacy conflict check, and the env/file conflicts (§1.2). The **unit** source is available
+   with `doctor --from-unit <name>` (P2-5/P2-B): it reads `Environment=` and the paths in
+   `EnvironmentFiles=` from `systemctl show -p Environment -p EnvironmentFiles`, merges them with
+   systemd's order (`EnvironmentFile=` **overrides** `Environment=`; `UnsetEnvironment=` removes),
+   and prints the **paths of the files actually read**, never a value. A missing file is skipped
+   only when its `EnvironmentFile=` entry is `-`-prefixed; an unreadable or unparseable file (a line
+   that is not a valid `NAME=VALUE` assignment, or an unexpanded systemd specifier such as `%d`) is
+   an **error** that stops the command, never an empty source or a guess. The command must run as
+   root, or as a uid that can read every file; a permission failure is an error. It is the same
+   source the import uses.
 7. Optional `--smoke`: the bounded local MCP handshake above against an **already-running** Bridge
    (a client call: `initialize` + `tools/list`, one prompt-free request); never a prompt, never a
    mutation (D30 Q9).
@@ -353,9 +409,10 @@ never restarts anything, and never includes a token, a password or a free-text p
   `token.expires`, but local mode has **no runtime expiry** (ADR-019); `doctor` warns when the
   deadline passes. The remote-mode trigger is a public origin/principal or TLS, **not** the token
   expiry (the S1 change, P2-1), so an `init --local` config passes `config check`.
-- **Remote:** TLS cert/key (or a reverse proxy that terminates TLS and forwards to loopback),
-  `public_origin` and `principal`, a token with an explicit expiry, and the connector URL from the
-  public origin. `init --remote` asks for the cert/key and the origin, warns that a TLS cert and key
+- **Remote:** TLS cert/key on the Bridge (remote mode still requires both); optionally a reverse
+  proxy that terminates the client TLS and **forwards over verified TLS to the backend** (P3-5,
+  #498); `public_origin` and `principal`; a token with an explicit expiry; and the connector URL from
+  the public origin. `init --remote` asks for the cert/key and the origin, warns that a TLS cert and key
   are both required (never a plaintext fallback), and points at the existing Caddy/Traefik guidance
   (`docs/deploy/Caddyfile.example`, `docs/deploy/TRAEFIK_PRIVATE_BACKEND.md`). It never opens a
   firewall or edits a proxy; those stay operator steps.
@@ -365,25 +422,33 @@ never restarts anything, and never includes a token, a password or a free-text p
 The live H5 host must keep working with no edits. ADR-026 (accepted) keeps `BRIDGE_*` accepted for
 one minor release, so the migration is opt-in and reversible:
 
-1. Run the new binary **read-only**: `cirak doctor --from-unit <name>` (or with the unit's
-   `EnvironmentFile`) reports the **unit's** effective environment and the five live checks without
-   starting anything; `cirak doctor` with no source is the shell-only first look and must not be used
-   for the comparison (P2-5).
-2. **Import the unit's environment, not the shell (P2-5):** `cirak config import --from-unit <name>
-   --out /etc/cirak/config.json` (mode `0600`) reads the service's effective environment from
-   `systemctl show -p Environment -p EnvironmentFiles` and the named files, **value-free in every
-   output**; `--env-file <path>` is the explicit alternative. It writes the non-secret settings as
-   §1.3; a legacy inline `BRIDGE_TOKEN`/`OPENCODE_SERVER_PASSWORD` is **not** written — the command
-   prints the `install -m 0600` path to move it to a file/credential and refuses to inline it.
+1. Run the new binary **read-only**: `cirak doctor --from-unit <name>` (or with `--env-file <path>`)
+   reports the **unit's** effective environment and the five live checks without starting anything;
+   `cirak doctor` with no source is the shell-only first look and must not be used for the
+   comparison (P2-5/P2-B).
+2. **Import the unit's environment, not the shell (P2-5/P2-B):** `cirak config import --from-unit
+   <name> --out /etc/cirak/config.json` (mode `0600`) reads the service's effective environment
+   from `systemctl show -p Environment -p EnvironmentFiles` and each `EnvironmentFile=` path, merged
+   with systemd's order (`EnvironmentFile=` **overrides** `Environment=`; `UnsetEnvironment=`
+   removes). It must run as root, or as a uid that can read every file; a **missing** file is
+   skipped only when its entry is `-`-prefixed, while an **unreadable or unparseable** file (or
+   `--env-file`, or an unexpanded specifier such as `%d`) is an **error** that stops the import,
+   never an empty source or a guess. It prints the
+   **paths of the files actually read**, never a value, and is **value-free in every output**;
+   `--env-file <path>` is the explicit alternative. It writes the non-secret settings as §1.3; a
+   legacy inline `BRIDGE_TOKEN`/`OPENCODE_SERVER_PASSWORD` is **not** written — the command prints
+   the `install -m 0600` path to move it to a file/credential and refuses to inline it.
    `--reject-unknown` makes any unrecognised `CIRAK_*`/`BRIDGE_*` name an error.
-3. `cirak config check --config /etc/cirak/config.json`, then `cirak doctor --config … --from-unit
-   <name>` and compare the effective settings with the unit's environment (the doctor prints both
-   side by side, secrets as `set`/`unset`). The comparison uses the **unit's** environment, not the
+3. `cirak config check --from-unit <name> --config /etc/cirak/config.json`, then
+   `cirak doctor --config … --from-unit <name>` and compare the effective settings with the unit's
+   environment (the doctor prints both side by side, secrets as `set`/`unset`). The comparison uses
+   the **same unit source and the same errors** as step 2; it never falls back to a partial
+   environment when an `EnvironmentFile` cannot be read. It is the unit's environment, not the
    operator's shell.
 4. Add `Environment=CIRAK_CONFIG=/etc/cirak/config.json` (or `EnvironmentFile=`) to the unit, keep the
    legacy drop-in for one restart, and confirm `tools/list` and the smoke check are unchanged. The
    start logs the config path in use (P3-7). Because the imported file and the unit env are equal,
-   startup accepts them with one warning per variable; any **difference** is a refusal (P2-3), which is
+   startup accepts them with one warning per variable; any **difference** is a refusal (P2-A), which is
    the intended guard. **Remove the legacy lines only when the diff of step 3
    is empty**; a non-empty diff is a refusal to proceed (P2-5).
 5. After the compatibility window, remove the migrated `BRIDGE_*` lines; the config file is now the
@@ -405,10 +470,17 @@ Unit tests with a fake FS/clock/exec and golden files; nothing starts a real lis
    >1 MiB; `token.value`/`password` refused; comments are invalid JSON (documented).
 2. **Precedence:** flag > env > file > default per setting; new/legacy env with different values
    refused; equal values accepted with exactly one warning per variable; no implicit cwd file;
-   `--config` missing is an error; no file = today's env-only behavior; the security-key env/file
-   **differing** pair refused and equal warned (§1.2); list replace (not merge); the empty table.
+   `--config` missing is an error; no file = today's env-only behavior; **every guarded key**
+   (every key except `harness.claude.lang`) refuses a differing env/file pair and warns once when
+   equal, including `lifecycle.config_file`, `overlay.dir`, `writer.admin_socket`,
+   `harness.claude.sessions_file`, `harness.claude.command`, `harness.opencode.url`/credentials and
+   `limits.claude_max_budget_usd`/`claude_max_turns`/`claude_run_max`; the display-only
+   `harness.claude.lang` keeps env-wins; a file `""`/`[]` on a guarded key is an explicit unset and
+   a differing env value is refused; list replace (not merge); the empty table.
 3. **Secrets:** config/token modes and owners refused when wrong (the config file's stricter rule; the
-   token/password's today's `readSecret` rule, including `0400` and no owner check); a symlinked
+   token/password's today's `readSecret` rule, including `0400` and no owner check, and the
+   `systemdCredential` exemption: a root-owned `0440` file in `/run/credentials/<unit>` with the
+   service-uid ACL is accepted, while an arbitrary `0440`/`0640` file is not); a symlinked
    config/token refused; inline secrets impossible; credential resolution only from
    `$CREDENTIALS_DIRECTORY`; no secret in `config check`/`doctor` output (grep the golden output for
    a canary token); the typed password goes to `password_file`; the token prints at most once; the
@@ -425,16 +497,30 @@ Unit tests with a fake FS/clock/exec and golden files; nothing starts a real lis
    at most once in the run, and never in evidence; the rendered unit contains the hardening and no
    secret; **with the Claude adapter on it has no `NoNewPrivileges=yes` and the chosen ProtectHome
    form**; **the writer lock is under `StateDirectory`**; **`init --local` passes `config check`**
-   (with the 7-day recorded deadline), and the ingress test "`TOKEN_EXPIRES` alone stays local".
+   (with the 7-day recorded deadline), and the ingress test "`TOKEN_EXPIRES` alone stays local";
+   `TOKEN_EXPIRES` alone on a non-loopback listen is refused; origin/principal/cert/key alone each
+   still forces remote; a local unparseable expiry is an error; a passed local expiry warns once
+   with no value; the full unit and the package-unit drop-in are chosen by the packaged unit's
+   presence, only one is written, the chosen path is printed, and the unit has
+   `LoadCredential=token` + `ExecStart=/usr/bin/cirak` (bare `cirak` = `cirak serve`); the full unit
+   uses `token.credential: "token"`; the package-unit form omits `token.file` and `token.credential`
+   and uses `CIRAK_TOKEN_FILE=%d/token`.
 6. **Doctor:** each check's pass/fail with fakes; redaction (no token/password/free text); exit
    codes; unknown env names warned; the config path printed; `doctor --from-unit` uses the unit's
-   environment; a **local** token whose recorded deadline has passed is warned (not a runtime
-   expiry); `--smoke` performs one bounded `initialize`+`tools/list` and nothing mutating, only
-   against a running service.
+   environment; an unreadable or unparseable `EnvironmentFile` (or `--env-file`) is an error, not an
+   empty source; an unexpanded specifier such as `%d` is an error, not a guess; a missing
+   `-`-prefixed file is skipped; `EnvironmentFile=` overrides `Environment=`
+   and `UnsetEnvironment=` removes; the paths of the files actually read are printed, value-free; a
+   **local** token whose recorded deadline has passed is warned (not a runtime expiry); `--smoke`
+   performs one bounded `initialize`+`tools/list` and nothing mutating, only against a running
+   service.
 7. **Migration:** env-only vs imported config produce the same effective settings (a table-driven
-   equivalence test using a fake unit environment containing `READ_ONLY=1`); inline secrets are
-   refused/preserved as file references; a non-empty diff blocks the legacy-line removal; rollback
-   with the drop-in backup works in the test.
+   equivalence test using a fake unit environment containing `READ_ONLY=1`); an unreadable
+   `EnvironmentFile` stops the import; an override pair (`Environment=` and `EnvironmentFile=` for
+   the same key) uses the file's value; a missing `-`-prefixed file is skipped; the paths of the
+   files actually read are printed, value-free; inline secrets are refused/preserved as file
+   references; a non-empty diff blocks the legacy-line removal; rollback with the drop-in backup
+   works in the test.
 8. **Compatibility:** the H5 drop-in's legacy `BRIDGE_*` env still starts the binary with no config
    (the golden test is the current effective defaults), and the renamed `CIRAK_*` wins when both are
    equal; the `OPENCODE_*` names are not legacy and produce no deprecation warning.
@@ -442,17 +528,26 @@ Unit tests with a fake FS/clock/exec and golden files; nothing starts a real lis
 Mutations (must be killed): precedence swapped; conflict accepted; unknown key ignored; duplicate key
 accepted; trailing data or >1 MiB accepted; a list merged instead of replaced; an implicit cwd file
 loaded; secret persisted inline; config mode unchecked; the token/password `_FILE` rule tightened by
-rejecting `0400` or adding an owner check (P3-3 keeps today's rule); a symlinked config/token
+rejecting `0400` or adding an owner check (P3-3 keeps today's rule); the systemd `0440` credential
+exemption removed, or an arbitrary `0440`/`0640` file accepted; a symlinked config/token
 accepted; a credential resolved outside `$CREDENTIALS_DIRECTORY`; a runtime validator reimplemented
 with a divergence; an `opencode:`-prefixed ACL ID accepted; init applies `chown`/`chmod`/`setfacl`
 silently; the invoking-uid mismatch writes files the service cannot read; the system directory created
 by the wrong user; an existing config overwritten without `--force`; a backup not made; token printed
-twice or in `--yes`/to a log; the
-typed password written to config/argv/history; the rendered unit contains a secret; unit drops
-`StateDirectory`/`LoadCredential`; unit keeps `NoNewPrivileges=yes` with the adapter on; the writer
-lock under `/run`; `init --local` refused by `config check`; `TOKEN_EXPIRES` switches to remote; the
-security env/file conflict accepted; the import read from the operator's shell instead of the unit;
-legacy lines removed on a non-empty diff; doctor prints a value; the config path not logged;
+twice or in `--yes`/to a log; the typed password written to config/argv/history; the rendered unit
+contains a secret; unit drops `StateDirectory`/`LoadCredential`; unit keeps `NoNewPrivileges=yes`
+with the adapter on; the writer lock under `/run`; `init --local` refused by `config check`;
+`TOKEN_EXPIRES` switches to remote; the security env/file conflict accepted **for any guarded key**
+(the old allow-list or the display-only exception widened beyond `harness.claude.lang`); a file
+`""`/`[]` on a guarded key loses to a differing env value; origin/principal/TLS no longer triggers
+remote (or cert/key alone stops forcing it); `TOKEN_EXPIRES` alone on a non-loopback address starts; a passed local expiry is
+refused instead of warned, or the warning repeats/contains a value; an unreadable `EnvironmentFile`
+is treated as empty; an unexpanded `%d` is guessed; `EnvironmentFile=` does not override
+`Environment=` (or `UnsetEnvironment=` is ignored); a unit-only token is reported PASS without
+`--from-unit`; the import read from the operator's shell instead of the unit; the wizard writes a second
+`cirak.service` that silently shadows the package unit; the unit keeps `mcp-token` or
+`/usr/local/bin/cirak serve`; the full unit omits `token.credential` or the package-unit form sets
+it; legacy lines removed on a non-empty diff; doctor prints a value; the config path not logged;
 `OPENCODE_*` warned as legacy; `--smoke` sends a prompt or starts a listener; migration writes the
 legacy inline token.
 
@@ -463,17 +558,23 @@ the config keys are name-neutral. D30 Q10: the `CIRAK_*` surface is used from S1
 ADR-026 rename slice), not deferred to a separate config-rename slice.
 
 1. **S1 — config package and `config check`:** JSON schema, strict parsing, precedence (flag/env/file/
-   default) with the ADR-026 compatibility warning/refusal, the §1.2 security-key env/file rule, the
-   secret file rules, the ACL IDs, reuse of the runtime validators, the **remote-mode trigger change
-   (`token.expires` alone no longer implies remote; local mode records the deadline but keeps no
-   runtime expiry, ADR-019)**. Docs + CONTRACTS note. No wizard.
+   default) with the ADR-026 compatibility warning/refusal, the §1.2 **every-key** env/file rule (the
+   only display-only exception is `harness.claude.lang`), the secret file rules, the ACL IDs, reuse of
+   the runtime validators, the **remote-mode trigger change (`token.expires` alone no longer implies
+   remote; local mode records the deadline but keeps no runtime expiry, ADR-019)**, and the P2-1
+   boundary: origin/principal/TLS each alone still force remote, `TOKEN_EXPIRES` alone on a
+   non-loopback listen is refused, and a local expiry is parsed (unparseable = error, passed =
+   warning). Docs + CONTRACTS note. No wizard.
 2. **S2 — `cirak init` core:** detection, root/ACL checks and exact fix output, token generation
    (64 chars, 7 days), config + lifecycle write, ownership flow (run as the service user or print
    `install -o/-m`), connector values and the smoke instructions; no service install yet.
 3. **S3 — service install and `doctor`:** systemd unit (the proven/proposed split; no
-   `NoNewPrivileges` with the adapter on; StateDirectory writer lock) and launchd plist
-   rendering/install; `doctor` static + live checks; `--smoke`; `doctor --from-unit`.
-4. **S4 — migration and remote mode:** `config import --from-unit`/`--env-file`, the side-by-side
+   `NoNewPrivileges` with the adapter on; StateDirectory writer lock; the full-unit/drop-in choice
+   with no shadowing; `LoadCredential=token`; `ExecStart=/usr/bin/cirak`, with bare `cirak` =
+   `cirak serve`) and launchd plist rendering/install; `doctor` static + live checks; `--smoke`;
+   `doctor --from-unit`.
+4. **S4 — migration and remote mode:** `config import --from-unit`/`--env-file` with the
+   `EnvironmentFile=` merge order and the unreadable/missing-file errors, the side-by-side
    doctor with the unit's environment, remote/TLS wizard path, runbook updates; the H5 host migration
    is an operator step, never run by a worker.
 5. **S5 — no separate config rename slice:** the ADR-026 S1 rename is the prerequisite; the config
@@ -523,9 +624,9 @@ the **Decided (D30)** line is the decision.
 
 ## Out of scope
 
-- Any runtime authority, guard, audit or ADR-010/011/012/024/025 change. The single exception is the
-  S1 remote-mode trigger (`token.expires` alone no longer implies remote; P2-1); it changes no
-  authority.
+- Any runtime authority, guard, audit or ADR-010/011/012/024/025 change. The exceptions are the
+  S1 remote-mode trigger (`token.expires` alone no longer implies remote; P2-1) and the local
+  `token.expires` parse/warning (P3-1); neither changes authority.
 - A package manager or installer beyond ADR-026's distribution (this ADR is the config/wizard
   surface only).
 - Editing the live H5 host, systemd, `/etc`, the connector or a proxy; every migration step is an
