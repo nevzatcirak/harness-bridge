@@ -191,11 +191,27 @@ func TestA2BoundedTextIsBounded(t *testing.T) {
 	}
 }
 
-// An open action.reason that is not one of the two usage-limit values is
-// unknown but still structured.
-func TestA2ActionReasonUnknownStructured(t *testing.T) {
+// An open action.reason that is not one of the two usage-limit values is a
+// structured source; the D32 Q5 fallback may refine it from the message
+// (A2.12 item 2), and the raw text is never exported.
+func TestA2ActionReasonUnknownUsesFallback(t *testing.T) {
 	now := time.UnixMilli(1_700_000_000_000).UTC()
 	st := a2RetryStatus(1, now.Add(time.Minute), "free_tier_limit_v2", "429 rate limit")
+	l := assessLiveness(now, a2Threshold, a2Evidence(now, st, true))
+	if l.CauseHint != "rate_limit" || l.CauseSource != "bounded_text" {
+		t.Fatalf("cause %q/%q", l.CauseHint, l.CauseSource)
+	}
+	b, _ := json.Marshal(l)
+	if strings.Contains(string(b), "429 rate limit") {
+		t.Fatalf("raw provider text exported: %s", b)
+	}
+}
+
+// An unknown action.reason with a message outside the closed set stays
+// unknown/structured (the fallback did not refine it).
+func TestA2ActionReasonUnknownNoMatchStructured(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	st := a2RetryStatus(1, now.Add(time.Minute), "free_tier_limit_v2", "something odd happened")
 	l := assessLiveness(now, a2Threshold, a2Evidence(now, st, true))
 	if l.CauseHint != "unknown" || l.CauseSource != "structured" {
 		t.Fatalf("cause %q/%q", l.CauseHint, l.CauseSource)
@@ -248,6 +264,27 @@ func TestA2ProviderErrorFromRetryPart(t *testing.T) {
 	l := assessLiveness(now, a2Threshold, e)
 	if l.DegradationReason != "PROVIDER_ERROR" || l.CauseHint != "rate_limit" || l.CauseSource != "structured" {
 		t.Fatalf("retry part %+v", l)
+	}
+}
+
+// A timestamp after observed_at is ignored for "newest wins": a future
+// assistant error or retry part must not beat a current typed error.
+func TestA2FutureProviderTimestampIgnored(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	future := a2Assistant(now.Add(time.Minute).UnixMilli(), 0, `{"name":"APIError","data":{"statusCode":429}}`)
+	current := a2Assistant(now.UnixMilli(), 0, `{"name":"ProviderAuthError","data":{}}`)
+	e := a2Evidence(now, opencode.Status{Type: "busy"}, true, future, current)
+	e.started = now.Add(-time.Second)
+	l := assessLiveness(now, a2Threshold, e)
+	if l.DegradationReason != "PROVIDER_ERROR" || l.CauseHint != "auth" || l.CauseSource != "structured" {
+		t.Fatalf("future assistant error won: %+v", l)
+	}
+	latePart := a2Assistant(now.Add(time.Minute).UnixMilli(), 0, "", a2RetryPart(now.Add(time.Minute).UnixMilli(), `{"name":"APIError","data":{"statusCode":429}}`))
+	e = a2Evidence(now, opencode.Status{Type: "busy"}, true, latePart, current)
+	e.started = now.Add(-time.Second)
+	l = assessLiveness(now, a2Threshold, e)
+	if l.DegradationReason != "PROVIDER_ERROR" || l.CauseHint != "auth" || l.CauseSource != "structured" {
+		t.Fatalf("future retry part won: %+v", l)
 	}
 }
 

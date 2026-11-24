@@ -205,7 +205,7 @@ func assistantError(raw json.RawMessage) (providerError, bool) {
 // retryPartError returns the typed error of a persisted retry part
 // ({type:"retry", attempt, error, time.created}); Q7 stays UNVERIFIED, but the
 // part is honored when present. Oversized parts are ignored whole.
-func retryPartError(raw json.RawMessage) (providerError, bool) {
+func retryPartError(raw json.RawMessage, limit int64) (providerError, bool) {
 	if len(raw) > maxPartBytes {
 		return providerError{}, false
 	}
@@ -223,7 +223,9 @@ func retryPartError(raw json.RawMessage) (providerError, bool) {
 	if !ok {
 		return providerError{}, false
 	}
-	if ms, ok := nativeMillis(p.Time.Created, maxMillis); ok {
+	// A timestamp after observed_at is ignored (A2.12 item 14); it must not
+	// let a future error win "newest".
+	if ms, ok := nativeMillis(p.Time.Created, limit); ok {
 		e.at = ms
 	}
 	return e, true
@@ -329,13 +331,20 @@ func errorHint(name string, data json.RawMessage) string {
 
 // retryCause picks the newest applicable structured source first (status action
 // reason, then the newest typed error); only a status-only retry falls back to
-// the bounded text. It never returns the raw text.
+// the bounded text. An open unknown action.reason is still structured, but the
+// D32 Q5 fallback may refine it from the message (A2.12 item 2); with no
+// matching text it stays unknown/structured. It never returns the raw text.
 func retryCause(status opencode.Status, typed *providerError) (hint, source string) {
 	if reason, ok := retryActionReason(status.Action); ok {
 		switch reason {
 		case "free_tier_limit", "account_rate_limit":
 			return "rate_limit", "structured"
 		default:
+			if message, ok := retryMessage(status.Message); ok {
+				if hint, matched := boundedHint(message); matched {
+					return hint, "bounded_text"
+				}
+			}
 			return "unknown", "structured"
 		}
 	}
@@ -397,13 +406,17 @@ func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) 
 			}
 		}
 		// ADR-017 A2 S1: an assistant error without terminal proof is a typed
-		// provider-error candidate (A2.4 item 4).
+		// provider-error candidate (A2.4 item 4). A timestamp after observed_at
+		// is ignored (A2.12 item 14), so it cannot win "newest".
 		if pe, ok := assistantError(msg.Info.Error); ok && terminalState(msg) == "" {
 			pe.at = msg.Info.Time.Created
+			if pe.at > limit {
+				pe.at = 0
+			}
 			typed = newestProviderError(typed, pe)
 		}
 		for _, part := range msg.Parts {
-			if pe, ok := retryPartError(part); ok {
+			if pe, ok := retryPartError(part, limit); ok {
 				typed = newestProviderError(typed, pe)
 			}
 			if v := partProgress(part, limit); v > progress {
