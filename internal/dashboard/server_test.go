@@ -61,7 +61,7 @@ func TestServesOnA0700UnixSocket(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Security-Policy") != wantCSP {
 		t.Fatalf("GET / over the socket: %d, CSP %q", resp.StatusCode, resp.Header.Get("Content-Security-Policy"))
 	}
-	if !strings.Contains(body, "read-only") {
+	if !strings.Contains(body, "Read-only") {
 		t.Errorf("body: %s", body)
 	}
 }

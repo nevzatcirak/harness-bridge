@@ -66,6 +66,10 @@ whoever can open the dashboard.
   Nothing in the production Bridge wires that configuration yet, so the column shows `-`.
 - **Archived sessions** are hidden; add `?archived=1` to the URL (or use the link on the list) to
   show them. Nothing is archived yet because the archive overlay is not persisted.
+- **Filters and refresh (ADR-023 A1, S1):** with script, the search box and the state and harness filters
+  appear and keep their value in the address (`?q=`, `?state=`, `?harness=`), and the page polls every 5 s
+  while the tab is visible and not at all while it is hidden. Without script the filters are not shown,
+  the list is complete and the Refresh link reloads it. The page is dark; the light theme comes with a later slice.
 - **Audit:** `/audit` shows the last 1000 audit lines the Bridge wrote, with free text removed.
 
 ## Limits

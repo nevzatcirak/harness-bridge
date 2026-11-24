@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/" aria-current="page">Sessions</a></li>
+<li><a href="/audit">Audit</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap" data-poll="list">
+<p class="banner" id="stale" role="status" hidden></p>
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Sessions</h1>
+<div class="card">
+<div class="toolbar" role="search">
+<div class="filters" id="filters" hidden>
+<label class="visually-hidden" for="f-q">Search sessions</label>
+<input class="input" id="f-q" type="search" maxlength="64" autocomplete="off" placeholder="Search title, path or ID">
+<label class="visually-hidden" for="f-state">State</label>
+<select class="select" id="f-state"><option value="">All states</option><option value="running">Running</option><option value="waiting_for_permission">Waiting for permission</option><option value="idle">Idle</option><option value="unknown">Unknown</option></select>
+<label class="visually-hidden" for="f-harness">Harness</label>
+<select class="select" id="f-harness"><option value="">All harnesses</option><option value="opencode">OpenCode</option><option value="claudecode">Claude Code</option></select>
+</div>
+<a class="btn" href="/?archived=1">Show archived</a>
+<a class="btn btn--primary" href="/">Refresh</a>
+<span class="label" id="status">0 sessions, updated <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></span>
+</div>
+<div id="live">
+<div class="state"><h2>No sessions</h2><p>This Bridge lists no session you may see. Archived sessions are hidden unless you ask for them.</p><a class="btn" href="/?archived=1">Show archived</a></div>
+
+</div>
+</div>
+</section>
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+

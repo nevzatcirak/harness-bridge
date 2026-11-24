@@ -1078,7 +1078,7 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
 
 - **Routes:** `/` (session list), `/session/<harness>/<id>` (detail, executions, diffs),
   `/session/<harness>/<id>/turn/<message>` (one turn's diff), `/api/state` and
-  `/api/state/session/<harness>/<id>` (the JSON view models the page polls: 5 s list, 2 s detail),
+  `/api/state/session/<harness>/<id>` (the JSON view models the page polls while it is visible: 5 s list, 2 s detail),
   `/audit` and `/api/audit` (the 1000-entry audit ring), `/dashboard.css`, `/dashboard.js`.
 - **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
   whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
@@ -1102,7 +1102,11 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   patterns. A convenience, not a guarantee.
 - **JSON model fields** (`/api/state*`): `harness`, `id`, `title`, `root` (the session directory),
   `lifecycle_root` (omitted when none), `archived` (omitted unless true), `state`, `guard`,
-  `current_execution`, `last_activity`, `href`.
+  `current_execution`, `last_activity`, `href`. Additive display fields (ADR-023 A1, slice S1; every one is
+  text the page shows, computed by the server so the script decides no label, and none depends on the
+  clock, so the ETag stays stable): `harness_name`, `state_label`, `state_tone`, `guard_text`, `path_short`,
+  `last_activity_iso` (omitted when unknown); the list model also carries `count` and `count_text`.
+  The page polls only while the tab is visible and sends one request when it becomes visible again (A1.7).
 - **Status:** the native response shapes behind the diffs are read from upstream source and are
   **UNVERIFIED against a live server**; the live acceptance (R-DASH) is **NOT_EXERCISED**.
 

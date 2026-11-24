@@ -318,13 +318,16 @@ func TestPollingScriptIsSafeAndUsesTheDocumentedIntervals(t *testing.T) {
 	if !strings.Contains(js, "method: 'GET'") || !strings.Contains(js, "'If-None-Match'") || !strings.Contains(js, "r.status === 304") {
 		t.Error("the script does not poll with GET and If-None-Match")
 	}
-	for _, want := range []string{"visibleMs = 5000; hiddenMs = 5000", "visibleMs = 2000; hiddenMs = 10000", "document.hidden", "'/api/state'", "'/api/state/session/'"} {
+	// A1.7 supersedes the hidden-tab cadence of section 4: the intervals while visible are 5 s (list) and 2 s
+	// (detail); while hidden the script is paused (no timer, no request), which the harness tests of
+	// v2s1_script_test.go run.
+	for _, want := range []string{"kind === 'list' ? 5000 : (kind === 'detail' ? 2000 : 0)", "doc.hidden", "'/api/state'", "'/api/state/session/'"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("dashboard.js lacks %q", want)
 		}
 	}
-	if strings.Count(js, "setTimeout(") != 1 || strings.Contains(js, "setInterval") {
-		t.Error("the script must use one self-rescheduling timer")
+	if strings.Contains(js, "setInterval") || strings.Contains(js, "hiddenMs") {
+		t.Error("the script must use self-rescheduling timers only and must not poll while hidden (A1.7)")
 	}
 }
 
@@ -402,7 +405,7 @@ func TestPageDegradesToNoPatchesBeforeFailing(t *testing.T) {
 		t.Fatalf("%d %d", rec.Code, rec.Body.Len())
 	}
 	// A page with no patch to hide that is still over the bound is refused, not truncated.
-	big := page{Title: "t", Message: strings.Repeat("<", maxBodyBytes)}
+	big := page{Title: "t", AuditPage: true, AuditMsg: strings.Repeat("<", maxBodyBytes)}
 	rec = httptest.NewRecorder()
 	renderPage(rec, http.StatusOK, big)
 	if rec.Code != http.StatusInternalServerError {

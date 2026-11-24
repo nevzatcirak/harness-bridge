@@ -100,14 +100,14 @@ func TestArchivedFlagIsReadFromTheQueryOnEveryDataRoute(t *testing.T) {
 func TestListShowsTheLifecycleRootAndArchivedRows(t *testing.T) {
 	h := dashboard.NewHandlerOptions(&flagSource{}, nil, dashboard.Options{})
 	_, plain := get(t, h, "/")
-	if !strings.Contains(plain, "<code>/srv/life</code>") || strings.Contains(plain, "ses_old") || strings.Contains(plain, "archived</span>") {
+	if !strings.Contains(plain, "<span>/srv/life</span>") || strings.Contains(plain, "ses_old") || strings.Contains(plain, "Archived</span>") {
 		t.Fatalf("default list: %s", plain)
 	}
 	if !strings.Contains(plain, `href="/?archived=1"`) {
 		t.Errorf("no link to show archived sessions: %s", plain)
 	}
 	_, all := get(t, h, "/?archived=1")
-	if !strings.Contains(all, "ses_old") || !strings.Contains(all, `badge archived">archived</span>`) || !strings.Contains(all, `href="/session/opencode/ses_old?archived=1"`) {
+	if !strings.Contains(all, "ses_old") || !strings.Contains(all, `chip chip--outline">Archived</span>`) || !strings.Contains(all, `href="/session/opencode/ses_old?archived=1"`) {
 		t.Fatalf("list with the filter: %s", all)
 	}
 	if !strings.Contains(all, `href="/"`) {
