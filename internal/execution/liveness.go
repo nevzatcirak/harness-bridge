@@ -15,6 +15,15 @@ import (
 // be reported as suspected; that never changes state or the guard.
 const defaultStallThreshold = 2 * time.Minute
 
+// defaultToolLongThreshold is the ADR-017 A2 S2 TOOL_RUNNING_LONG threshold
+// (tool_long_s, default 600 s). The operator override and the per-tool defaults
+// (D32 Q10/Q13) arrive with the S3 thresholds; S2 applies the global default.
+const defaultToolLongThreshold = 10 * time.Minute
+
+// explanationToolRunningLong is the only A2 explanation. It is not a
+// stall_reason and never changes stall_suspected or state.
+const explanationToolRunningLong = "TOOL_RUNNING_LONG"
+
 // Liveness is the ADR-017 option (a) report-only block on execution status
 // and result. It is computed from the reads the probe already makes and never
 // changes state, ended_at, unresolved or the session guard. stall_suspected is
@@ -46,8 +55,24 @@ type Liveness struct {
 	// provider text is never exported.
 	CauseHint   string `json:"cause_hint,omitempty"`
 	CauseSource string `json:"cause_source,omitempty"`
+	// ADR-017 A2 S2: the running-tool object and the one explanation. Tool is
+	// present only for a busy execution or a wedged retry with a live running
+	// part; Explanation is TOOL_RUNNING_LONG once that tool is at or after
+	// tool_long_s. Neither is a stall_reason, neither changes stall_suspected,
+	// and the explanation never suppresses NO_PROGRESS.
+	Tool        *Tool  `json:"tool,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
 	// ObservedAt is the Bridge time of the probe that produced this block.
 	ObservedAt time.Time `json:"observed_at"`
+}
+
+// Tool is the A2 running-tool object: the oldest live running tool of the
+// newest correlated assistant. ToolName is untrusted display data, bounded to
+// 64 bytes and sanitized; RunningSince is the native state.time.start and is
+// never after observed_at.
+type Tool struct {
+	ToolName     string    `json:"tool_name"`
+	RunningSince time.Time `json:"running_since"`
 }
 
 // maxMillis bounds native epoch-millisecond values (year 9999).
@@ -175,6 +200,118 @@ func partProgress(raw json.RawMessage, limit int64) int64 {
 		}
 	}
 	return latest
+}
+
+// toolNamePattern is the closed tool_name shape of ADR-017 A2.3:
+// [A-Za-z0-9._-], one to 64 bytes. Anything else is "other".
+var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// sanitizeToolName reduces an untrusted native tool name to the bounded display
+// value. A name that does not match the closed set (including a multi-byte or
+// empty name) is "other"; a longer name is truncated to 64 bytes first.
+func sanitizeToolName(name string) string {
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	if toolNamePattern.MatchString(name) {
+		return name
+	}
+	return "other"
+}
+
+// toolPartInfo is one tool part while correlating a running part with a later
+// completed/error part of the same call.
+type toolPartInfo struct {
+	idx    int
+	callID string
+	status string
+}
+
+// runningToolCandidate is one running tool part of the newest correlated
+// assistant.
+type runningToolCandidate struct {
+	idx    int
+	callID string
+	name   string
+	start  int64
+}
+
+// newestAssistant returns the index of the newest correlated assistant: the
+// greatest native time.created, ignoring a timestamp after observed_at, with
+// the later history entry winning a tie. -1 means no assistant.
+func newestAssistant(assistants []opencode.Message, limit int64) int {
+	newest, best := -1, int64(-1)
+	for i := range assistants {
+		k := assistants[i].Info.Time.Created
+		if k < 0 || k > limit {
+			k = 0
+		}
+		if k >= best {
+			newest, best = i, k
+		}
+	}
+	return newest
+}
+
+// runningTool returns the oldest live running tool of the newest correlated
+// assistant, or nil. A running part is stale (and never a running tool) when a
+// later part of the same call is completed or errored; a part with no usable
+// callID, state or start is ignored (A2.4 item 6, A2.3). It is display data and
+// never authority.
+func runningTool(assistants []opencode.Message, limit int64) *Tool {
+	i := newestAssistant(assistants, limit)
+	if i < 0 {
+		return nil
+	}
+	var parts []toolPartInfo
+	var candidates []runningToolCandidate
+	for j, raw := range assistants[i].Parts {
+		if len(raw) > maxPartBytes {
+			continue
+		}
+		var p struct {
+			Type   string `json:"type"`
+			CallID string `json:"callID"`
+			Tool   string `json:"tool"`
+			State  struct {
+				Status string     `json:"status"`
+				Time   *partTimes `json:"time"`
+			} `json:"state"`
+		}
+		if json.Unmarshal(raw, &p) != nil || p.Type != "tool" || p.CallID == "" {
+			continue
+		}
+		parts = append(parts, toolPartInfo{idx: j, callID: p.CallID, status: p.State.Status})
+		if p.State.Status != "running" || p.State.Time == nil {
+			continue
+		}
+		start, ok := nativeMillis(p.State.Time.Start, limit)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, runningToolCandidate{idx: j, callID: p.CallID, name: p.Tool, start: start})
+	}
+	var best *runningToolCandidate
+	for k := range candidates {
+		c := candidates[k]
+		stale := false
+		for _, later := range parts {
+			if later.idx > c.idx && later.callID == c.callID && (later.status == "completed" || later.status == "error") {
+				stale = true
+				break
+			}
+		}
+		if stale {
+			continue
+		}
+		if best == nil || c.start < best.start {
+			best = &c
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return &Tool{ToolName: sanitizeToolName(best.name), RunningSince: time.UnixMilli(best.start).UTC()}
 }
 
 // providerError is one typed provider error candidate (an assistant error
@@ -370,6 +507,10 @@ type livenessEvidence struct {
 	// retrySince is the Bridge-clock memory of the current retry attempt (zero
 	// when none). ADR-017 A2 S1.
 	retrySince time.Time
+	// toolLong is the effective tool_long_s for the running-tool explanation
+	// (ADR-017 A2 S2). Zero uses defaultToolLongThreshold; the operator override
+	// and the per-tool defaults arrive with S3.
+	toolLong time.Duration
 }
 
 // assessLiveness computes the ADR-017 §3(a) report. It is advisory: callers
@@ -453,6 +594,9 @@ func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) 
 	}
 	l.Degraded = l.DegradationReason != ""
 	if e.permissionPending {
+		// A pending permission suppresses the stall reason and its explanation
+		// (A2.4, first paragraph); the tool object qualifies that explanation,
+		// so it is not exported either.
 		return l
 	}
 	absent := l.NativeStatus == "absent"
@@ -470,6 +614,23 @@ func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) 
 			l.StallReason = "NO_PROGRESS"
 		}
 	}
+	// ADR-017 A2 S2: a live running tool is display data of a busy execution or
+	// of a wedged retry (A2.4 item 6); it never suppresses NO_PROGRESS and never
+	// sets stall_suspected. The explanation appears once that tool is at or
+	// after tool_long_s. An absent status makes the part stale and neither is
+	// exported. A non-wedged retry (a future next) is not a running-tool case.
+	toolLong := e.toolLong
+	if toolLong <= 0 {
+		toolLong = defaultToolLongThreshold
+	}
+	if l.NativeStatus == "busy" || (l.NativeStatus == "retry" && l.StallReason == "NO_PROGRESS") {
+		if t := runningTool(e.assistants, limit); t != nil {
+			l.Tool = t
+			if now.Sub(t.RunningSince) >= toolLong {
+				l.Explanation = explanationToolRunningLong
+			}
+		}
+	}
 	l.StallSuspected = l.StallReason != ""
 	return l
 }
@@ -485,5 +646,9 @@ func copyLiveness(l *Liveness) *Liveness {
 	}
 	v.RetryNextAt = copyTime(l.RetryNextAt)
 	v.LastNativeProgressAt = copyTime(l.LastNativeProgressAt)
+	if l.Tool != nil {
+		t := *l.Tool
+		v.Tool = &t
+	}
 	return &v
 }

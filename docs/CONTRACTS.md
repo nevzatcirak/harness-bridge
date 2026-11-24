@@ -335,6 +335,8 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.retry_overdue` | `true` only with `retry` when `next` is past by more than the larger of 30 s and the NO_PROGRESS threshold, and the current attempt has been observed for at least that threshold. An additional hint: a wedged `NO_PROGRESS` may or may not carry it |
 | `liveness.cause_hint` | One closed word: `network`, `rate_limit`, `auth`, `server` or `unknown`. From the structured source (`action.reason`, an `APIError` status code, `ProviderAuthError` or a `retry` part) or the D32 Q5 bounded-text fallback; never the raw text |
 | `liveness.cause_source` | `structured` (a structured field, even when it maps to `unknown`), `bounded_text` (only from the closed pattern set) or `none`. The matched text is never authority, never exported and never in audit |
+| `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start`, never after `observed_at` |
+| `liveness.explanation` | `TOOL_RUNNING_LONG` only: the `tool` object has run at or after `tool_long_s` (default 600 s) on a `busy` execution or a wedged retry. It is an explanation, not a `stall_reason`: it never sets `stall_suspected`, never suppresses A1's `NO_PROGRESS`, and is suppressed with the stall reason by a pending permission |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
 
 ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
@@ -355,8 +357,9 @@ timeout); a text matching no pattern stays `unknown` with `cause_source: none`.
 It is report-only and adds no native read or write. The accepted A2 amendment
 adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
 the S3 slice introduces it, so this release does not emit it yet.
-`TOOL_RUNNING_LONG` is not a `stall_reason` (it is the S2 explanation) and is not
-emitted yet either.
+`TOOL_RUNNING_LONG` is not a `stall_reason`; it is the `explanation` of a
+running tool (S2), emitted only with the `tool` object and never with a pending
+permission.
 
 The object is computed from the native reads the background monitor and the
 bounded on-demand reconcile already make (metadata, status, history,
