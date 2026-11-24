@@ -180,9 +180,14 @@ func TestS4ClaudeAPIRetry(t *testing.T) {
 	// past no_progress_s is NO_PROGRESS and not overdue.
 	clk.Advance(111 * time.Second)
 	c.emit(s4Retry(1, 4, 5, 0, 500, "server_error"))
+	// Wait until the retry event was processed before advancing: a snapshot can
+	// legitimately see the prior event while the line is in flight.
+	_ = s4Until(t, h, x.ID, "retry event processed", func(x execution.Execution) bool {
+		return x.Liveness != nil && x.Liveness.DegradationReason == "PROVIDER_RETRYING"
+	})
 	clk.Advance(10 * time.Second)
 	got = s4Until(t, h, x.ID, "wedged retry", func(x execution.Execution) bool {
-		return x.Liveness != nil && x.Liveness.StallReason == "NO_PROGRESS"
+		return x.Liveness != nil && x.Liveness.StallReason == "NO_PROGRESS" && x.Liveness.DegradationReason != ""
 	})
 	if got.Liveness.DegradationReason != "PROVIDER_RETRYING" || got.Liveness.RetryOverdue {
 		t.Fatalf("wedged retry %+v", got.Liveness)
