@@ -177,7 +177,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
-<header><h1>Harness Bridge dashboard</h1><span class="badge">read-only</span></header>
+<header><h1>Cirak dashboard</h1><span class="badge">read-only</span></header>
 <main id="app" data-slice="4"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}"{{end}}{{end}}>
 <div id="live">
 {{if .Message}}<p>{{.Message}}</p>{{end}}
@@ -363,7 +363,7 @@ func (d *dash) indexHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
-		p := page{Title: "Harness Bridge dashboard", Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
+		p := page{Title: "Cirak dashboard", Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
 		if _, none := d.src.(NullSource); none {
 			p.Message = "No data source is connected."
 			renderPage(w, http.StatusOK, p)
@@ -491,7 +491,7 @@ func (d *dash) detailHandler() http.Handler {
 			return
 		}
 		row := toRow(det.Session)
-		p := page{Title: "Harness Bridge dashboard · session " + truncRunes(det.ID, 128), Detail: &row, Pending: harness == harnessClaudeCode}
+		p := page{Title: "Cirak dashboard · session " + truncRunes(det.ID, 128), Detail: &row, Pending: harness == harnessClaudeCode}
 		if turn {
 			d.turnPage(ctx, w, p, harness, id, parts[3])
 			return

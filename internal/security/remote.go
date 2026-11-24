@@ -23,7 +23,7 @@ type Remote struct {
 // ADR-019 option (2), accepted 2026-11-06: the connector token's maximum
 // lifetime is operator-configurable up to a compiled-in ceiling.
 const (
-	// DefaultTokenMaxLifetime applies when BRIDGE_TOKEN_MAX_LIFETIME is unset.
+	// DefaultTokenMaxLifetime applies when CIRAK_TOKEN_MAX_LIFETIME is unset.
 	DefaultTokenMaxLifetime = 24 * time.Hour
 	// TokenMaxLifetimeCeiling is the hard upper bound for any configuration.
 	TokenMaxLifetimeCeiling = 720 * time.Hour
@@ -33,7 +33,7 @@ const (
 	MinLongLivedTokenLength = 43
 )
 
-// ParseTokenMaxLifetime reads BRIDGE_TOKEN_MAX_LIFETIME. An empty value is the
+// ParseTokenMaxLifetime reads CIRAK_TOKEN_MAX_LIFETIME. An empty value is the
 // default. Anything that is not a Go duration in (0, ceiling] is rejected, so a
 // typo never silently changes the bound.
 func ParseTokenMaxLifetime(v string) (time.Duration, error) {
@@ -42,7 +42,7 @@ func ParseTokenMaxLifetime(v string) (time.Duration, error) {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return 0, errors.New("BRIDGE_TOKEN_MAX_LIFETIME must be a Go duration such as 168h")
+		return 0, errors.New("CIRAK_TOKEN_MAX_LIFETIME must be a Go duration such as 168h")
 	}
 	if err := validMaxLifetime(d); err != nil {
 		return 0, err
@@ -52,7 +52,7 @@ func ParseTokenMaxLifetime(v string) (time.Duration, error) {
 
 func validMaxLifetime(d time.Duration) error {
 	if d <= 0 || d > TokenMaxLifetimeCeiling {
-		return errors.New("BRIDGE_TOKEN_MAX_LIFETIME must be greater than 0 and at most 720h")
+		return errors.New("CIRAK_TOKEN_MAX_LIFETIME must be greater than 0 and at most 720h")
 	}
 	return nil
 }
@@ -92,7 +92,7 @@ func newRemoteAt(origin, principal string, expires time.Time, maxLifetime time.D
 		if maxLifetime == DefaultTokenMaxLifetime {
 			return nil, errors.New("named principal and future token expiry within 24 hours required")
 		}
-		return nil, fmt.Errorf("named principal and future token expiry within BRIDGE_TOKEN_MAX_LIFETIME (%s) required", maxLifetime)
+		return nil, fmt.Errorf("named principal and future token expiry within CIRAK_TOKEN_MAX_LIFETIME (%s) required", maxLifetime)
 	}
 	return &Remote{origin: origin, host: u.Host, principal: principal, expires: expires, maxLifetime: maxLifetime}, nil
 }
@@ -117,7 +117,7 @@ func (p *Remote) Check(w http.ResponseWriter, r *http.Request) bool {
 	case r.URL.Path != "/mcp" || r.URL.RawQuery != "":
 		status = http.StatusBadRequest
 	case !time.Now().Before(p.expires):
-		w.Header().Set("WWW-Authenticate", `Bearer realm="harness-bridge", error="invalid_token"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="cirak", error="invalid_token"`)
 		status = http.StatusUnauthorized
 	}
 	// Only configured identity and outcome; never log headers, URL or payload.

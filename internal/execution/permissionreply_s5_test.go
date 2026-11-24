@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/audit"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/audit"
 )
 
 // ADR-024 S5: the result and refused lines, the latch refusal and the hardening of the S3 reviews

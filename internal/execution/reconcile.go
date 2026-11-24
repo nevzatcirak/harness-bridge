@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 type directoryScoped interface{ Directory() string }

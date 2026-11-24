@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // #233 P2-1/P3-1: a Wait that returns Exit{Unknown:true} is NOT a confirmed reap. The

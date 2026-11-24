@@ -15,7 +15,7 @@ const MaxSessions = 1000
 
 const maxSessionsFile = 1 << 20
 
-// Session is one allowlist entry of BRIDGE_CLAUDE_SESSIONS (§6): an exact session
+// Session is one allowlist entry of CIRAK_CLAUDE_SESSIONS (§6): an exact session
 // ID, its approved root, and an optional label.
 type Session struct {
 	ID    string `json:"session_id"`
@@ -29,7 +29,7 @@ func (s Session) UUID() string { u, _ := ParseSessionID(s.ID); return u }
 // ParseSessions decodes and validates the allowlist document: strict JSON (no
 // unknown field, no key in another letter case, no duplicate key, no null, one document), at most MaxSessions entries, canonical
 // `claudecode:<uuid>` IDs, no duplicates, absolute clean roots inside one of
-// allowedRoots (BRIDGE_ALLOWED_ROOTS), printable labels. Any violation fails the
+// allowedRoots (CIRAK_ALLOWED_ROOTS), printable labels. Any violation fails the
 // whole file: startup refuses, nothing is partially loaded.
 func ParseSessions(data []byte, allowedRoots []string) ([]Session, error) {
 	if len(data) > maxSessionsFile {
@@ -88,7 +88,7 @@ func insideAny(p string, roots []string) bool {
 }
 
 // CheckSessionACL requires every allowlisted ID to also be in the per-session ACL
-// (BRIDGE_ALLOWED_SESSIONS); the principal check is unchanged (§6).
+// (CIRAK_ALLOWED_SESSIONS); the principal check is unchanged (§6).
 func CheckSessionACL(list []Session, allowedSessions []string) error {
 	acl := map[string]bool{}
 	for _, a := range allowedSessions {

@@ -86,11 +86,11 @@ func (r *Redactor) Redact(s string) (string, int) {
 }
 
 // EnvRedactExtra names the operator's additional redaction patterns (D17 Q5): a JSON
-// array of RE2 patterns, for example BRIDGE_DASHBOARD_REDACT_EXTRA='["corp-[0-9a-f]{16}"]'.
+// array of RE2 patterns, for example CIRAK_DASHBOARD_REDACT_EXTRA='["corp-[0-9a-f]{16}"]'.
 // The patterns are additive: the shipped list stays on. Unset means the shipped list only.
-const EnvRedactExtra = "BRIDGE_DASHBOARD_REDACT_EXTRA"
+const EnvRedactExtra = "CIRAK_DASHBOARD_REDACT_EXTRA"
 
-// RedactorFromEnv builds the redactor from BRIDGE_DASHBOARD_REDACT_EXTRA. An invalid
+// RedactorFromEnv builds the redactor from CIRAK_DASHBOARD_REDACT_EXTRA. An invalid
 // value (not a JSON array of strings, too many or too long patterns, a pattern that does
 // not compile) is an error, so the Bridge fails closed at startup. No error carries the
 // value or any pattern text: the configuration is never echoed or logged.

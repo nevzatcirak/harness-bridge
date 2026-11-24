@@ -11,6 +11,6 @@
 // Slice 3 added the SIGINT, bounded wait, SIGTERM, bounded wait escalation (never a
 // SIGKILL: ADR-021 section 4), Executor.Interrupt, the hardening argv and the version
 // and tool-profile checks. The adapter is NOT live and is not wired into cmd/bridge or
-// the MCP dispatch: exposing interrupt_execution, reading BRIDGE_CLAUDE_VERSIONS from the
+// the MCP dispatch: exposing interrupt_execution, reading CIRAK_CLAUDE_VERSIONS from the
 // environment and the double writer lock are the wiring slice.
 package runner

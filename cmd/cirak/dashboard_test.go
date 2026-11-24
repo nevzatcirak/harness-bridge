@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
 )
 
 func TestOpenDashboardDisabledByDefault(t *testing.T) {
@@ -27,11 +27,11 @@ func TestOpenDashboardDisabledByDefault(t *testing.T) {
 
 func TestOpenDashboardRefusesBadConfiguration(t *testing.T) {
 	for name, env := range map[string]map[string]string{
-		"wildcard":  {"BRIDGE_DASHBOARD_ADDR": "0.0.0.0:8080"},
-		"ipv6-any":  {"BRIDGE_DASHBOARD_ADDR": "[::]:8080"},
-		"non-local": {"BRIDGE_DASHBOARD_ADDR": "192.0.2.1:8080"},
-		"name":      {"BRIDGE_DASHBOARD_ADDR": "localhost:8080"},
-		"both":      {"BRIDGE_DASHBOARD_ADDR": "127.0.0.1:0", "BRIDGE_DASHBOARD_SOCKET": "/run/x/d.sock"},
+		"wildcard":  {"CIRAK_DASHBOARD_ADDR": "0.0.0.0:8080"},
+		"ipv6-any":  {"CIRAK_DASHBOARD_ADDR": "[::]:8080"},
+		"non-local": {"CIRAK_DASHBOARD_ADDR": "192.0.2.1:8080"},
+		"name":      {"CIRAK_DASHBOARD_ADDR": "localhost:8080"},
+		"both":      {"CIRAK_DASHBOARD_ADDR": "127.0.0.1:0", "CIRAK_DASHBOARD_SOCKET": "/run/x/d.sock"},
 	} {
 		srv, err := openDashboard(func(k string) string { return env[k] }, nil)
 		if err == nil || srv != nil {
@@ -47,7 +47,7 @@ func TestOpenDashboardOnA0700Socket(t *testing.T) {
 	}
 	sock := filepath.Join(dir, "dash.sock")
 	srv, err := openDashboard(func(k string) string {
-		if k == "BRIDGE_DASHBOARD_SOCKET" {
+		if k == "CIRAK_DASHBOARD_SOCKET" {
 			return sock
 		}
 		return ""
@@ -84,7 +84,7 @@ func TestAuditTeeIsNotInstalledWhenTheDashboardIsOff(t *testing.T) {
 	}
 	// A refused configuration installs nothing either.
 	if _, err := openDashboard(func(k string) string {
-		if k == "BRIDGE_DASHBOARD_ADDR" {
+		if k == "CIRAK_DASHBOARD_ADDR" {
 			return "0.0.0.0:8080"
 		}
 		return ""
@@ -105,7 +105,7 @@ func TestAuditTeeFeedsTheDashboardAndShutdownRestoresTheLogger(t *testing.T) {
 	}
 	sock := filepath.Join(dir, "dash.sock")
 	srv, err := openDashboard(func(k string) string {
-		if k == "BRIDGE_DASHBOARD_SOCKET" {
+		if k == "CIRAK_DASHBOARD_SOCKET" {
 			return sock
 		}
 		return ""
@@ -176,7 +176,7 @@ func TestEnabledDashboardBuildsTheSourceOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv, err := openDashboard(func(k string) string {
-		if k == "BRIDGE_DASHBOARD_SOCKET" {
+		if k == "CIRAK_DASHBOARD_SOCKET" {
 			return filepath.Join(dir, "d.sock")
 		}
 		return ""
@@ -203,7 +203,7 @@ func TestInvalidRedactionPatternFailsClosedWithoutLogging(t *testing.T) {
 	sock := filepath.Join(dir, "d.sock")
 	srv, err := openDashboard(func(k string) string {
 		switch k {
-		case "BRIDGE_DASHBOARD_SOCKET":
+		case "CIRAK_DASHBOARD_SOCKET":
 			return sock
 		case dashboard.EnvRedactExtra:
 			return `["SECRETPATTERN("]`
@@ -233,7 +233,7 @@ func TestOperatorRedactionReachesTheAuditRingButNotTheJournal(t *testing.T) {
 	sock := filepath.Join(dir, "dash.sock")
 	srv, err := openDashboard(func(k string) string {
 		switch k {
-		case "BRIDGE_DASHBOARD_SOCKET":
+		case "CIRAK_DASHBOARD_SOCKET":
 			return sock
 		case dashboard.EnvRedactExtra:
 			return `["corp-[0-9a-f]{8}"]`

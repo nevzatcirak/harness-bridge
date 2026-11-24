@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/nevzatcirak/harness-bridge/internal/claudewire"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/claudewire"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // acquireOpenCodeOwnership is the OpenCode writer's host-local lock step of main (ADR-010), one

@@ -4,42 +4,42 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/audit"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/audit"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcp"
 )
 
-// permissionRelayMode resolves BRIDGE_PERMISSION_RELAY (ADR-024 section 5, D15 Q3): reject_only
+// permissionRelayMode resolves CIRAK_PERMISSION_RELAY (ADR-024 section 5, D15 Q3): reject_only
 // (the default, also when unset) registers reply_permission; off leaves the Bridge with its
 // eleven tools. policy is the mode of slices S2/S4, which are not started (D15 Q1): it is refused
 // at startup rather than silently treated as reject_only, so an operator who sets it is told.
 func permissionRelayMode(env func(string) string) (string, error) {
-	switch v := strings.TrimSpace(env("BRIDGE_PERMISSION_RELAY")); v {
+	switch v := strings.TrimSpace(env("CIRAK_PERMISSION_RELAY")); v {
 	case "", "reject_only":
 		return "reject_only", nil
 	case "off":
 		return "off", nil
 	case "policy":
-		return "", fmt.Errorf("BRIDGE_PERMISSION_RELAY=policy is not available: the policy mode (ADR-024 S2/S4) is not started; use reject_only or off")
+		return "", fmt.Errorf("CIRAK_PERMISSION_RELAY=policy is not available: the policy mode (ADR-024 S2/S4) is not started; use reject_only or off")
 	default:
-		return "", fmt.Errorf("BRIDGE_PERMISSION_RELAY must be reject_only or off")
+		return "", fmt.Errorf("CIRAK_PERMISSION_RELAY must be reject_only or off")
 	}
 }
 
-// permissionIncarnationMode resolves BRIDGE_PERMISSION_INCARNATION (ADR-024 Amendment A1 S7, D21 Q2):
+// permissionIncarnationMode resolves CIRAK_PERMISSION_INCARNATION (ADR-024 Amendment A1 S7, D21 Q2):
 // off (the default, also when unset) leaves the relay without incarnation evidence, so every request stays
 // unattributed (not_verified); observed starts the Bridge-observed continuity epoch (one subscription of
 // GET /global/event) and attributes only requests of runs admitted under the current epoch. Anything else
-// is a startup error. observed has no effect when BRIDGE_PERMISSION_RELAY=off: no tracker is started.
+// is a startup error. observed has no effect when CIRAK_PERMISSION_RELAY=off: no tracker is started.
 func permissionIncarnationMode(env func(string) string) (string, error) {
-	switch v := strings.TrimSpace(env("BRIDGE_PERMISSION_INCARNATION")); v {
+	switch v := strings.TrimSpace(env("CIRAK_PERMISSION_INCARNATION")); v {
 	case "", "off":
 		return "off", nil
 	case "observed":
 		return "observed", nil
 	default:
-		return "", fmt.Errorf("BRIDGE_PERMISSION_INCARNATION must be off or observed")
+		return "", fmt.Errorf("CIRAK_PERMISSION_INCARNATION must be off or observed")
 	}
 }
 
@@ -53,7 +53,7 @@ func startIncarnation(relayMode, incMode string, client *opencode.Client) (execu
 	}
 	tracker, err := opencode.NewEpochTracker(opencode.EpochTrackerConfig{Open: client.GlobalEventOpener()})
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("BRIDGE_PERMISSION_INCARNATION=observed: the epoch tracker cannot start: %w", err)
+		return nil, func() {}, fmt.Errorf("CIRAK_PERMISSION_INCARNATION=observed: the epoch tracker cannot start: %w", err)
 	}
 	tracker.Start()
 	return tracker, tracker.Stop, nil

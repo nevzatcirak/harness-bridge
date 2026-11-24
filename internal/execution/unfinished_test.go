@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // F-5: admission and discovery share opencode.UnfinishedAssistant. Admission
