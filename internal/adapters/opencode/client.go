@@ -101,6 +101,12 @@ type Status struct {
 	// the whole status read; execution parses them leniently (ADR-017).
 	Attempt json.RawMessage `json:"attempt,omitempty"`
 	Next    json.RawMessage `json:"next,omitempty"`
+	// Message is the retry free-text message and Action the structured retry
+	// action ({reason,provider,title,message,label,link?}); both are kept raw so
+	// an unexpected shape can never fail the status read. Execution maps them to
+	// the closed ADR-017 A2 cause set and never exports the text.
+	Message json.RawMessage `json:"message,omitempty"`
+	Action  json.RawMessage `json:"action,omitempty"`
 }
 type Permission struct {
 	SessionID string `json:"sessionID"`

@@ -70,6 +70,12 @@ type Execution struct {
 	ReconciledAt   *time.Time    `json:"reconciled_at,omitempty"`
 	LocalFailure   *LocalFailure `json:"local_failure,omitempty"`
 	Liveness       *Liveness     `json:"liveness,omitempty"`
+	// RetryAttemptSince is the ADR-017 A2 first observation of the current retry
+	// attempt (Bridge clock). It is report-only memory for retry_overdue on the
+	// execution record, not part of the per-probe liveness block; it is cleared
+	// when the attempt number changes, the retry ends or the status is no longer
+	// retry.
+	RetryAttemptSince *time.Time `json:"retry_attempt_since,omitempty"`
 	// PermissionRejection is the ADR-018 (d) report-only block; see rejection.go.
 	PermissionRejection *PermissionRejection `json:"permission_rejection,omitempty"`
 	// PendingPermission and PendingPermissionCount are the ADR-024 S1 report-only
@@ -118,6 +124,11 @@ type run struct {
 	nextProbe                     time.Time
 	probeError                    error
 	observationValid              bool
+	// ADR-017 A2 S1: Bridge-clock memory of the current retry attempt, guarded by
+	// mu. retryAttemptSeen is the attempt value last observed (-1 when absent or
+	// malformed); all zero means no retry is being tracked.
+	retrySince       time.Time
+	retryAttemptSeen int64
 	// ADR-024 A1 S7: the continuity epoch armed at admission ("" = none, never verifiable).
 	submitEpoch string
 }

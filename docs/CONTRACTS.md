@@ -330,7 +330,33 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.last_native_progress_at` | Latest native timestamp among the correlated assistant messages' `time.created`/`time.completed` and recognized parts (text/reasoning `time.start/end`, tool `state.time.start/end`); never after `observed_at`. Unknown, malformed or over-1-MiB parts are ignored |
 | `liveness.stall_suspected` | `true` only with a `stall_reason`; always present in the object |
 | `liveness.stall_reason` | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (correlated assistant completed, no `finish` stop/end_turn or named error, native status absent, no pending permission), `NO_CORRELATED_ASSISTANT` (user message present, no correlated assistant, status absent) or `NO_PROGRESS` (`busy`, or `retry` whose `next` is past, and no native progress, nor submission, for longer than 2 minutes) |
+| `liveness.degradation_reason` | ADR-017 A2 Variant A: `PROVIDER_RETRYING` (native status `retry`, including a healthy retry), `PROVIDER_RETRY_OVERDUE` (the same but `retry_overdue` is true, D32 Q11) or `PROVIDER_ERROR` (an unresolved execution whose native status is not `retry` and that has a typed provider error: a correlated assistant error without terminal proof, or a persisted `retry` part). Independent of `stall_suspected`; a healthy retry is degradation, never a stall |
+| `liveness.degraded` | Only the alias: `true` iff `degradation_reason` is present; never a separate state |
+| `liveness.retry_overdue` | `true` only with `retry` when `next` is past by more than the larger of 30 s and the NO_PROGRESS threshold, and the current attempt has been observed for at least that threshold. An additional hint: a wedged `NO_PROGRESS` may or may not carry it |
+| `liveness.cause_hint` | One closed word: `network`, `rate_limit`, `auth`, `server` or `unknown`. From the structured source (`action.reason`, an `APIError` status code, `ProviderAuthError` or a `retry` part) or the D32 Q5 bounded-text fallback; never the raw text |
+| `liveness.cause_source` | `structured` (a structured field, even when it maps to `unknown`), `bounded_text` (only from the closed pattern set) or `none`. The matched text is never authority, never exported and never in audit |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
+
+ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
+`liveness` block): the Bridge time of the first observation of the current retry
+attempt. It is report-only memory for `retry_overdue`, cleared when the attempt
+number changes, the retry ends or the status is no longer `retry`; like every
+execution field it is process-local.
+
+The A2 provider fields are additive and optional, follow the same report-only
+rules (they never change `state`, `ended_at`, `unresolved`, the guard or
+idempotency), and a pending native permission suppresses only the stall reason,
+not the provider degradation dimension. A retry whose `next` is past with no
+progress for longer than the threshold keeps A1's `NO_PROGRESS`/`stall_suspected`,
+with a running tool or not; `degradation_reason` accompanies it. The bounded
+fallback lowercases at most 4 KiB of the retry message and maps only the closed
+pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403,
+timeout); a text matching no pattern stays `unknown` with `cause_source: none`.
+It is report-only and adds no native read or write. The accepted A2 amendment
+adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
+the S3 slice introduces it, so this release does not emit it yet.
+`TOOL_RUNNING_LONG` is not a `stall_reason` (it is the S2 explanation) and is not
+emitted yet either.
 
 The object is computed from the native reads the background monitor and the
 bounded on-demand reconcile already make (metadata, status, history,

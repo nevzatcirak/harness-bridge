@@ -643,6 +643,7 @@ func TestLivenessNeverChangesStateOrGuard(t *testing.T) {
 	// unresolved, ended_at or updated_at).
 	comparable := func(v Execution) Execution {
 		v.ID, v.MessageID, v.Liveness = "", "", nil
+		v.RetryAttemptSince = nil // A2 report memory, switched off with the report
 		return v
 	}
 	type observation struct {
