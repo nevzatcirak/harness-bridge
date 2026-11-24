@@ -62,8 +62,17 @@ type Liveness struct {
 	// and the explanation never suppresses NO_PROGRESS.
 	Tool        *Tool  `json:"tool,omitempty"`
 	Explanation string `json:"explanation,omitempty"`
+	// ADR-017 A2 S3: the operator thresholds actually applied (A2.6). Present
+	// on every production block; omitted by a block built without them.
+	Thresholds *Thresholds `json:"thresholds,omitempty"`
 	// ObservedAt is the Bridge time of the probe that produced this block.
 	ObservedAt time.Time `json:"observed_at"`
+}
+
+// Thresholds is the A2.6 `{no_progress_s, tool_long_s}` object, in seconds.
+type Thresholds struct {
+	NoProgressS int `json:"no_progress_s"`
+	ToolLongS   int `json:"tool_long_s"`
 }
 
 // Tool is the A2 running-tool object: the oldest live running tool of the
@@ -105,8 +114,14 @@ var boundedCausePatterns = []struct {
 }
 
 // unavailableLiveness reports a probe whose native reads did not all succeed.
-func unavailableLiveness(now time.Time) *Liveness {
-	return &Liveness{NativeStatus: "unavailable", ObservedAt: now}
+// thresholds is the applied A2.6 object (nil for a block built without it).
+func unavailableLiveness(now time.Time, thresholds *Thresholds) *Liveness {
+	l := &Liveness{NativeStatus: "unavailable", ObservedAt: now}
+	if thresholds != nil {
+		t := *thresholds
+		l.Thresholds = &t
+	}
+	return l
 }
 
 // setLiveness replaces the report block. Caller holds run.mu. It never touches
@@ -509,14 +524,20 @@ type livenessEvidence struct {
 	retrySince time.Time
 	// toolLong is the effective tool_long_s for the running-tool explanation
 	// (ADR-017 A2 S2). Zero uses defaultToolLongThreshold; the operator override
-	// and the per-tool defaults arrive with S3.
+	// (A2 S3) sets it. Per-tool defaults remain a maintainer gap (D32 Q10).
 	toolLong time.Duration
+	// thresholds is the A2.6 object echoed in the block (A2 S3). Zero omits it.
+	thresholds Thresholds
 }
 
 // assessLiveness computes the ADR-017 §3(a) report. It is advisory: callers
 // must not derive state, ended_at or guard decisions from it.
 func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) *Liveness {
 	l := &Liveness{ObservedAt: now}
+	if e.thresholds.NoProgressS > 0 || e.thresholds.ToolLongS > 0 {
+		t := e.thresholds
+		l.Thresholds = &t
+	}
 	limit := now.UnixMilli()
 	switch {
 	case !e.statusExists || e.status.Type == "idle":
@@ -649,6 +670,10 @@ func copyLiveness(l *Liveness) *Liveness {
 	if l.Tool != nil {
 		t := *l.Tool
 		v.Tool = &t
+	}
+	if l.Thresholds != nil {
+		t := *l.Thresholds
+		v.Thresholds = &t
 	}
 	return &v
 }

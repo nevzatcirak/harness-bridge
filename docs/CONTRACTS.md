@@ -329,7 +329,7 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.retry_next_at` | Native next retry time (from epoch ms); only with `retry` and a well-formed value |
 | `liveness.last_native_progress_at` | Latest native timestamp among the correlated assistant messages' `time.created`/`time.completed` and recognized parts (text/reasoning `time.start/end`, tool `state.time.start/end`); never after `observed_at`. Unknown, malformed or over-1-MiB parts are ignored |
 | `liveness.stall_suspected` | `true` only with a `stall_reason`; always present in the object |
-| `liveness.stall_reason` | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (correlated assistant completed, no `finish` stop/end_turn or named error, native status absent, no pending permission), `NO_CORRELATED_ASSISTANT` (user message present, no correlated assistant, status absent), `NO_PROGRESS` (`busy`, or `retry` whose `next` is past, and no native progress, nor submission, for longer than 2 minutes) or `HARNESS_UNREACHABLE` (the accepted A2 native-read failure class; the S3 slice introduces it and S1 does not emit it yet) |
+| `liveness.stall_reason` | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (correlated assistant completed, no `finish` stop/end_turn or named error, native status absent, no pending permission), `NO_CORRELATED_ASSISTANT` (user message present, no correlated assistant, status absent), `NO_PROGRESS` (`busy`, or `retry` whose `next` is past, and no native progress, nor submission, for longer than `no_progress_s`) or `HARNESS_UNREACHABLE` (ADR-017 A2: the probe's first failing native read is a transport/connection error, a read timeout including HTTP 408 or a 5xx, and consecutive probes over the fixed 120 s window each end at such a failure; a 3xx, any other 4xx, a decode failure or over-size response, a local filesystem timeout, a cancellation or an identity mismatch never counts, and a non-counting failure is its own `unavailable` state) |
 | `liveness.degradation_reason` | ADR-017 A2 Variant A: `PROVIDER_RETRYING` (native status `retry`, including a healthy retry), `PROVIDER_RETRY_OVERDUE` (the same but `retry_overdue` is true, D32 Q11) or `PROVIDER_ERROR` (an unresolved execution whose native status is not `retry` and that has a typed provider error: a correlated assistant error without terminal proof, or a persisted `retry` part). Independent of `stall_suspected`; a healthy retry is degradation, never a stall |
 | `liveness.degraded` | Only the alias: `true` iff `degradation_reason` is present; never a separate state |
 | `liveness.retry_overdue` | `true` only with `retry` when `next` is past by more than the larger of 30 s and the NO_PROGRESS threshold, and the current attempt has been observed for at least that threshold. An additional hint: a wedged `NO_PROGRESS` may or may not carry it |
@@ -337,13 +337,17 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.cause_source` | `structured` (a structured field, even when it maps to `unknown`), `bounded_text` (only from the closed pattern set) or `none`. The matched text is never authority, never exported and never in audit |
 | `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start`, never after `observed_at` |
 | `liveness.explanation` | `TOOL_RUNNING_LONG` only: the `tool` object has run at or after `tool_long_s` (default 600 s) on a `busy` execution or a wedged retry. It is an explanation, not a `stall_reason`: it never sets `stall_suspected`, never suppresses A1's `NO_PROGRESS`, and is suppressed with the stall reason by a pending permission |
+| `liveness.thresholds` | ADR-017 A2 S3: `{no_progress_s, tool_long_s}`, the operator configuration actually applied. `no_progress_s` is 30–900 s (default 120); `tool_long_s` is 60–3600 s (default 600). The values come from `BRIDGE_LIVENESS_NO_PROGRESS_S` / `BRIDGE_LIVENESS_TOOL_LONG_S` (ADR-026 S1 renames them to `CIRAK_*`); an absent variable uses the default and a non-integer, negative or out-of-range value is a startup error naming the variable. Not a per-execution input |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
 
 ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
 `liveness` block): the Bridge time of the first observation of the current retry
 attempt. It is report-only memory for `retry_overdue`, cleared when the attempt
 number changes, the retry ends or the status is no longer `retry`; like every
-execution field it is process-local.
+execution field it is process-local. S3 adds `unavailable_since` on the same
+record (not inside the `liveness` block): the Bridge time of the first native-read
+failure of the current window, cleared by a successful probe or by any
+non-counting failure.
 
 The A2 provider fields are additive and optional, follow the same report-only
 rules (they never change `state`, `ended_at`, `unresolved`, the guard or
@@ -356,7 +360,9 @@ pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403,
 timeout); a text matching no pattern stays `unknown` with `cause_source: none`.
 It is report-only and adds no native read or write. The accepted A2 amendment
 adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
-the S3 slice introduces it, so this release does not emit it yet.
+S3 emits it only after the fixed 120 s native-read failure window, with
+`unavailable_since` on the execution record. `unavailable_s` is fixed at 120 s
+and is not operator-configured.
 `TOOL_RUNNING_LONG` is not a `stall_reason`; it is the `explanation` of a
 running tool (S2), emitted only with the `tool` object and never with a pending
 permission.

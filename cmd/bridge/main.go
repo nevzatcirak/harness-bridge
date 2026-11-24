@@ -25,6 +25,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// ADR-017 A2 S3: the operator liveness thresholds are validated before any
+	// writer lock, native client or adapter is opened; an invalid value stops the
+	// start naming its variable.
+	liveness, err := execution.ParseLivenessEnv(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	base := os.Getenv("OPENCODE_URL")
 	if base == "" {
 		base = "http://127.0.0.1:4096"
@@ -63,7 +70,7 @@ func main() {
 	if claude != nil {
 		defer claude.Close()
 	}
-	runs := execution.New(client)
+	runs := execution.NewWithLiveness(client, liveness)
 	defer runs.Close()
 	// ADR-022/ADR-025 lifecycle surface (D22): enabled by default, inert until BRIDGE_LIFECYCLE_CONFIG
 	// (and, for archive, BRIDGE_OVERLAY_DIR) is set; an invalid value refuses to start.
