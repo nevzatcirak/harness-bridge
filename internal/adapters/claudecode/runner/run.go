@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ type run struct {
 	mu                   sync.Mutex
 	view                 execution.Execution
 	m                    *claudecode.Machine
+	liveness             *execution.ClaudeLiveness
 	child                Child
 	verdict              claudecode.Verdict
 	decided, shut        bool
@@ -42,6 +44,16 @@ const (
 func (r *run) snapshot() execution.Execution {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.snapshotLocked()
+}
+
+// snapshotLocked computes the current liveness block and returns a deep copy.
+// Caller holds mu.
+func (r *run) snapshotLocked() execution.Execution {
+	now := r.e.cfg.Now().UTC()
+	r.view.Liveness = r.liveness.Assess(now)
+	r.view.UnavailableSince = r.liveness.UnavailableSince()
+	r.view.RetryAttemptSince = r.liveness.RetryAttemptSince()
 	return clone(r.view)
 }
 
@@ -152,7 +164,7 @@ func (r *run) userInterrupt() execution.Execution {
 		r.after(r.m.Feed(claudecode.Step{Kind: claudecode.StepUserInterrupt}))
 		r.interrupt()
 	}
-	return clone(r.view)
+	return r.snapshotLocked()
 }
 
 // sync applies the first decided verdict: the execution view, the history
@@ -163,8 +175,12 @@ func (r *run) sync() {
 		return
 	}
 	r.decided, r.verdict = true, v
+	// A terminal verdict and a cap/exit-grace latch never carry liveness: the
+	// execution is done or its child is interrupted/abandoned (A2.7).
+	r.liveness.Clear()
 	now := r.e.cfg.Now().UTC()
 	x := &r.view
+	x.Liveness, x.UnavailableSince, x.RetryAttemptSince = nil, nil, nil
 	x.State, x.Updated = v.State, now
 	switch v.State {
 	case "completed", "interrupted":
@@ -219,7 +235,59 @@ func (r *run) line(ev claudecode.Event) {
 		r.graceStarted = true
 		r.timers = append(r.timers, time.AfterFunc(r.e.cfg.Grace, func() { r.graceExpired() }))
 	}
+	if correlated && !r.decided {
+		r.feedLiveness(ev)
+	}
 	r.after(r.m.Feed(claudecode.Step{Kind: claudecode.StepLine, Event: ev}))
+}
+
+// feedLiveness feeds one correlated event to the A2 S4 report. Caller holds mu.
+func (r *run) feedLiveness(ev claudecode.Event) {
+	now := r.e.cfg.Now().UTC()
+	switch {
+	case ev.Init != nil:
+		r.liveness.Init(now)
+	case ev.Retry != nil:
+		hint, source := execution.ClaudeRetryCause(ev.Retry.ErrorStatus, ev.Retry.ErrorStatusNull, ev.Retry.Error, ev.Retry.NoResponse)
+		r.liveness.Retry(now, ev.Retry.Attempt, ev.Retry.HasAttempt, ev.Retry.MaxRetries, ev.Retry.HasMax, ev.Retry.RetryDelayMS, hint, source)
+	case ev.Type == "assistant":
+		tools := make([]execution.ClaudeTool, 0, len(ev.Blocks))
+		for _, b := range ev.Blocks {
+			if b.Type == "tool_use" {
+				tools = append(tools, execution.ClaudeTool{CallID: b.ID, Name: b.Name, Since: now})
+			}
+		}
+		r.liveness.Assistant(now, tools)
+	case ev.Type == "user":
+		ids := make([]string, 0, len(ev.ToolResults))
+		for _, tr := range ev.ToolResults {
+			ids = append(ids, tr.ToolUseID)
+		}
+		r.liveness.ToolResult(now, ids)
+	case ev.Type == "result":
+		// The result is terminal evidence; the block is cleared at once, even if
+		// the verdict itself waits for EOF and the exit (A2.7).
+		r.liveness.Clear()
+	default:
+		// tool_progress and an unrelated system event clear the retry state but do
+		// not count as progress; only the listed events are progress.
+		r.liveness.OtherEvent()
+	}
+}
+
+// streamFailure records a reader failure for the report. A decoder bound is a
+// reader failure but never counts; a raw stdout read error counts only while the
+// run is undecided (the child is still attached). A terminal row, cap or exit
+// grace is never a native-unavailable class. It is called from the reader
+// goroutine without run.mu and takes it.
+func (r *run) streamFailure(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.decided || r.m.Verdict().Decided {
+		return
+	}
+	counting := !errors.Is(err, claudecode.ErrLineTooLong) && !errors.Is(err, claudecode.ErrStreamTooLarge)
+	r.liveness.Unavailable(r.e.cfg.Now().UTC(), counting)
 }
 
 func (r *run) graceExpired() {
@@ -344,12 +412,14 @@ func (e *Executor) work(r *run, prompt string) {
 
 	dec := claudecode.NewDecoder(child.Stdout(), claudecode.Limits{})
 	broken := false
+	var streamErr error
 	for {
 		ev, err := dec.Next()
 		if err == nil {
 			r.line(ev)
 			continue
 		}
+		streamErr = err
 		broken = err != io.EOF
 		break
 	}
@@ -357,6 +427,7 @@ func (e *Executor) work(r *run, prompt string) {
 		// The stream is unusable. It is fed BEFORE EOF and exit (§3 row 8 depends on
 		// the order), and the rest of stdout is drained and discarded so the child can
 		// finish; the wall-clock cap still bounds it.
+		r.streamFailure(streamErr)
 		r.feed(claudecode.Step{Kind: claudecode.StepStreamBroken})
 		// Bounded (#236 P3-6): a child that keeps writing cannot hold this loop for the
 		// whole wall-clock cap. At the bound the loop stops reading; the stream is broken

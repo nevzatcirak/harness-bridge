@@ -48,7 +48,11 @@ type Config struct {
 	// a directory, no symlink in the path).
 	RootCheck func(root string) error
 
-	RunMax      time.Duration // wall-clock cap per child (default 15 min)
+	RunMax time.Duration // wall-clock cap per child (default 15 min)
+	// NoProgressS and ToolLongS are the ADR-017 A2 S4 liveness thresholds
+	// (seconds). ToolLongS is capped at RunMax when the adapter is on (D32 Q12).
+	NoProgressS int
+	ToolLongS   int
 	Grace       time.Duration // exit grace after a result (default 10 s)
 	GroupWait   time.Duration // after a known exit, how long the child's process group may stay populated before the exit is treated as unconfirmed (default 1 s)
 	IntWait     time.Duration // §4: wait after SIGINT before SIGTERM (default 10 s)
@@ -100,6 +104,17 @@ func New(cfg Config) (*Executor, error) {
 	}
 	if cfg.RunMax <= 0 {
 		cfg.RunMax = 15 * time.Minute
+	}
+	if cfg.NoProgressS <= 0 {
+		cfg.NoProgressS = 120
+	}
+	if cfg.ToolLongS <= 0 {
+		cfg.ToolLongS = 600
+	}
+	// D32 Q12: a tool threshold at or above the wall-clock cap can never fire;
+	// the effective value is the cap.
+	if max := int(cfg.RunMax / time.Second); max > 0 && cfg.ToolLongS > max {
+		cfg.ToolLongS = max
 	}
 	if cfg.Grace <= 0 {
 		cfg.Grace = 10 * time.Second
@@ -195,6 +210,15 @@ func clone(x execution.Execution) execution.Execution {
 		t := *x.GuardReleasedAt
 		x.GuardReleasedAt = &t
 	}
+	if x.RetryAttemptSince != nil {
+		t := *x.RetryAttemptSince
+		x.RetryAttemptSince = &t
+	}
+	if x.UnavailableSince != nil {
+		t := *x.UnavailableSince
+		x.UnavailableSince = &t
+	}
+	x.Liveness = execution.CloneLiveness(x.Liveness)
 	return x
 }
 
@@ -491,7 +515,8 @@ func (e *Executor) newRun(uuid string, req Request) *run {
 	root := e.sessions[req.Session].Root
 	return &run{
 		e: e, id: id, session: req.Session, uuid: uuid, root: root, done: make(chan struct{}),
-		view: execution.Execution{ID: id, SessionID: req.Session, MessageID: "msg_" + id[:16], State: "submitting", Started: now, Updated: now},
-		m:    claudecode.NewMachine(claudecode.Config{RequestedUUID: uuid, CanonicalRoot: root, AllowedVersions: e.cfg.AllowedVersions, Tools: e.cfg.Tools}),
+		view:     execution.Execution{ID: id, SessionID: req.Session, MessageID: "msg_" + id[:16], State: "submitting", Started: now, Updated: now},
+		m:        claudecode.NewMachine(claudecode.Config{RequestedUUID: uuid, CanonicalRoot: root, AllowedVersions: e.cfg.AllowedVersions, Tools: e.cfg.Tools}),
+		liveness: execution.NewClaudeLiveness(e.cfg.NoProgressS, e.cfg.ToolLongS),
 	}
 }

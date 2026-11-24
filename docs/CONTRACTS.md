@@ -324,9 +324,10 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 
 | Field | Meaning |
 | --- | --- |
-| `liveness.native_status` | `busy`, `retry`, `absent` (no native status entry, or an explicit `idle` entry, which OpenCode 1.19.4 does not keep) or `unavailable` (this probe's native reads did not all succeed, the observation failed identity checks, or the native type is unrecognized) |
+| `liveness.native_status` | `busy`, `retry`, `absent` (no native status entry, or an explicit `idle` entry, which OpenCode 1.19.4 does not keep) or `unavailable` (this probe's native reads did not all succeed, the observation failed identity checks, or the native type is unrecognized). Claude Code: `busy` while the child runs and `unavailable` after a reader failure; `absent` is never emitted |
 | `liveness.retry_attempt` | Native retry attempt; only with `retry` and a well-formed non-negative integer |
-| `liveness.retry_next_at` | Native next retry time (from epoch ms); only with `retry` and a well-formed value |
+| `liveness.retry_next_at` | Native next retry time (from epoch ms; Claude: the receive clock plus `retry_delay_ms`); only with `retry` and a well-formed value |
+| `liveness.retry_max` | Claude `max_retries` when the `api_retry` event carries a well-formed value; absent for OpenCode (not exposed) |
 | `liveness.last_native_progress_at` | Latest native timestamp among the correlated assistant messages' `time.created`/`time.completed` and recognized parts (text/reasoning `time.start/end`, tool `state.time.start/end`); never after `observed_at`. Unknown, malformed or over-1-MiB parts are ignored |
 | `liveness.stall_suspected` | `true` only with a `stall_reason`; always present in the object |
 | `liveness.stall_reason` | `COMPLETED_WITHOUT_TERMINAL_EVIDENCE` (correlated assistant completed, no `finish` stop/end_turn or named error, native status absent, no pending permission), `NO_CORRELATED_ASSISTANT` (user message present, no correlated assistant, status absent), `NO_PROGRESS` (`busy`, or `retry` whose `next` is past, and no native progress, nor submission, for longer than `no_progress_s`) or `HARNESS_UNREACHABLE` (ADR-017 A2: the probe's first failing native read is a transport/connection error, a read timeout including HTTP 408 or a 5xx, and consecutive probes over the fixed 120 s window each end at such a failure; a 3xx, any other 4xx, a decode failure or over-size response, a local filesystem timeout, a cancellation or an identity mismatch never counts, and a non-counting failure is its own `unavailable` state) |
@@ -335,9 +336,10 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.retry_overdue` | `true` only with `retry` when `next` is past by more than the larger of 30 s and the NO_PROGRESS threshold, and the current attempt has been observed for at least that threshold. An additional hint: a wedged `NO_PROGRESS` may or may not carry it |
 | `liveness.cause_hint` | One closed word: `network`, `rate_limit`, `auth`, `server` or `unknown`. From the structured source (`action.reason`, an `APIError` status code, `ProviderAuthError` or a `retry` part) or the D32 Q5 bounded-text fallback; never the raw text |
 | `liveness.cause_source` | `structured` (a structured field, even when it maps to `unknown`), `bounded_text` (only from the closed pattern set) or `none`. The matched text is never authority, never exported and never in audit |
-| `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start`, never after `observed_at` |
+| `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start` (OpenCode) or the Bridge receive time of the `tool_use` (Claude), never after `observed_at` |
 | `liveness.explanation` | `TOOL_RUNNING_LONG` only: the `tool` object has run at or after `tool_long_s` (default 600 s) on a `busy` execution or a wedged retry. It is an explanation, not a `stall_reason`: it never sets `stall_suspected`, never suppresses A1's `NO_PROGRESS`, and is suppressed with the stall reason by a pending permission |
-| `liveness.thresholds` | ADR-017 A2 S3: `{no_progress_s, tool_long_s}`, the operator configuration actually applied. `no_progress_s` is 30–900 s (default 120); `tool_long_s` is 60–3600 s (default 600). The values come from `BRIDGE_LIVENESS_NO_PROGRESS_S` / `BRIDGE_LIVENESS_TOOL_LONG_S` (ADR-026 S1 renames them to `CIRAK_*`); an absent variable uses the default and a non-integer, negative or out-of-range value is a startup error naming the variable. Not a per-execution input |
+| `liveness.progress_source` | ADR-017 A2 S4: `native` (OpenCode) or `bridge` (Claude receive clock) |
+| `liveness.thresholds` | ADR-017 A2 S3: `{no_progress_s, tool_long_s}`, the operator configuration actually applied. `no_progress_s` is 30–900 s (default 120); `tool_long_s` is 60–3600 s (default 600) and is capped at the Claude `RUN_MAX` when that adapter is on (D32 Q12). The values come from `BRIDGE_LIVENESS_NO_PROGRESS_S` / `BRIDGE_LIVENESS_TOOL_LONG_S` (ADR-026 S1 renames them to `CIRAK_*`); an absent variable uses the default and a non-integer, negative or out-of-range value is a startup error naming the variable. Not a per-execution input |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
 
 ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
@@ -366,6 +368,21 @@ and is not operator-configured.
 `TOOL_RUNNING_LONG` is not a `stall_reason`; it is the `explanation` of a
 running tool (S2), emitted only with the `tool` object and never with a pending
 permission.
+
+Claude Code (ADR-017 A2 S4, A2.7): the stream has no status endpoint. A
+correlated `system/init` starts `native_status=busy` on the Bridge receive clock
+(`progress_source=bridge`); `system/api_retry` is `PROVIDER_RETRYING` with
+`retry_attempt`/`retry_max`/`retry_next_at=receive+retry_delay_ms` and the A2.5
+cause (`error_status` null or a present `no_response` → `network`); a later event
+clears it; a retry whose next is past with no progress beyond `no_progress_s` is
+`NO_PROGRESS`. An assistant `tool_use` (with its id) is the `tool` object
+(`running_since` = receive time) and never suppresses `NO_PROGRESS`; the matching
+`tool_result` clears it; at `tool_long_s` the `TOOL_RUNNING_LONG` explanation
+appears. A stdout read error while the child is alive is the only Claude reader
+failure that counts toward `HARNESS_UNREACHABLE`; a decoder bound, an
+`Undecodable` line, an ADR-021 terminal row (cap, exit grace, aborted, exit) or
+an `api_retry` never counts. After a cap/exit-grace latch the block is cleared,
+never `busy`/`TOOL_RUNNING_LONG`. No argv change.
 
 The object is computed from the native reads the background monitor and the
 bounded on-demand reconcile already make (metadata, status, history,

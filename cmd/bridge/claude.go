@@ -11,6 +11,7 @@ import (
 
 	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"
 	"github.com/nevzatcirak/harness-bridge/internal/claudewire"
+	"github.com/nevzatcirak/harness-bridge/internal/execution"
 )
 
 // ADR-021 wiring, default off. The adapter exists only when BRIDGE_CLAUDE_COMMAND is set;
@@ -76,6 +77,13 @@ func claudeConfig(env func(string) string, allowedRoots, allowedSessions []strin
 		}
 		cfg.Runner = runner.Config{RunMax: d}
 	}
+	// ADR-017 A2 S4: the same operator liveness thresholds as the OpenCode side
+	// (Naming: ADR-026 S1 renames BRIDGE_LIVENESS_* to CIRAK_LIVENESS_*).
+	lc, err := execution.ParseLivenessEnv(env)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Runner.NoProgressS, cfg.Runner.ToolLongS = lc.NoProgressS, lc.ToolLongS
 	return cfg, nil
 }
 

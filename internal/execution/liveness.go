@@ -65,6 +65,10 @@ type Liveness struct {
 	// ADR-017 A2 S3: the operator thresholds actually applied (A2.6). Present
 	// on every production block; omitted by a block built without them.
 	Thresholds *Thresholds `json:"thresholds,omitempty"`
+	// ADR-017 A2 S4: the provenance of progress (native for OpenCode, bridge for
+	// Claude) and the Claude retry budget when the harness exposes it.
+	ProgressSource string `json:"progress_source,omitempty"`
+	RetryMax       *int64 `json:"retry_max,omitempty"`
 	// ObservedAt is the Bridge time of the probe that produced this block.
 	ObservedAt time.Time `json:"observed_at"`
 }
@@ -116,7 +120,7 @@ var boundedCausePatterns = []struct {
 // unavailableLiveness reports a probe whose native reads did not all succeed.
 // thresholds is the applied A2.6 object (nil for a block built without it).
 func unavailableLiveness(now time.Time, thresholds *Thresholds) *Liveness {
-	l := &Liveness{NativeStatus: "unavailable", ObservedAt: now}
+	l := &Liveness{NativeStatus: "unavailable", ProgressSource: "native", ObservedAt: now}
 	if thresholds != nil {
 		t := *thresholds
 		l.Thresholds = &t
@@ -533,7 +537,7 @@ type livenessEvidence struct {
 // assessLiveness computes the ADR-017 §3(a) report. It is advisory: callers
 // must not derive state, ended_at or guard decisions from it.
 func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) *Liveness {
-	l := &Liveness{ObservedAt: now}
+	l := &Liveness{ObservedAt: now, ProgressSource: "native"}
 	if e.thresholds.NoProgressS > 0 || e.thresholds.ToolLongS > 0 {
 		t := e.thresholds
 		l.Thresholds = &t
@@ -656,6 +660,10 @@ func assessLiveness(now time.Time, threshold time.Duration, e livenessEvidence) 
 	return l
 }
 
+// CloneLiveness returns a deep copy. The Claude runner serves its report through
+// the shared execution type and needs an independent copy per snapshot.
+func CloneLiveness(l *Liveness) *Liveness { return copyLiveness(l) }
+
 func copyLiveness(l *Liveness) *Liveness {
 	if l == nil {
 		return nil
@@ -674,6 +682,10 @@ func copyLiveness(l *Liveness) *Liveness {
 	if l.Thresholds != nil {
 		t := *l.Thresholds
 		v.Thresholds = &t
+	}
+	if l.RetryMax != nil {
+		n := *l.RetryMax
+		v.RetryMax = &n
 	}
 	return &v
 }

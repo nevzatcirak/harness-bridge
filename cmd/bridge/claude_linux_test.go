@@ -69,6 +69,8 @@ func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 		"run max text":      func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "soon" },
 		"run max too short": func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "10ms" },
 		"run max too long":  func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "48h" },
+		"no progress range": func(e map[string]string) { e["BRIDGE_LIVENESS_NO_PROGRESS_S"] = "10" },
+		"tool long text":    func(e map[string]string) { e["BRIDGE_LIVENESS_TOOL_LONG_S"] = "soon" },
 	} {
 		env := claudeEnv(t)
 		mod(env)
@@ -79,9 +81,14 @@ func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 	// a valid one
 	env := claudeEnv(t)
 	env["BRIDGE_CLAUDE_MAX_TURNS"], env["BRIDGE_CLAUDE_RUN_MAX"] = "7", "90s"
+	env["BRIDGE_LIVENESS_NO_PROGRESS_S"], env["BRIDGE_LIVENESS_TOOL_LONG_S"] = "45", "90"
 	cfg, err := claudeConfig(envOf(env), []string{"/srv"}, []string{"claudecode:x"})
 	if err != nil || cfg == nil || cfg.MaxTurns != 7 || cfg.Runner.RunMax != 90*time.Second || cfg.Command != env["BRIDGE_CLAUDE_COMMAND"] || len(cfg.AllowedRoots) != 1 {
 		t.Fatalf("cfg %+v err %v", cfg, err)
+	}
+	// ADR-017 A2 S4: the Claude side reads the same operator liveness thresholds.
+	if cfg.Runner.NoProgressS != 45 || cfg.Runner.ToolLongS != 90 {
+		t.Fatalf("liveness thresholds %d/%d", cfg.Runner.NoProgressS, cfg.Runner.ToolLongS)
 	}
 }
 
