@@ -122,6 +122,50 @@ func TestA2RetryNotOverdueYoungAttempt(t *testing.T) {
 	}
 }
 
+// A missing/failed status read is not evidence that the retry ended: the retry
+// memory and retry_attempt_since survive it (#510 P2-2; mutant M1).
+func TestA2RetryMemorySurvivesMissingStatus(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	x := &run{}
+	x.updateRetryMemory(opencode.Status{Type: "retry", Attempt: a2Raw(`3`)}, true, now)
+	if !x.retrySince.Equal(now) || x.view.RetryAttemptSince == nil || !x.view.RetryAttemptSince.Equal(now) {
+		t.Fatalf("initial memory %v / %v", x.retrySince, x.view.RetryAttemptSince)
+	}
+	// A failed/absent status read must leave both the run memory and the record
+	// field untouched, however much time passed.
+	x.updateRetryMemory(opencode.Status{}, false, now.Add(time.Minute))
+	if !x.retrySince.Equal(now) || x.view.RetryAttemptSince == nil || !x.view.RetryAttemptSince.Equal(now) {
+		t.Fatalf("missing status cleared the memory: %v / %v", x.retrySince, x.view.RetryAttemptSince)
+	}
+	// A successful non-retry status is the evidence that clears it.
+	x.updateRetryMemory(opencode.Status{Type: "busy"}, true, now.Add(2*time.Minute))
+	if !x.retrySince.IsZero() || x.view.RetryAttemptSince != nil {
+		t.Fatalf("busy kept the memory: %v / %v", x.retrySince, x.view.RetryAttemptSince)
+	}
+}
+
+// The retry_overdue grace is max(30 s, no_progress_s): a next past by less than
+// the grace is not overdue even with an old attempt, while the wedged retry
+// still reports A1 NO_PROGRESS (#510 P2-3; A2.12 item 11 second fixture;
+// mutant M5).
+func TestA2RetryOverdueGraceWindow(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	st := a2RetryStatus(2, now.Add(-5*time.Second), "", "")
+	e := a2Evidence(now, st, true)
+	e.started = now.Add(-61 * time.Second)
+	e.retrySince = now.Add(-61 * time.Second)
+	l := assessLiveness(now, time.Minute, e)
+	if l.RetryOverdue {
+		t.Fatalf("next past by 5 s with a 60 s grace became overdue: %+v", l)
+	}
+	if !l.StallSuspected || l.StallReason != "NO_PROGRESS" {
+		t.Fatalf("wedged retry lost NO_PROGRESS: %+v", l)
+	}
+	if l.DegradationReason != "PROVIDER_RETRYING" || l.Degraded != true {
+		t.Fatalf("degradation %+v", l)
+	}
+}
+
 // A running part never suppresses the wedged-retry NO_PROGRESS once its start
 // is older than the threshold (A1 rule kept).
 func TestA2RetryWedgedWithRunningToolKeepsNoProgress(t *testing.T) {
@@ -146,15 +190,37 @@ func TestA2BoundedTextFallback(t *testing.T) {
 		hint    string
 		source  string
 	}{
+		// Kept: one literal expression of each A2.5 term.
 		{"HTTP 429 Too Many Requests", "rate_limit", "bounded_text"},
+		{"429 rate limited", "rate_limit", "bounded_text"},
+		{"rate limit exceeded", "rate_limit", "bounded_text"},
 		{"401 Unauthorized", "auth", "bounded_text"},
 		{"403 Forbidden", "auth", "bounded_text"},
 		{"503 Service Unavailable", "server", "bounded_text"},
 		{"provider overloaded", "server", "bounded_text"},
-		{"dial tcp: lookup api.example: no such host", "network", "bounded_text"},
+		{"500 internal server error", "server", "bounded_text"},
 		{"TLS handshake failure", "network", "bounded_text"},
 		{"read tcp: connection reset by peer", "network", "bounded_text"},
+		{"dns lookup failed", "network", "bounded_text"},
 		{"context deadline exceeded (timeout)", "network", "bounded_text"},
+		// Removed: reason phrases, synonyms and error codes outside the closed
+		// A2.5 set must not match (P2-1).
+		{"unauthorized", "unknown", "none"},
+		{"forbidden", "unknown", "none"},
+		{"authentication failed", "unknown", "none"},
+		{"invalid api key", "unknown", "none"},
+		{"too many requests", "unknown", "none"},
+		{"internal server error", "unknown", "none"},
+		{"bad gateway", "unknown", "none"},
+		{"service unavailable", "unknown", "none"},
+		// "gateway timeout" contains the kept term "timeout"; the 5xx reason
+		// phrase itself is not a pattern, but the kept term still maps it.
+		{"gateway timeout", "network", "bounded_text"},
+		{"dial tcp: lookup api.example: no such host", "unknown", "none"},
+		{"network is down", "unknown", "none"},
+		{"socket unreachable", "unknown", "none"},
+		{"connect failed", "unknown", "none"},
+		{"request timed out", "unknown", "none"},
 		{"request id 15003 completed", "unknown", "none"},
 		{"something odd happened", "unknown", "none"},
 	}

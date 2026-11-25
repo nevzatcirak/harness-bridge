@@ -352,6 +352,9 @@ with a running tool or not; `degradation_reason` accompanies it. The bounded
 fallback lowercases at most 4 KiB of the retry message and maps only the closed
 pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403,
 timeout); a text matching no pattern stays `unknown` with `cause_source: none`.
+Pattern groups resolve in the order `rate_limit` > `auth` > `server` > `network`
+(the first matching group wins); a textual `timeout` maps to `network`, while a
+structured HTTP 408 still maps to `server` (A2.5).
 It is report-only and adds no native read or write. The accepted A2 amendment
 adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
 the S3 slice introduces it, so this release does not emit it yet.
