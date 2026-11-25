@@ -96,6 +96,11 @@ var Keys = []Key{
 	{Path: "limits.claude_max_turns", Env: "CIRAK_CLAUDE_MAX_TURNS", Kind: Int, Guarded: true, Default: "20"},
 	{Path: "limits.claude_max_budget_usd", Env: "CIRAK_CLAUDE_MAX_BUDGET_USD", Guarded: true},
 	{Path: "limits.claude_run_max", Env: "CIRAK_CLAUDE_RUN_MAX", Guarded: true, Default: "15m"},
+	// ADR-017 A2 S3 (D32 Q13) amends ADR-027 section 1.3 with the operator liveness thresholds, in
+	// seconds. The runtime validator (execution.ParseLivenessEnv) enforces the A2.6 bounds; the file key
+	// and its CIRAK_* environment name resolve to the same value under the every-key rule.
+	{Path: "liveness.no_progress_s", Env: "CIRAK_LIVENESS_NO_PROGRESS_S", Kind: Int, Guarded: true, Default: "120"},
+	{Path: "liveness.tool_long_s", Env: "CIRAK_LIVENESS_TOOL_LONG_S", Kind: Int, Guarded: true, Default: "600"},
 }
 
 // Names that are read by the daemon and are not schema keys: the config location, and the

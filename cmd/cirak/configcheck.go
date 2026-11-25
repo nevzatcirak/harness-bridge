@@ -15,6 +15,7 @@ import (
 	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 	"github.com/nevzatcirak/cirak/internal/config"
 	"github.com/nevzatcirak/cirak/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/execution"
 	"github.com/nevzatcirak/cirak/internal/security"
 	"github.com/nevzatcirak/cirak/internal/version"
 )
@@ -159,6 +160,7 @@ func checkConfiguration(rep *report, f serveFlags, getenv func(string) string, e
 	checkLifecycle(rep, env, uid)
 	checkDashboard(rep, env, uid)
 	checkPermission(rep, env)
+	checkLiveness(rep, env)
 	checkUnknownNames(rep, environ)
 
 	if printEffective {
@@ -354,6 +356,17 @@ func checkPermission(rep *report, env func(string) string) {
 }
 
 // checkUnknownNames warns, by name only, about variables of either prefix (the CIRAK_ one and its legacy twin) that the daemon does not know.
+// checkLiveness reuses the start path's validator (ADR-017 A2 S3, A2.6): the CIRAK_* names and the
+// ADR-027 liveness.* keys resolve to the same value, and an out-of-range value a start would refuse is
+// refused here too.
+func checkLiveness(rep *report, env func(string) string) {
+	if _, err := execution.ParseLivenessEnv(env); err != nil {
+		rep.refuse("liveness: %v", err)
+		return
+	}
+	rep.ok("liveness thresholds (no_progress_s, tool_long_s)")
+}
+
 func checkUnknownNames(rep *report, environ []string) {
 	known := config.KnownEnvNames()
 	var unknown []string
