@@ -547,6 +547,18 @@
                 "liveness": {
                   "additionalProperties": false,
                   "properties": {
+                    "cause_hint": {
+                      "type": "string"
+                    },
+                    "cause_source": {
+                      "type": "string"
+                    },
+                    "degradation_reason": {
+                      "type": "string"
+                    },
+                    "degraded": {
+                      "type": "boolean"
+                    },
                     "last_native_progress_at": {
                       "type": [
                         "null",
@@ -570,6 +582,9 @@
                         "null",
                         "string"
                       ]
+                    },
+                    "retry_overdue": {
+                      "type": "boolean"
                     },
                     "stall_reason": {
                       "type": "string"
@@ -714,6 +729,12 @@
                   ]
                 },
                 "reconciled_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "retry_attempt_since": {
                   "type": [
                     "null",
                     "string"
@@ -956,6 +977,18 @@
             "liveness": {
               "additionalProperties": false,
               "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -979,6 +1012,9 @@
                     "null",
                     "string"
                   ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
                 },
                 "stall_reason": {
                   "type": "string"
@@ -1123,6 +1159,12 @@
               ]
             },
             "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
               "type": [
                 "null",
                 "string"
@@ -1710,6 +1752,18 @@
             "liveness": {
               "additionalProperties": false,
               "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -1733,6 +1787,9 @@
                     "null",
                     "string"
                   ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
                 },
                 "stall_reason": {
                   "type": "string"
@@ -1877,6 +1934,12 @@
               ]
             },
             "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
               "type": [
                 "null",
                 "string"
@@ -2833,6 +2896,18 @@
             "liveness": {
               "additionalProperties": false,
               "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -2856,6 +2931,9 @@
                     "null",
                     "string"
                   ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
                 },
                 "stall_reason": {
                   "type": "string"
@@ -3000,6 +3078,12 @@
               ]
             },
             "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
               "type": [
                 "null",
                 "string"
