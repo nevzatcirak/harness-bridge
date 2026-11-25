@@ -158,8 +158,12 @@ type Manager struct {
 	// before the first Send). noLiveness disables the report for comparison tests
 	// only; it is never set outside this package.
 	stallThreshold time.Duration
-	clock          func() time.Time
-	noLiveness     bool
+	// toolLongThreshold is the ADR-017 A2 S2 TOOL_RUNNING_LONG threshold
+	// (tool_long_s, default 600 s). S3 wires the operator override; S2 applies
+	// the default.
+	toolLongThreshold time.Duration
+	clock             func() time.Time
+	noLiveness        bool
 	// ADR-018 (d): optional in-memory witness for basis native_event.
 	witness rejectionWitness
 	// ADR-024 S1: optional source for the verified pending_permission object.
@@ -178,7 +182,7 @@ type Manager struct {
 func New(r Runner) *Manager { return NewWithTiming(r, 5*time.Minute, 500*time.Millisecond) }
 func NewWithTiming(r Runner, timeout, interval time.Duration) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, lifecycle: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, replies: map[replyKey]*replyRecord{}, processStart: time.Now().UTC().Format("2006-01-02T15:04:05Z"), reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, clock: time.Now}
+	return &Manager{r: r, runs: map[string]*run{}, busy: map[string]string{}, lifecycle: map[string]string{}, keys: map[string]string{}, fingerprints: map[string][32]byte{}, pending: map[string]chan struct{}{}, ctx: ctx, cancel: cancel, timeout: timeout, interval: interval, replies: map[replyKey]*replyRecord{}, processStart: time.Now().UTC().Format("2006-01-02T15:04:05Z"), reconcileTimeout: 5 * time.Second, reconcileSlots: make(chan struct{}, 4), admissionSlots: make(chan struct{}, 4), stallThreshold: defaultStallThreshold, toolLongThreshold: defaultToolLongThreshold, clock: time.Now}
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
