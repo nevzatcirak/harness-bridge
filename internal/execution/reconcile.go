@@ -377,6 +377,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		status: status, statusExists: exists, userFound: userFound, assistants: assistants,
 		unfinished: unfinished, proof: proof != nil, permissionPending: pending, started: x.view.Started,
 		retrySince: x.retrySince,
+		toolLong:   m.toolLongThreshold,
 	})
 	// ADR-018 (d): report-only, from the reads above plus the in-memory witness.
 	// It is assigned only to x.view.PermissionRejection and never consulted for

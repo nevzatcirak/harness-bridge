@@ -559,6 +559,9 @@
                     "degraded": {
                       "type": "boolean"
                     },
+                    "explanation": {
+                      "type": "string"
+                    },
                     "last_native_progress_at": {
                       "type": [
                         "null",
@@ -591,6 +594,25 @@
                     },
                     "stall_suspected": {
                       "type": "boolean"
+                    },
+                    "tool": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "running_since": {
+                          "type": "string"
+                        },
+                        "tool_name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "tool_name",
+                        "running_since"
+                      ],
+                      "type": [
+                        "null",
+                        "object"
+                      ]
                     }
                   },
                   "required": [
@@ -989,6 +1011,9 @@
                 "degraded": {
                   "type": "boolean"
                 },
+                "explanation": {
+                  "type": "string"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -1021,6 +1046,25 @@
                 },
                 "stall_suspected": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
                 }
               },
               "required": [
@@ -1764,6 +1808,9 @@
                 "degraded": {
                   "type": "boolean"
                 },
+                "explanation": {
+                  "type": "string"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -1796,6 +1843,25 @@
                 },
                 "stall_suspected": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
                 }
               },
               "required": [
@@ -2908,6 +2974,9 @@
                 "degraded": {
                   "type": "boolean"
                 },
+                "explanation": {
+                  "type": "string"
+                },
                 "last_native_progress_at": {
                   "type": [
                     "null",
@@ -2940,6 +3009,25 @@
                 },
                 "stall_suspected": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
                 }
               },
               "required": [

@@ -29,6 +29,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		os.Exit(runConfig(os.Args[2:], os.Getenv, os.Environ(), os.Geteuid(), os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		os.Exit(productionInit(os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+	}
 	// ADR-026 section 2.3: the one reader of the process environment. A conflict between a CIRAK_
 	// name and its legacy twin refuses to start here, before any listener, lock or native call.
 	envOnly, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))

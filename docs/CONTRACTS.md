@@ -213,8 +213,56 @@ daemon reads the environment exactly as before; every start logs `config: using 
   (`harness.opencode.url`, `server.public_origin`) is shown as scheme and host only, userinfo as `***@`, a path,
   query or fragment not shown, and a value that is not a plain URL not echoed; any value with a control or
   unprintable character is shown quoted, so it cannot forge a line.
-- Not in this slice: `cirak init`, `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the
-  service unit (ADR-027 S2 to S4).
+- Not in the config slice: `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the service
+  unit (ADR-027 S3 and S4).
+
+### `cirak init` (ADR-027 S2)
+
+`cirak init [--yes] [--listen addr] [--root path]... [--session id]... [--lifecycle-root path]...
+[--opencode-url url] [--service-user name] [--config path] [--token-file path] [--expires RFC3339] [--force]`
+sets up **local mode** and installs nothing: no service unit or plist, no `doctor`, no remote or TLS path
+(`--remote`, `--tls-cert`, `--tls-key`, `--install-service` are refused with a usage error).
+- **Interactive** needs a terminal; **`--yes`** never prompts and needs `--root`, `--session` and `--token-file`.
+- **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
+  as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
+  goes only to a `0600` `opencode-password` file that the config references, never to the config, argv or a log.
+  An unreachable server is reported, not fatal. `--opencode-url` is validated first with the daemon's own base-URL
+  rule (loopback http or https; no credentials, path, query or fragment): a bad one is a usage error before
+  anything is probed, printed, written or staged, and it is shown only in the redacted form (`http://***@host`).
+- **Roots** (workspace and lifecycle) must be canonical, owned by root or the service user, readable and
+  traversable by the service user (mode bits; an ACL is not evaluated, and the optional
+  `sudo -u <user> test -r/-x` probe runs only after the operator agrees, never with `--yes`) and have a readable
+  `.git`. A failing root stops init **before anything is written** and prints the exact fix
+  (`chown root:<group> <root> && chmod 0710 <root> && setfacl -m u:<user>:rwx <root>`). **init never applies
+  chown, chmod or setfacl; it only prints them.** Every printed command is for the operator to run as root and
+  is printed without a confirmation prompt (ADR-027 section 2 item 2 asks for one; that wording is the
+  maintainer's to amend). Every path, user and group in a printed command is single-quoted for a POSIX shell, and a
+  root, config, token, lifecycle or password path with a newline, carriage return or NUL is refused up front
+  (usage error, nothing written or staged).
+- **Token:** generated (64 base64url characters from `crypto/rand`) only when `--token-file` names a **new**
+  file, created `0600` with `O_EXCL|O_NOFOLLOW`; an existing file is validated (the `readSecret` rule, at least
+  43 characters) and referenced, never regenerated or shown. The deadline is `+7 days` (`--expires` must stay
+  within `168h`) and `limits.token_max_lifetime: "168h"` is written with it; local mode records the deadline and
+  enforces no expiry. The token is shown **once in the whole run, only on a terminal**: standard input and
+  standard output must both be terminals (so `init | tee log` and `init > log` never put it in a file), and never
+  with `--yes`, never in the config, a log or an error; otherwise its file path is printed.
+- **Ownership:** run as the service user (or, with no `--service-user`, as yourself). When the invoking uid is
+  not the service uid, init writes **nothing at the targets**: it stages the files in a private `0700`
+  directory and prints the `install -d` / `install -o <user> -g <group> -m 0600 <src> <dst>` commands. A service
+  user's system directory, and its writer lock directory (`0700`, owned by it), must already exist (otherwise
+  `install -d` is printed and init stops before writing). In the staged flow a symlink anywhere in the existing
+  part of a target path is refused before any command is printed, and the connector text names the staged token.
+- **Existing files:** an existing config or lifecycle file needs `--force`; a `.bak-<UTC stamp>` copy (`0600`) is
+  made and the new bytes replace the file through a fresh `O_EXCL` temporary file and a rename; a symlinked
+  target is refused. A failing step removes the files this run created and restores a file it had replaced (the
+  backup stays).
+- The written config is checked with the S1 `config check`, run with an empty environment (it checks the file
+  init wrote, not the shell's variables), and must come out **clean** (any warning or refusal makes init fail;
+  **A failed check keeps the files init wrote**, reported above it, so fix the cause and run init again with
+  `--force`, or run `config check` yourself); init then prints the connector values (URL, `Authorization: Bearer`) and the next
+  steps.
+- The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
+  surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
 
 
 Optional `CIRAK_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
@@ -384,6 +432,8 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.retry_overdue` | `true` only with `retry` when `next` is past by more than the larger of 30 s and the NO_PROGRESS threshold, and the current attempt has been observed for at least that threshold. An additional hint: a wedged `NO_PROGRESS` may or may not carry it |
 | `liveness.cause_hint` | One closed word: `network`, `rate_limit`, `auth`, `server` or `unknown`. From the structured source (`action.reason`, an `APIError` status code, `ProviderAuthError` or a `retry` part) or the D32 Q5 bounded-text fallback; never the raw text |
 | `liveness.cause_source` | `structured` (a structured field, even when it maps to `unknown`), `bounded_text` (only from the closed pattern set) or `none`. The matched text is never authority, never exported and never in audit |
+| `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start`, never after `observed_at` |
+| `liveness.explanation` | `TOOL_RUNNING_LONG` only: the `tool` object has run at or after `tool_long_s` (default 600 s) on a `busy` execution or a wedged retry. It is an explanation, not a `stall_reason`: it never sets `stall_suspected`, never suppresses A1's `NO_PROGRESS`, and is suppressed with the stall reason by a pending permission |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
 
 ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
@@ -407,8 +457,9 @@ structured HTTP 408 still maps to `server` (A2.5).
 It is report-only and adds no native read or write. The accepted A2 amendment
 adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
 the S3 slice introduces it, so this release does not emit it yet.
-`TOOL_RUNNING_LONG` is not a `stall_reason` (it is the S2 explanation) and is not
-emitted yet either.
+`TOOL_RUNNING_LONG` is not a `stall_reason`; it is the `explanation` of a
+running tool (S2), emitted only with the `tool` object and never with a pending
+permission.
 
 The object is computed from the native reads the background monitor and the
 bounded on-demand reconcile already make (metadata, status, history,
