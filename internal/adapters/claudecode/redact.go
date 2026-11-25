@@ -20,7 +20,7 @@ var redactionRules = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)authorization:[^\r\n]*`),
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{6,}`),
 	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{8,}`),
-	regexp.MustCompile(`\b(?:BRIDGE|ANTHROPIC|OPENCODE)_[A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|\S+)`),
+	regexp.MustCompile(`\b(?:CIRAK|BRIDGE|ANTHROPIC|OPENCODE)_[A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|\S+)`),
 }
 
 // Redact replaces credential-shaped values with [REDACTED]. It is idempotent.

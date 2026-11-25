@@ -56,8 +56,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/acceptance"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/acceptance"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 func main() {
@@ -76,7 +76,7 @@ func main() {
 		out        = flag.String("out", "", "evidence file (default: stdout)")
 		// The production Observer (ADR-021 §8.3; every flag optional, a missing one leaves its check
 		// unobserved and item 1 INCOMPLETE).
-		historyDir = flag.String("history-dir", "", "a DEDICATED throwaway directory for the history record of the denied runs (absolute, owned by this process, mode 0700; never BRIDGE_CLAUDE_HISTORY_DIR)")
+		historyDir = flag.String("history-dir", "", "a DEDICATED throwaway directory for the history record of the denied runs (absolute, owned by this process, mode 0700; never CIRAK_CLAUDE_HISTORY_DIR)")
 		canaryDir  = flag.String("canary-dir", "", "the EMPTY directory the hostile root's hook, apiKeyHelper and .mcp.json server write into (absolute; may not touch ~/.claude or ~/.config/anthropic)")
 		sinkAddr   = flag.String("sink-addr", "", "loopback IP:port of the request sink the hostile root's ANTHROPIC_BASE_URL points at (for example 127.0.0.1:18099; 127.0.0.1:0 picks a port; non-loopback addresses are refused)")
 	)

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/bounded"
 )
 
 type Policy struct {

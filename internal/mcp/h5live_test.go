@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
 )
 
 // unflagged is o without the replay flag, to compare a replay with the first answer.

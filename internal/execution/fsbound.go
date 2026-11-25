@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/bounded"
 )
 
 // Bounded filesystem checks (docs/design/EXEC_FS_BOUNDING.md). A directory on a

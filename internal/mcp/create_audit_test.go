@@ -13,10 +13,10 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 func callParams(name string, a map[string]any) *sdk.CallToolParams {

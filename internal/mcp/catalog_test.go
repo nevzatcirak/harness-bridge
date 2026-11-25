@@ -14,10 +14,10 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-022 slice S3: list_catalog. These tests use a fake native server; no live
@@ -493,7 +493,7 @@ func TestCatalogOverlayErrorIsAnErrorNotAGuess(t *testing.T) {
 }
 
 // The tool never writes natively and is not a mutating tool: no audit record is needed
-// and BRIDGE_READ_ONLY (set in this fixture) does not refuse it.
+// and CIRAK_READ_ONLY (set in this fixture) does not refuse it.
 func TestCatalogIsReadOnly(t *testing.T) {
 	e := newCatalogEnv(t, &fakeOverlay{})
 	if mutating("list_catalog") {
@@ -510,7 +510,7 @@ func TestCatalogIsReadOnly(t *testing.T) {
 		t.Fatal("no native request was recorded")
 	}
 	if !e.s.ReadOnly {
-		t.Fatal("fixture must run with BRIDGE_READ_ONLY")
+		t.Fatal("fixture must run with CIRAK_READ_ONLY")
 	}
 }
 
@@ -528,7 +528,7 @@ func TestCatalogToolIsAbsentWithoutConfiguration(t *testing.T) {
 }
 
 // Through the real MCP transport: the tool is listed (12 tools), its schemas validate
-// the request and the result, BRIDGE_READ_ONLY keeps it available, and the existing
+// the request and the result, CIRAK_READ_ONLY keeps it available, and the existing
 // eleven are unchanged.
 func TestCatalogOverTheMCPTransport(t *testing.T) {
 	e := newCatalogEnv(t, &fakeOverlay{archived: map[string]bool{"opencode:ses_b": true}})

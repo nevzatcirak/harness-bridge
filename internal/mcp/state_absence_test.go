@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // F-4 (R3b): OpenCode 1.19.4 SessionStatus.set(idle) deletes the session from the

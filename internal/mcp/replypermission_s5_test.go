@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/audit"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/audit"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-024 S5: one line per phase on every return path, written through the failure-reporting

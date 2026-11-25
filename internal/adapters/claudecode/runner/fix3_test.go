@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // onlySIGINT drains what the child was signalled with and fails on anything but SIGINT.

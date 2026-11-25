@@ -3,7 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 	"sync"
 	"testing"
 	"time"

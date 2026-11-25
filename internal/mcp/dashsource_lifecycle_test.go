@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-023 slice 5b (D17 Q6, Q7): lifecycle roots are a LABEL on the sessions the existing

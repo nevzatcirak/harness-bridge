@@ -27,7 +27,7 @@ var openRoot = os.OpenRoot
 //
 // It is a new security primitive and deliberately NOT an extension of Policy:
 // it knows only the lifecycle roots it was built with, it never consults
-// BRIDGE_ALLOWED_ROOTS or BRIDGE_ALLOWED_SESSIONS, and it needs no session. It
+// CIRAK_ALLOWED_ROOTS or CIRAK_ALLOWED_SESSIONS, and it needs no session. It
 // is for read-only metadata reads that must stay inside one lifecycle root. It
 // grants nothing to the existing tools.
 type LifecycleRoots struct {
@@ -103,7 +103,7 @@ func contains(base, path string) bool {
 
 // Open returns a handle on the lifecycle root containing path, the path relative
 // to it, and the root's path. It refuses a path outside every lifecycle root
-// (even one under BRIDGE_ALLOWED_ROOTS), a root that is no longer the directory
+// (even one under CIRAK_ALLOWED_ROOTS), a root that is no longer the directory
 // recorded at startup, and any symlink component; os.Root additionally confines
 // every later open if a component changes after this check. The caller closes
 // the handle.

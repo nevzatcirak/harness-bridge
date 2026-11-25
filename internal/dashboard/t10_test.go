@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // slowSource knows one session and never answers a diff read: every native read

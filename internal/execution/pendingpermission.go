@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"sync/atomic"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // ADR-024 section 3 (slice S1): additive, report-only exposure of a pending

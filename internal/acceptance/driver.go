@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // Config is the whole configuration of a live acceptance run.

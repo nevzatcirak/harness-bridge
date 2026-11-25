@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // defaultStallThreshold is the NO_PROGRESS report threshold (ADR-017 §3(a)).
@@ -96,21 +96,25 @@ const maxPartBytes = 1 << 20
 // The text itself is never stored, exported or audited.
 const maxCauseText = 4096
 
-// boundedCausePatterns is the closed D32 Q5 pattern set. Matching is
-// case-insensitive (the bounded text is lowercased) and only a closed word is
-// produced. Order is precedence: the first matching group wins. Numeric codes
-// use word boundaries so an identifier like "15003" is not a 5xx.
+// boundedCausePatterns is exactly the closed A2.5/D32 Q5 pattern set:
+// 429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403, timeout. A
+// pattern is kept only when it literally expresses one of those terms; widening
+// the set needs a new maintainer decision (D32). Matching is case-insensitive
+// (the bounded text is lowercased) and only a closed word is produced. Order is
+// precedence: rate_limit > auth > server > network; the first group that
+// matches wins. Numeric codes use word boundaries so an identifier like "15003"
+// is not a 5xx.
 var boundedCausePatterns = []struct {
 	hint string
 	re   *regexp.Regexp
 }{
-	{"rate_limit", regexp.MustCompile(`\b429\b|\brate[\s_-]?limit|\bratelimit\b|\btoo many requests\b`)},
-	{"auth", regexp.MustCompile(`\b(?:401|403)\b|\bunauthorized\b|\bforbidden\b|\bauthentication failed\b|\binvalid[ _]api[ _]key\b`)},
-	{"server", regexp.MustCompile(`\b5\d\d\b|\boverloaded\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway timeout\b`)},
-	{"network", regexp.MustCompile(`\bdns\b|\btls\b|\bconnection\b|\bconnect\b|\bnetwork\b|\bno such host\b|\beconnrefused\b|\beconnreset\b|\bsocket\b|\bunreachable\b`)},
+	{"rate_limit", regexp.MustCompile(`\b429\b|\brate[\s_-]?limit`)},
+	{"auth", regexp.MustCompile(`\b(?:401|403)\b`)},
+	{"server", regexp.MustCompile(`\b5\d\d\b|\boverloaded\b`)},
+	{"network", regexp.MustCompile(`\bdns\b|\btls\b|\bconnection\b`)},
 	// A textual timeout is a connection-level signal; the structured mapping
 	// still sends HTTP 408 to server (A2.5).
-	{"network", regexp.MustCompile(`\btimeout\b|\btimed out\b`)},
+	{"network", regexp.MustCompile(`\btimeout\b`)},
 }
 
 // unavailableLiveness reports a probe whose native reads did not all succeed.

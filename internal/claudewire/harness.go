@@ -11,27 +11,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode/runner"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // Config is everything Open needs. Nothing is read from the environment or from a Claude
 // user's files except the allowlist file named by SessionsFile.
 type Config struct {
-	Command      string // BRIDGE_CLAUDE_COMMAND: the root-owned wrapper (absolute path)
-	SessionsFile string // BRIDGE_CLAUDE_SESSIONS
-	Versions     string // BRIDGE_CLAUDE_VERSIONS (raw value, exact versions only)
-	HistoryDir   string // BRIDGE_CLAUDE_HISTORY_DIR
-	LockDir      string // BRIDGE_WRITER_LOCK_DIR (shared with the OpenCode writer)
+	Command      string // CIRAK_CLAUDE_COMMAND: the root-owned wrapper (absolute path)
+	SessionsFile string // CIRAK_CLAUDE_SESSIONS
+	Versions     string // CIRAK_CLAUDE_VERSIONS (raw value, exact versions only)
+	HistoryDir   string // CIRAK_CLAUDE_HISTORY_DIR
+	LockDir      string // CIRAK_WRITER_LOCK_DIR (shared with the OpenCode writer)
 	Home         string // child HOME (the Claude service user's)
 	Lang         string // child LANG; default C.UTF-8
 	Model        string
 	MaxTurns     int
 	MaxBudgetUSD string
 
-	AllowedRoots    []string // BRIDGE_ALLOWED_ROOTS
-	AllowedSessions []string // BRIDGE_ALLOWED_SESSIONS (every entry; claudecode: ones are used)
+	AllowedRoots    []string // CIRAK_ALLOWED_ROOTS
+	AllowedSessions []string // CIRAK_ALLOWED_SESSIONS (every entry; claudecode: ones are used)
 	ServiceUID      uint32
 
 	// Test seams and optional limits; zero values take the production defaults.

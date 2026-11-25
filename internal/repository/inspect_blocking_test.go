@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // H4-A F-3: a filesystem call that blocks (hung NFS/FUSE) must not hold Inspect
