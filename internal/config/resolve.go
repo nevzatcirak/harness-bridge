@@ -210,6 +210,10 @@ func (r *Result) Describe() []Effective {
 	return out
 }
 
+// RedactURL is the listing form of a URL-valued setting, exported so `cirak init` shows a URL the same way
+// `config check --print-effective` does: scheme and host, userinfo as ***@, nothing else.
+func RedactURL(v string) string { return redactURL(v) }
+
 // redactURL is the only form in which a URL-valued key is listed: scheme and host, with any userinfo shown as
 // "***@", and a note when a path, query or fragment was left out (they can carry a token). A value that is not
 // a plain URL is never echoed.
