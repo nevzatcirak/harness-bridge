@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // ADR-021 slice 4 (ADR-020 extension, D14 Q8): the Claude guard release. All with fake

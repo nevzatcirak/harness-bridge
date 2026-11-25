@@ -12,9 +12,9 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	bridge "github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	bridge "github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
 )
 
 func main() {

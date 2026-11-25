@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // R6 run 4 (#426): items 4 and 6 were undecidable. Both resumed the ONE bootstrap session (the model cited the

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // ADR021-OBSERVER (#372): the production Observer and its use by the driver (item 1).

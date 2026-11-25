@@ -24,9 +24,9 @@ func TestDisabledByDefault(t *testing.T) {
 }
 
 func TestSocketAndAddrAreMutuallyExclusive(t *testing.T) {
-	_, err := ConfigFromEnv(env(map[string]string{"BRIDGE_DASHBOARD_SOCKET": "/run/x/d.sock", "BRIDGE_DASHBOARD_ADDR": "127.0.0.1:9"}))
+	_, err := ConfigFromEnv(env(map[string]string{"CIRAK_DASHBOARD_SOCKET": "/run/x/d.sock", "CIRAK_DASHBOARD_ADDR": "127.0.0.1:9"}))
 	if err == nil {
-		t.Fatal("both BRIDGE_DASHBOARD_SOCKET and BRIDGE_DASHBOARD_ADDR must be refused")
+		t.Fatal("both CIRAK_DASHBOARD_SOCKET and CIRAK_DASHBOARD_ADDR must be refused")
 	}
 }
 
@@ -87,7 +87,7 @@ func TestOpenRefusesWildcardBind(t *testing.T) {
 		if err == nil || srv != nil {
 			t.Fatalf("Open(%q) must refuse: srv=%v err=%v", a, srv, err)
 		}
-		if !strings.Contains(err.Error(), "BRIDGE_DASHBOARD_ADDR") {
+		if !strings.Contains(err.Error(), "CIRAK_DASHBOARD_ADDR") {
 			t.Errorf("error does not name the setting: %v", err)
 		}
 	}

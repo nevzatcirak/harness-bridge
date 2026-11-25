@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // ADR-021 §10 slice 3, code part: init verification wired through the runner, the §4

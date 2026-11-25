@@ -1,5 +1,7 @@
 # Claude Code adapter: deployment runbook (ADR-021)
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 **Status: reference only. The operator-run R6 live acceptance of ADR-021 slices 3 and 5 is
 complete (2026-11-21; §7a and `docs/evidence/R6_EVIDENCE_2026-11-21.md`): the hostile-root
 credential canary passed in run 3 (item 1).** The adapter is still not wired into the Bridge
@@ -38,12 +40,12 @@ Bridge, its tests and its authors perform none of them.
 
 ## 3. Transcript retention
 - Raise `cleanupPeriodDays` in the Claude user's user settings so the CLI's transcript outlives the
-  Bridge's history retention (`BRIDGE_CLAUDE_HISTORY_MAX_AGE`, default 30 days; the CLI default is
+  Bridge's history retention (`CIRAK_CLAUDE_HISTORY_MAX_AGE`, default 30 days; the CLI default is
   documented as 30 days). If the CLI transcript expires first, resume fails (ADR-021 §3 item 2) while
   the Bridge record stays readable. The Bridge does not edit this setting.
 
 ## 4. Version pin (D14 Q7)
-- `BRIDGE_CLAUDE_VERSIONS` is an exact-version list, for example `2.1.322`, comma separated, no
+- `CIRAK_CLAUDE_VERSIONS` is an exact-version list, for example `2.1.322`, comma separated, no
   wildcard, range or prefix, at most 16 entries. There is no default: until a version has passed the
   live acceptance the list is empty and the adapter refuses to start.
 - Before enabling, `claude --version` run as `hbclaude` must equal one entry. A run whose `init`
@@ -52,21 +54,21 @@ Bridge, its tests and its authors perform none of them.
 - Only 2.1.322 has been exercised (the spike), and not through this adapter.
 
 ## 5. Allowlist and roots
-- `BRIDGE_CLAUDE_SESSIONS`: a JSON array of `{session_id: "claudecode:<uuid>", root, label}` with exact
-  lowercase UUIDs and roots inside `BRIDGE_ALLOWED_ROOTS`. Every ID must also be in
-  `BRIDGE_ALLOWED_SESSIONS`. Treat each root as trusted content: a `CLAUDE.md` or project file can
+- `CIRAK_CLAUDE_SESSIONS`: a JSON array of `{session_id: "claudecode:<uuid>", root, label}` with exact
+  lowercase UUIDs and roots inside `CIRAK_ALLOWED_ROOTS`. Every ID must also be in
+  `CIRAK_ALLOWED_SESSIONS`. Treat each root as trusted content: a `CLAUDE.md` or project file can
   carry a prompt injection (ADR-021 §8.3 item 5).
 - The sessions must already exist: the Bridge resumes by exact ID and never creates or forks.
 
 ## 5a. Enabling the adapter in the Bridge (wiring slice; UNVERIFIED live)
 The adapter is OFF unless the Bridge's environment names the wrapper. Set, as the Bridge service
 user's service environment (never in a committed file, never a secret):
-`BRIDGE_CLAUDE_COMMAND` (absolute wrapper path), `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600),
-`BRIDGE_CLAUDE_VERSIONS` (exact list), `BRIDGE_CLAUDE_HISTORY_DIR` (private directory),
-`BRIDGE_CLAUDE_HOME` (the Claude user's HOME) and `BRIDGE_CLAUDE_MODEL`, with the existing
-`BRIDGE_WRITER_LOCK_DIR`, `BRIDGE_ALLOWED_ROOTS` and `BRIDGE_ALLOWED_SESSIONS` (each `claudecode:<uuid>`
-must be listed there too). Optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS`,
-`BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX`. A `BRIDGE_CLAUDE_*` value without the command, a
+`CIRAK_CLAUDE_COMMAND` (absolute wrapper path), `CIRAK_CLAUDE_SESSIONS` (allowlist file, mode 0600),
+`CIRAK_CLAUDE_VERSIONS` (exact list), `CIRAK_CLAUDE_HISTORY_DIR` (private directory),
+`CIRAK_CLAUDE_HOME` (the Claude user's HOME) and `CIRAK_CLAUDE_MODEL`, with the existing
+`CIRAK_WRITER_LOCK_DIR`, `CIRAK_ALLOWED_ROOTS` and `CIRAK_ALLOWED_SESSIONS` (each `claudecode:<uuid>`
+must be listed there too). Optional: `CIRAK_CLAUDE_LANG`, `CIRAK_CLAUDE_MAX_TURNS`,
+`CIRAK_CLAUDE_MAX_BUDGET_USD`, `CIRAK_CLAUDE_RUN_MAX`. A `CIRAK_CLAUDE_*` value without the command, a
 missing required value or an unusable file stops the Bridge at start with an error (no partial
 enablement); a read-only ingress ignores the adapter. **The hostile-root credential canary passed
 in R6 run 3 against the decoy tree (item 1); the adapter is still unwired. Do not enable this
@@ -109,7 +111,7 @@ flag that is left out leaves its check `unknown` and item 1 `INCOMPLETE`, exit c
 
 | Check | Flag | What it measures | Honest limits |
 |---|---|---|---|
-| History (`no_decoy_leak`, with the stream) | `-history-dir` | the decoy's marker must not appear in the history record. The record is the Bridge's own (ADR-021 §5: built from the stream-json events; nothing reads the CLI's transcript files). The driver runs the CLI directly, so it writes the **denied** probe runs' streams through the Bridge's history store (redacted and bounded by the store) into the directory and reads them back. | derived from the same stream the verdict already scans, after redaction and truncation: **not an independent observation of the CLI's own transcript** (declared unsupported in §5). The directory must be dedicated and throwaway: **never `BRIDGE_CLAUDE_HISTORY_DIR`**. |
+| History (`no_decoy_leak`, with the stream) | `-history-dir` | the decoy's marker must not appear in the history record. The record is the Bridge's own (ADR-021 §5: built from the stream-json events; nothing reads the CLI's transcript files). The driver runs the CLI directly, so it writes the **denied** probe runs' streams through the Bridge's history store (redacted and bounded by the store) into the directory and reads them back. | derived from the same stream the verdict already scans, after redaction and truncation: **not an independent observation of the CLI's own transcript** (declared unsupported in §5). The directory must be dedicated and throwaway: **never `CIRAK_CLAUDE_HISTORY_DIR`**. |
 | File canaries (`no_file_canary`) | `-canary-dir` | the number of entries in one directory that the hostile root's hook, `apiKeyHelper` and `.mcp.json` server are configured to write into (§8.3: "no canary file exists"). Any entry (file, directory, symlink) counts. | only what lands in that directory is seen; a hook that writes elsewhere is not. Opened without following a symlink; never reads a file's content; may not be, lie inside or contain `~/.claude` or `~/.config/anthropic` (the deny rule is never lifted). |
 | Sink (`no_sink_request`) | `-sink-addr` | requests received by a loopback listener that the hostile root's `env` sets as `ANTHROPIC_BASE_URL` (§8.3: "the sink received no request"). | loopback IP literals only; the body is read up to 64 KiB, discarded, never logged or echoed. A request that never reaches the listener is not seen. |
 

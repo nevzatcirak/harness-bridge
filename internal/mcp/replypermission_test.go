@@ -16,11 +16,11 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/audit"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/audit"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 const relayDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -498,7 +498,7 @@ func TestReplyPermissionRefusalsMakeZeroNativeCalls(t *testing.T) {
 
 func TestReplyPermissionIsMutatingAndProducesNoPromptShapedAuditLine(t *testing.T) {
 	if !mutating("reply_permission") {
-		t.Fatal("reply_permission must be in mutating(): it gates BRIDGE_READ_ONLY and the audit middleware")
+		t.Fatal("reply_permission must be in mutating(): it gates CIRAK_READ_ONLY and the audit middleware")
 	}
 	var buf bytes.Buffer
 	w := log.Writer()

@@ -1,5 +1,7 @@
 # H3 private HTTPS preparation — 2026-10-24 UTC
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 Status: implementation/templates tested; **no new backend or public listener
 activated**. Preserve the successful local MCP/native proof. The coordinated
 [deployment runbook](https://github.com/nevzatcirak/ix-deployment/blob/feat/harness-bridge-traefik-plan/harness-bridge/PRIVATE_HTTPS_RUNBOOK.md)
@@ -9,7 +11,7 @@ records certificate, network, Traefik and workflow findings.
 
 ## Source changes
 
-Optional `BRIDGE_READ_ONLY=1` rejects send_prompt and interrupt_execution with
+Optional `CIRAK_READ_ONLY=1` rejects send_prompt and interrupt_execution with
 FORBIDDEN before any native mutation. Default/0 retain H1/H2 write behavior;
 invalid settings fail configuration. The seven tools, native permissions,
 session/root policy, exact Host/Origin, expiring Bearer auth and private-bind
@@ -38,7 +40,7 @@ go vet ./...
 go test ./...
 go test -race ./...
 git diff --check
-go build -o /tmp/harness-bridge-private-staged ./cmd/bridge
+go build -o /tmp/harness-bridge-private-staged ./cmd/cirak
 go build -o /tmp/hb-privatecheck-staged ./cmd/privatecheck
 ```
 

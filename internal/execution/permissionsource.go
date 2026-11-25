@@ -7,7 +7,7 @@ import (
 	"errors"
 	"regexp"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // ADR-024 slice S6: the production PermissionSource for OpenCode.

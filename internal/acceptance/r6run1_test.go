@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // R6 run 1 (#409): item 1 was undecidable. Every run resumed ONE session (the model cited earlier
