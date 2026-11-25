@@ -209,7 +209,10 @@ daemon reads the environment exactly as before; every start logs `config: using 
   nothing written; it runs the daemon's own validators on the effective configuration. Exit `0` clean,
   `1` warnings or unverified items (for example a token that exists only in a unit's `EnvironmentFile=`
   or as a systemd credential, which a check outside the unit cannot see), `2` refused. Output names keys
-  and files, never a value; a secret is `set` or `unset`.
+  and files, never a value; a secret is `set` or `unset`. In `--print-effective` a URL-valued key
+  (`harness.opencode.url`, `server.public_origin`) is shown as scheme and host only, userinfo as `***@`, a path,
+  query or fragment not shown, and a value that is not a plain URL not echoed; any value with a control or
+  unprintable character is shown quoted, so it cannot forge a line.
 - Not in this slice: `cirak init`, `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the
   service unit (ADR-027 S2 to S4).
 

@@ -286,3 +286,108 @@ func TestDescribeShowsSecretsOnlyAsSetOrUnset(t *testing.T) {
 		t.Errorf("default shown: %+v", seen["limits.claude_max_turns"])
 	}
 }
+
+// #526 P2-1: a URL-valued key can carry credentials; the listing never prints it as written, from any source.
+func TestDescribeNeverPrintsURLCredentials(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"userinfo", "http://leakuser:LEAKPASSWORD@127.0.0.1:4096", "http://***@127.0.0.1:4096"},
+		{"user only", "https://onlyuser@x.example", "https://***@x.example"},
+		{"plain", "https://x.example", "https://x.example"},
+		{"query", "https://x.example/?token=LEAKQUERY", "https://x.example (path or query not shown)"},
+		{"fragment", "https://x.example/#LEAKFRAG", "https://x.example (path or query not shown)"},
+		{"path", "https://x.example/LEAKPATH", "https://x.example (path or query not shown)"},
+		{"userinfo and query", "https://u:LEAKBOTH@x.example/?k=LEAKQ2", "https://***@x.example (path or query not shown)"},
+		{"unparseable", "http://u:LEAKBAD@[::1", "set (not shown: not a valid URL)"},
+		{"no scheme", "u:LEAKNOSCHEME@host:80", "set (not shown: not a valid URL)"},
+		{"opaque", "mailto:LEAKOPAQUE@x.example", "set (not shown: not a valid URL)"},
+		{"garbage", "LEAKGARBAGE", "set (not shown: not a valid URL)"},
+	}
+	for _, key := range []Key{mustKey(t, "harness.opencode.url"), mustKey(t, "server.public_origin")} {
+		for _, c := range cases {
+			t.Run(key.Path+"/"+c.name, func(t *testing.T) {
+				// from the environment
+				r, err := Resolve(Input{Env: envMap(map[string]string{key.Env: c.in})})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// and from the file
+				fr, err := Resolve(Input{Env: envMap(nil), File: fileWith(t, key, `"`+c.in+`"`)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for src, res := range map[string]*Result{"environment": r, "file": fr} {
+					for _, e := range res.Describe() {
+						if e.Key == key.Path && e.Value != c.want {
+							t.Errorf("%s: %q, want %q", src, e.Value, c.want)
+						}
+						if strings.Contains(e.Value, "LEAK") || strings.Contains(e.Value, "leakuser") || strings.Contains(e.Value, "onlyuser") {
+							t.Errorf("%s: %s leaks %q", src, e.Key, e.Value)
+						}
+					}
+				}
+			})
+		}
+	}
+	// the default is shown as is (no userinfo possible), and an unset key stays "unset"
+	for _, e := range (&Result{Get: func(string) string { return "" }, Source: map[string]Source{}}).Describe() {
+		if e.Key == "harness.opencode.url" && e.Value != "http://127.0.0.1:4096" {
+			t.Errorf("default shown as %q", e.Value)
+		}
+		if e.Key == "server.public_origin" && e.Value != "unset" {
+			t.Errorf("unset origin shown as %q", e.Value)
+		}
+	}
+}
+
+func mustKey(t *testing.T, path string) Key {
+	t.Helper()
+	k, ok := Lookup(path)
+	if !ok {
+		t.Fatal(path)
+	}
+	return k
+}
+
+// Exactly the URL-valued keys are marked, so a new URL key cannot be added unredacted by accident.
+func TestURLKeysAreMarked(t *testing.T) {
+	var got []string
+	for _, k := range Keys {
+		if k.URL {
+			got = append(got, k.Path)
+		}
+	}
+	if strings.Join(got, ",") != "server.public_origin,harness.opencode.url" {
+		t.Fatalf("URL keys: %v", got)
+	}
+}
+
+// #526 P3-1: a value from the environment is not control-character checked like the file's; the listing must
+// not let it forge a line.
+func TestDescribeQuotesUnprintableValues(t *testing.T) {
+	for _, v := range []string{"bob\nINJECTED line", "a\rb", "a\x00b", "a\tb", "a\x1b[31mred", "a\u2028b", "a\u0085b"} {
+		r, err := Resolve(Input{Env: envMap(map[string]string{"CIRAK_PRINCIPAL": v})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range r.Describe() {
+			if e.Key != "server.principal" {
+				continue
+			}
+			if strings.ContainsAny(e.Value, "\n\r\x00\t\x1b\u2028\u0085") {
+				t.Errorf("%q printed raw as %q", v, e.Value)
+			}
+			if !strings.HasPrefix(e.Value, `"`) || !strings.HasSuffix(e.Value, `"`) {
+				t.Errorf("%q is not shown quoted: %q", v, e.Value)
+			}
+		}
+	}
+	// an ordinary value, with a space or a non-ASCII letter, is shown as it is
+	for _, v := range []string{"ordinary value", "çırak"} {
+		r, _ := Resolve(Input{Env: envMap(map[string]string{"CIRAK_PRINCIPAL": v})})
+		for _, e := range r.Describe() {
+			if e.Key == "server.principal" && e.Value != v {
+				t.Errorf("%q altered to %q", v, e.Value)
+			}
+		}
+	}
+}

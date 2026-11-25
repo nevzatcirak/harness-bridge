@@ -470,3 +470,55 @@ func TestCheckReusesTheRuntimeValidators(t *testing.T) {
 		}
 	}
 }
+
+// #526 P2-1 and P3-1 through the real command: credentials in a URL-valued key, from the environment or the
+// file, never reach the output (the listing, the refusal or any other line); a value cannot forge a line.
+func TestCheckPrintEffectiveNeverPrintsURLCredentials(t *testing.T) {
+	f := newFixture(t)
+	f.write(t, cleanConfig)
+	env := map[string]string{
+		"OPENCODE_URL":        "http://leakuser:LEAKPASSWORD@127.0.0.1:4096",
+		"CIRAK_PUBLIC_ORIGIN": "https://orig:LEAKORIGINPW@x.example/?token=LEAKTOKENQ",
+	}
+	out, code := check(t, f, env, "--config", f.cfg, "--print-effective")
+	if code != 2 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	for _, leak := range []string{"leakuser", "LEAKPASSWORD", "orig:", "LEAKORIGINPW", "LEAKTOKENQ"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("the output contains %q:\n%s", leak, out)
+		}
+	}
+	if !regexpMatch(out, `harness\.opencode\.url\s+environment\s+http://\*\*\*@127\.0\.0\.1:4096`) || !regexpMatch(out, `server\.public_origin\s+environment\s+https://\*\*\*@x\.example \(path or query not shown\)`) {
+		t.Errorf("the redacted forms are not listed:\n%s", out)
+	}
+	// the same from the file
+	f.write(t, `{"harness":{"opencode":{"url":"http://fileuser:FILELEAKPW@127.0.0.1:4096"}},"server":{"public_origin":"https://fo:FILEORIGINPW@x.example"},"token":{"file":"@TOKEN@"},"acl":{"roots":["@WS@"],"sessions":["ses_abc"]},"writer":{"lock_dir":"@LOCKS@"}}`)
+	out, _ = check(t, f, nil, "--config", f.cfg, "--print-effective")
+	for _, leak := range []string{"fileuser", "FILELEAKPW", "FILEORIGINPW", "fo:"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("file source: the output contains %q:\n%s", leak, out)
+		}
+	}
+	// an unparseable URL is not echoed
+	f.write(t, cleanConfig)
+	out, _ = check(t, f, map[string]string{"OPENCODE_URL": "http://u:LEAKBAD@[::1"}, "--config", f.cfg, "--print-effective")
+	if strings.Contains(out, "LEAKBAD") || !strings.Contains(out, "set (not shown: not a valid URL)") {
+		t.Errorf("an unparseable URL was echoed or not marked:\n%s", out)
+	}
+	// the binary agrees (the reproduction of #526, dummy values)
+}
+
+func TestCheckPrintEffectiveCannotForgeALine(t *testing.T) {
+	f := newFixture(t)
+	f.write(t, cleanConfig)
+	out, _ := check(t, f, map[string]string{"CIRAK_PRINCIPAL": "bob\nINJECTED line\r\nRESULT: clean\x1b[2J"}, "--config", f.cfg, "--print-effective")
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "INJECTED") || strings.HasPrefix(line, "RESULT") || strings.Contains(line, "\x1b") || strings.Contains(line, "\r") {
+			t.Errorf("a forged or control line in the output: %q", line)
+		}
+	}
+	if !strings.Contains(out, `"bob\nINJECTED line\r\nRESULT: clean\x1b[2J"`) {
+		t.Errorf("the value is not shown quoted:\n%s", out)
+	}
+}

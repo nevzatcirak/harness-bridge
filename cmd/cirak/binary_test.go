@@ -320,3 +320,23 @@ func TestBinaryConfigCheck(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+// The #526 reproduction as the real process: env -i, dummy values, no daemon.
+func TestBinaryPrintEffectiveRedactsCredentials(t *testing.T) {
+	bin := builtBinary(t)
+	ws := t.TempDir()
+	out, _ := run(t, bin, []string{
+		"CIRAK_TOKEN=" + strings.Repeat("d", 44), "CIRAK_ALLOWED_ROOTS=" + ws, "CIRAK_ALLOWED_SESSIONS=ses_x", "CIRAK_READ_ONLY=1",
+		"OPENCODE_URL=http://leakuser:LEAKPASSWORD@127.0.0.1:4096", "CIRAK_PUBLIC_ORIGIN=https://orig:ORIGPW@x.example", "CIRAK_PRINCIPAL=bob\nINJECTED line",
+	}, "config", "check", "--print-effective")
+	for _, leak := range []string{"leakuser", "LEAKPASSWORD", "ORIGPW"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("the output contains %q:\n%s", leak, out)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "INJECTED") {
+			t.Errorf("forged line %q", line)
+		}
+	}
+}
