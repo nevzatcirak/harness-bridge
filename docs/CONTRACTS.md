@@ -226,7 +226,9 @@ sets up **local mode** and installs nothing: no service unit or plist, no `docto
 - **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
   as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
   goes only to a `0600` `opencode-password` file that the config references, never to the config, argv or a log.
-  An unreachable server is reported, not fatal.
+  An unreachable server is reported, not fatal. `--opencode-url` is validated first with the daemon's own base-URL
+  rule (loopback http or https; no credentials, path, query or fragment): a bad one is a usage error before
+  anything is probed, printed, written or staged, and it is shown only in the redacted form (`http://***@host`).
 - **Roots** (workspace and lifecycle) must be canonical, owned by root or the service user, readable and
   traversable by the service user (mode bits; an ACL is not evaluated, and the optional
   `sudo -u <user> test -r/-x` probe runs only after the operator agrees, never with `--yes`) and have a readable
@@ -242,12 +244,16 @@ sets up **local mode** and installs nothing: no service unit or plist, no `docto
 - **Ownership:** run as the service user (or, with no `--service-user`, as yourself). When the invoking uid is
   not the service uid, init writes **nothing at the targets**: it stages the files in a private `0700`
   directory and prints the `install -d` / `install -o <user> -g <group> -m 0600 <src> <dst>` commands. A service
-  user's system directory must already exist (otherwise `install -d` is printed and init stops).
+  user's system directory, and its writer lock directory (`0700`, owned by it), must already exist (otherwise
+  `install -d` is printed and init stops before writing). In the staged flow a symlink anywhere in the existing
+  part of a target path is refused before any command is printed, and the connector text names the staged token.
 - **Existing files:** an existing config or lifecycle file needs `--force`; a `.bak-<UTC stamp>` copy (`0600`) is
   made and the new bytes replace the file through a fresh `O_EXCL` temporary file and a rename; a symlinked
-  target is refused. A failing step removes the files this run created.
-- The written config is checked with the S1 `config check` (it must not be refused); init then prints the
-  connector values (URL, `Authorization: Bearer`) and the next steps.
+  target is refused. A failing step removes the files this run created and restores a file it had replaced (the
+  backup stays).
+- The written config is checked with the S1 `config check` and must come out **clean** (any warning or
+  refusal makes init fail); init then prints the connector values (URL, `Authorization: Bearer`) and the next
+  steps.
 - The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
   surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
 

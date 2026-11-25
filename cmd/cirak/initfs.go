@@ -87,19 +87,28 @@ func backupAndReplace(path string, data []byte, mode os.FileMode, stamp string, 
 	if err := createExclusive(backup, old, 0o600); err != nil {
 		return "", err
 	}
+	if err := atomicReplace(path, data, mode, rand); err != nil {
+		return backup, err
+	}
+	return backup, nil
+}
+
+// atomicReplace writes data to a fresh O_EXCL temporary file in the directory of path and renames it over
+// path: the old file is never opened for truncation.
+func atomicReplace(path string, data []byte, mode os.FileMode, rand io.Reader) error {
 	var nonce [6]byte
 	if _, err := io.ReadFull(rand, nonce[:]); err != nil {
-		return backup, errors.New("no randomness for a temporary file name")
+		return errors.New("no randomness for a temporary file name")
 	}
 	tmp := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s.tmp-%x", filepath.Base(path), nonce))
 	if err := createExclusive(tmp, data, mode); err != nil {
-		return backup, err
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return backup, fmt.Errorf("cannot replace %s", path)
+		return fmt.Errorf("cannot replace %s", path)
 	}
-	return backup, nil
+	return nil
 }
 
 func readNoFollow(path string) ([]byte, error) {

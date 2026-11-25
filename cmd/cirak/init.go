@@ -41,6 +41,10 @@ Local mode only in this release: --remote, --tls-cert, --tls-key and --install-s
 `
 
 // Defaults of section 2 item 3: 64 characters, 7 days, and the pair written explicitly.
+// serviceLockDir is the persistent writer lock directory of a service user (ADR-027 section 2 item 5); a
+// variable only so a test can point it at a temp directory.
+var serviceLockDir = "/var/lib/cirak/writer-locks"
+
 const (
 	tokenChars      = 64
 	tokenValidity   = 7 * 24 * time.Hour
@@ -181,13 +185,14 @@ type wizard struct {
 	lcPath    string
 	lockDir   string
 
-	token      string // the newly generated token (never persisted anywhere but its file)
-	newToken   bool
-	expires    time.Time
-	ocUser     string
-	ocPwFile   string // the existing password file the config will reference
-	typedPw    string // a password typed after a 401: goes to pwPath only
-	tokenShown bool
+	token       string // the newly generated token (never persisted anywhere but its file)
+	newToken    bool
+	expires     time.Time
+	ocUser      string
+	ocPwFile    string // the existing password file the config will reference
+	typedPw     string // a password typed after a 401: goes to pwPath only
+	tokenShown  bool
+	stagedToken string // set when the new token was only staged, not yet at its final path
 }
 
 func (w *wizard) say(format string, a ...any) { fmt.Fprintf(w.d.stdout, format+"\n", a...) }
@@ -270,6 +275,9 @@ func (w *wizard) run() error {
 	if err := security.ValidateListen(w.listen, false); err != nil {
 		return fmt.Errorf("--listen: %w (init sets up local mode)", err)
 	}
+	if err := validateOpenCodeURL(w.ocURL); err != nil {
+		return err
+	}
 	if err := w.parseExpiry(); err != nil {
 		return err
 	}
@@ -343,7 +351,7 @@ func (w *wizard) resolvePaths() error {
 		}
 		w.lockDir = filepath.Join(state, "cirak", "writer-locks")
 	} else {
-		w.lockDir = "/var/lib/cirak/writer-locks"
+		w.lockDir = serviceLockDir
 	}
 	for name, p := range map[string]string{"--config": w.cfgPath, "--token-file": w.tokenPath, "the writer lock directory": w.lockDir} {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
@@ -405,6 +413,16 @@ func (w *wizard) parseExpiry() error {
 	return nil
 }
 
+// validateOpenCodeURL applies the daemon's own OpenCode base-URL rule (loopback only, no userinfo, path, query
+// or fragment) before anything is probed, printed or written. The URL may carry a credential, so a diagnostic
+// shows it only in the redacted form of `config check --print-effective`.
+func validateOpenCodeURL(raw string) error {
+	if _, err := opencode.New(raw, "", ""); err != nil {
+		return usagef("--opencode-url (%s) is not a valid OpenCode base URL: %v (loopback http or https only; no credentials, path, query or fragment)", config.RedactURL(raw), err)
+	}
+	return nil
+}
+
 // detectOpenCode probes the configured URL (step 1). Nothing is installed or changed; an unreachable server is
 // reported, not fatal: the Bridge may start before it.
 func (w *wizard) detectOpenCode() {
@@ -425,16 +443,16 @@ func (w *wizard) detectOpenCode() {
 	res := w.d.probe(ctx, w.ocURL, w.ocUser, pw)
 	switch {
 	case res.Reachable:
-		w.say("OpenCode: reachable at %s (version: unknown)", w.ocURL)
+		w.say("OpenCode: reachable at %s (version: unknown)", config.RedactURL(w.ocURL))
 	case res.Unauthorized:
-		w.say("OpenCode: reachable at %s and it asks for credentials", w.ocURL)
+		w.say("OpenCode: reachable at %s and it asks for credentials", config.RedactURL(w.ocURL))
 		if w.o.yes || !w.d.isTTY {
 			w.say("  Run interactively, or set OPENCODE_SERVER_USERNAME and OPENCODE_SERVER_PASSWORD_FILE (a 0600 file) and run again.")
 			return
 		}
 		w.askCredentials(ctx)
 	default:
-		w.say("OpenCode: not reachable at %s. Check it with: systemctl --user status opencode", w.ocURL)
+		w.say("OpenCode: not reachable at %s. Check it with: systemctl --user status opencode", config.RedactURL(w.ocURL))
 	}
 }
 
@@ -684,9 +702,17 @@ func (w *wizard) write(cfg, lc []byte) error {
 		return err
 	}
 	var created []string
+	type replacedFile struct{ path, backup string }
+	var replaced []replacedFile
 	undo := func() {
 		for i := len(created) - 1; i >= 0; i-- {
 			_ = os.Remove(created[i])
+		}
+		// a file this run replaced goes back to its old bytes (the backup stays)
+		for i := len(replaced) - 1; i >= 0; i-- {
+			if old, err := readNoFollow(replaced[i].backup); err == nil {
+				_ = atomicReplace(replaced[i].path, old, 0o600, w.d.random)
+			}
 		}
 	}
 	put := func(path string, data []byte) error {
@@ -716,6 +742,7 @@ func (w *wizard) write(cfg, lc []byte) error {
 			undo()
 			return err
 		}
+		replaced = append(replaced, replacedFile{path, backup})
 		w.say("backup: %s", backup)
 		return nil
 	}
@@ -760,7 +787,17 @@ func (w *wizard) prepareDirs() error {
 			return err
 		}
 	} else {
-		w.say("note: create the writer lock directory before the first start (init never applies this): install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, w.lockDir)
+		// A service user's state directory is not created by init either. Written without it, the config could
+		// not check clean (the check warns that the lock directory does not exist), so stop before writing.
+		switch exists, err := privateDir(w.lockDir, w.svc.UID); {
+		case err != nil:
+			w.say("directory %s: %v", w.lockDir, err)
+			return errors.New("the writer lock directory is not ready; nothing was written")
+		case !exists:
+			w.say("directory %s does not exist yet", w.lockDir)
+			w.say("  create it first (init never applies this): install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, w.lockDir)
+			return errors.New("the writer lock directory is not ready; nothing was written")
+		}
 	}
 	return nil
 }
@@ -795,6 +832,23 @@ func mkdirPrivate(dir string) error {
 // stage handles an invoking uid that is not the service uid: the files are written to a private staging
 // directory the invoking user owns, and the exact install commands are printed. init never applies chown.
 func (w *wizard) stage(cfg, lc []byte) error {
+	// The printed commands run as root: refuse a symlink anywhere in the existing part of every target path
+	// BEFORE anything is staged or printed (a missing tail is fine, install -d creates it).
+	targets := []string{w.cfgPath}
+	if lc != nil {
+		targets = append(targets, w.lcPath)
+	}
+	if w.newToken {
+		targets = append(targets, w.tokenPath)
+	}
+	if w.typedPw != "" {
+		targets = append(targets, w.pwPath)
+	}
+	for _, t := range targets {
+		if err := noSymlinkInExistingPrefix(t); err != nil {
+			return fmt.Errorf("%w; nothing was staged and no command was printed", err)
+		}
+	}
 	dir, err := w.d.stageDir()
 	if err != nil {
 		return fmt.Errorf("cannot make a staging directory: %w", err)
@@ -804,6 +858,9 @@ func (w *wizard) stage(cfg, lc []byte) error {
 		data      []byte
 	}
 	items := []item{{"config.json", w.cfgPath, cfg}}
+	if w.newToken {
+		w.stagedToken = filepath.Join(dir, "token")
+	}
 	if lc != nil {
 		items = append(items, item{"lifecycle.json", w.lcPath, lc})
 	}
@@ -837,7 +894,7 @@ func (w *wizard) stage(cfg, lc []byte) error {
 func (w *wizard) finish() error {
 	rep := &report{out: w.d.stdout}
 	fmt.Fprintln(w.d.stdout, "config check of what was written:")
-	checkConfiguration(rep, serveFlags{config: w.cfgPath}, func(string) string { return "" }, nil, w.d.uid, false)
+	generatedConfigCheck(rep, serveFlags{config: w.cfgPath}, func(string) string { return "" }, nil, w.d.uid, false)
 	switch rep.code() {
 	case 0:
 		w.say("result: clean")
@@ -851,11 +908,15 @@ func (w *wizard) finish() error {
 	w.say("  1. cirak config check --config %s", w.cfgPath)
 	w.say("  2. start it: cirak --config %s", w.cfgPath)
 	w.say("  3. smoke: cirak doctor --smoke (ships with ADR-027 S3; it checks initialize + tools/list against the running service)")
-	if rep.refused > 0 {
-		return errors.New("the written config does not pass config check; see above")
+	if rep.code() != 0 {
+		return errors.New("the generated config does not check clean (see above); fix the cause and run init again with --force")
 	}
 	return nil
 }
+
+// generatedConfigCheck is the S1 check init runs on what it wrote; a variable only so a test can present a
+// warning (ADR-027 section 2: init --local passes config check clean, so any nonzero result is a failure).
+var generatedConfigCheck = checkConfiguration
 
 // connector prints the Claude connector values (section 2 item 6). The token is shown at most once in the
 // whole run, only on a terminal, and only when this run generated it; --yes prints the file path.
@@ -868,6 +929,8 @@ func (w *wizard) connector() {
 		w.tokenShown = true
 		w.say("  Token (shown once, it is in %s and nowhere else; run `set +o history` before you paste it):", w.tokenPath)
 		w.say("%s", w.token)
+	case w.stagedToken != "":
+		w.say("  Token: staged at %s, and put at %s by the install command above (it is not printed)", w.stagedToken, w.tokenPath)
 	default:
 		w.say("  Token: read it from %s (it is not printed)", w.tokenPath)
 	}

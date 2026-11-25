@@ -601,10 +601,31 @@ func TestInitSystemDirectoryMustExist(t *testing.T) {
 	if code := h.init(args...); code != 1 || exists(filepath.Join(d, "config.json")) {
 		t.Fatalf("group-writable system directory: exit %d", code)
 	}
-	// an existing private directory is used, and the lock directory is a printed step (a service creates it)
+	// an existing private directory is used; the service user's lock directory must exist too (a clean check
+	// needs it), otherwise init prints install -d and stops before writing
+	oldLock := serviceLockDir
+	defer func() { serviceLockDir = oldLock }()
 	h = newIH(t)
 	h.dir("cfg", 0o700)
-	if code := h.init(h.yesArgs("--service-user", "cirak")...); code != 0 || !strings.Contains(h.out.String(), "install -d -o cirak -g cirak -m 0700 /var/lib/cirak/writer-locks") {
+	serviceLockDir = filepath.Join(h.base, "state", "writer-locks")
+	lockArgs := h.yesArgs("--service-user", "cirak")
+	before = listTree(t, h.base)
+	if code := h.init(lockArgs...); code != 1 || !strings.Contains(h.out.String(), "install -d -o cirak -g cirak -m 0700 "+serviceLockDir) || exists(h.cfgPath()) {
+		t.Fatalf("a missing lock directory: exit %d\n%s", code, h.all())
+	}
+	if strings.Join(before, "\n") != strings.Join(listTree(t, h.base), "\n") {
+		t.Errorf("init wrote something before stopping for the lock directory:\n%v\n%v", before, listTree(t, h.base))
+	}
+	if err := os.MkdirAll(serviceLockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.init(h.yesArgs("--service-user", "cirak")...); code != 1 || !strings.Contains(h.out.String(), "0700") || exists(h.cfgPath()) {
+		t.Fatalf("a 0755 lock directory: exit %d\n%s", code, h.all())
+	}
+	if err := os.Chmod(serviceLockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.init(h.yesArgs("--service-user", "cirak")...); code != 0 || !strings.Contains(h.out.String(), "result: clean") {
 		t.Fatalf("exit %d\n%s", code, h.all())
 	}
 }
