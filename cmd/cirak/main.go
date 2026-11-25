@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"flag"
 	"fmt"
 	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 	"github.com/nevzatcirak/cirak/internal/admin"
@@ -24,9 +26,12 @@ func main() {
 		fmt.Print(version.Text())
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		os.Exit(runConfig(os.Args[2:], os.Getenv, os.Environ(), os.Geteuid(), os.Stdout, os.Stderr))
+	}
 	// ADR-026 section 2.3: the one reader of the process environment. A conflict between a CIRAK_
 	// name and its legacy twin refuses to start here, before any listener, lock or native call.
-	env, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))
+	envOnly, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -34,11 +39,35 @@ func main() {
 		log.Print(w)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "admin" {
-		os.Exit(runAdmin(os.Args[2:], env, os.Stdout, os.Stderr))
+		os.Exit(runAdmin(os.Args[2:], envOnly, os.Stdout, os.Stderr))
 	}
+	// ADR-027 section 1.2: flag, then environment, then the config file, then the default. With no file
+	// the effective environment is the process environment, exactly as before. Every start logs the path.
+	flags, err := parseServeFlags(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		os.Exit(2)
+	}
+	cfgLoaded, err := loadEffective(flags, envOnly, uint32(os.Geteuid()), processHome)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print(cfgLoaded.describePath())
+	for _, w := range cfgLoaded.warnings {
+		log.Print(w)
+	}
+	if u := cfgLoaded.res.SortedUnresolved(); len(u) > 0 {
+		log.Fatalf("config key %s names a systemd credential but CREDENTIALS_DIRECTORY is not set: start under systemd with LoadCredential=", u[0])
+	}
+	env := cfgLoaded.res.Get
 	token, cfg, err := loadStartup(env)
 	if err != nil {
 		log.Fatal(err)
+	}
+	for _, w := range cfg.warnings {
+		log.Print(w)
 	}
 	base := env("OPENCODE_URL")
 	if base == "" {

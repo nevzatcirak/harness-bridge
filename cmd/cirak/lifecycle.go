@@ -60,21 +60,33 @@ type lifecycleWiring struct {
 	closeOnce sync.Once
 }
 
-// openLifecycle resolves the configuration before any listener is opened. uid is the service user.
-func openLifecycle(env func(string) string, uid int, readOnly bool) (*lifecycleWiring, error) {
+// lifecycleConfig is the validation part of openLifecycle that touches nothing: the lifecycle file (its
+// own strict rules), the overlay directory setting and their all-or-nothing relation. It returns a nil
+// config when the feature is not configured. `cirak config check` calls it, so the check and the start share
+// one validator (ADR-027 section 1.5).
+func lifecycleConfig(env func(string) string, uid int) (*lifecycle.Config, string, error) {
 	cfg, err := lifecycle.FromEnv(env, uid)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", lifecycle.EnvConfig, err)
+		return nil, "", fmt.Errorf("%s: %w", lifecycle.EnvConfig, err)
 	}
 	dir := env(envOverlayDir)
 	if cfg == nil {
 		if dir != "" {
-			return nil, fmt.Errorf("%s is set but %s is not: the archive overlay needs lifecycle roots, refusing to start without them", envOverlayDir, lifecycle.EnvConfig)
+			return nil, "", fmt.Errorf("%s is set but %s is not: the archive overlay needs lifecycle roots, refusing to start without them", envOverlayDir, lifecycle.EnvConfig)
 		}
-		return nil, nil
+		return nil, "", nil
 	}
 	if !cfg.Enabled() {
-		return nil, fmt.Errorf("%s names no root: configure at least one root or unset the variable", lifecycle.EnvConfig)
+		return nil, "", fmt.Errorf("%s names no root: configure at least one root or unset the variable", lifecycle.EnvConfig)
+	}
+	return cfg, dir, nil
+}
+
+// openLifecycle resolves the configuration before any listener is opened. uid is the service user.
+func openLifecycle(env func(string) string, uid int, readOnly bool) (*lifecycleWiring, error) {
+	cfg, dir, err := lifecycleConfig(env, uid)
+	if err != nil || cfg == nil {
+		return nil, err
 	}
 	paths := make([]string, 0, len(cfg.Roots))
 	for _, r := range cfg.Roots {

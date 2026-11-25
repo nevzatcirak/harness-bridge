@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/nevzatcirak/cirak/internal/security"
 )
@@ -12,20 +13,27 @@ import (
 // expiry and maximum lifetime once. The token itself, or any part or hash of
 // it, is never logged.
 func loadIngress(env func(string) string, token string) (ingress, error) {
+	cfg, err := ingressWithToken(env, token, time.Now())
+	if err == nil && cfg.remote != nil {
+		cfg.remote.LogConfig()
+	}
+	return cfg, err
+}
+
+// ingressWithToken is loadIngress without its log line and at a given instant: `cirak config check` calls
+// it, so the check and the start apply the same token-length rule to the same ingress settings.
+func ingressWithToken(env func(string) string, token string, now time.Time) (ingress, error) {
 	// A missing or short token is reported before any ingress setting, as before
 	// ADR-019 (#102 nit 1); the 43-character rule needs the lifetime and follows.
 	if len(token) < security.MinTokenLength {
 		return ingress{}, fmt.Errorf("CIRAK_TOKEN must be at least %d characters", security.MinTokenLength)
 	}
-	cfg, err := readIngress(env)
+	cfg, err := readIngressAt(env, now)
 	if err != nil {
 		return cfg, err
 	}
 	if minimum := security.TokenMinLength(cfg.maxLifetime); len(token) < minimum {
 		return cfg, fmt.Errorf("CIRAK_TOKEN must be at least %d characters", minimum)
-	}
-	if cfg.remote != nil {
-		cfg.remote.LogConfig()
 	}
 	return cfg, nil
 }
