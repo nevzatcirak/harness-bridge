@@ -108,13 +108,21 @@ type guardRow struct {
 
 type sessionRow struct {
 	Harness, HarnessClass string
+	HarnessName           string // the badge text: OpenCode, Claude Code, Other
 	ID, Title, Root       string
+	PathShort             string // the shortened path of the Repository and path column (A1.4 item 1)
 	LifecycleRoot         string // the ADR-022 lifecycle root label ("" when none)
 	Archived              bool
-	State                 string
+	State                 string // the closed session state word (also the title of the chip and the JSON)
+	StateLabel            string // the sentence-case label of the chip
+	StateTone             string
+	StateClass            string // the class attribute of the chip
 	Guard                 guardRow
+	GuardText             string
 	Current               string
-	LastActivity          string
+	LastActivity          string // the absolute time ("-" when unknown)
+	LastISO               string // the datetime attribute ("" when unknown)
+	LastRel               string // set for the HTML only: the JSON must not change every second (its ETag)
 	Href                  string
 }
 
@@ -131,14 +139,17 @@ func toRow(s Session) sessionRow {
 	if s.Guard.Held {
 		g.State = normExecutionState(s.Guard.State)
 	}
+	state := normSessionState(s.State)
+	c := stateChip(state)
+	root := truncRunes(s.Root, maxRootRunes)
 	return sessionRow{
-		Harness: label, HarnessClass: class,
-		ID: truncRunes(s.ID, 128), Title: truncRunes(s.Title, maxTitleRunes), Root: truncRunes(s.Root, maxRootRunes),
+		Harness: label, HarnessClass: class, HarnessName: harnessName(label),
+		ID: truncRunes(s.ID, 128), Title: truncRunes(s.Title, maxTitleRunes), Root: root, PathShort: shortPath(root),
 		LifecycleRoot: truncRunes(s.LifecycleRoot, maxRootRunes), Archived: s.Archived,
-		State: normSessionState(s.State), Guard: g,
+		State: state, StateLabel: c.Label, StateTone: c.Tone, StateClass: chipClass(c.Tone), Guard: g, GuardText: guardText(g),
 		Current:      truncRunes(s.CurrentExecution, 128),
-		LastActivity: fmtTime(s.LastActivity),
-		Href:         rowHref(s),
+		LastActivity: fmtTime(s.LastActivity), LastISO: isoTime(s.LastActivity),
+		Href: rowHref(s),
 	}
 }
 
@@ -147,11 +158,23 @@ type execRow struct {
 	Current                            bool
 }
 
+// stateBlock is an empty, error or not-connected state of a data region (A1.4 item 7): a heading, a sentence
+// and the one action that fills it.
+type stateBlock struct {
+	Class, Heading, Text, LinkHref, LinkText string
+}
+
 type page struct {
 	Title    string
-	Message  string
+	Active   string // the current destination of the top bar: sessions or audit
 	Truncate string
 	Rows     []sessionRow
+	// The sessions screen (A1.4 item 1).
+	ListPage                            bool
+	State                               *stateBlock
+	CountText                           string
+	StatusISO, StatusAbs, StatusRel     string
+	ToggleHref, ToggleText, RefreshHref string
 	// Detail view
 	Detail     *sessionRow
 	Executions []execRow
@@ -168,93 +191,6 @@ type page struct {
 	AuditMsg  string
 	Audit     []auditRow
 }
-
-var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>{{.Title}}</title>
-<link rel="stylesheet" href="/dashboard.css">
-</head>
-<body>
-<header><h1>Cirak dashboard</h1><span class="badge">read-only</span></header>
-<main id="app" data-slice="4"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}"{{end}}{{end}}>
-<div id="live">
-{{if .Message}}<p>{{.Message}}</p>{{end}}
-{{if .Rows}}<table class="sessions">
-<thead><tr><th>Harness</th><th>Session</th><th>Title</th><th>Root</th><th>Lifecycle root</th><th>State</th><th>Guard</th><th>Current execution</th><th>Last activity</th></tr></thead>
-<tbody>
-{{range .Rows}}<tr>
-<td><span class="badge {{.HarnessClass}}">{{.Harness}}</span></td>
-<td>{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}{{.ID}}{{end}}{{if .Archived}} <span class="badge archived">archived</span>{{end}}</td>
-<td>{{.Title}}</td>
-<td><code>{{.Root}}</code></td>
-<td>{{if .LifecycleRoot}}<code>{{.LifecycleRoot}}</code>{{else}}-{{end}}</td>
-<td>{{.State}}</td>
-<td>{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</td>
-<td>{{if .Current}}{{.Current}}{{else}}-{{end}}</td>
-<td>{{.LastActivity}}</td>
-</tr>
-{{end}}</tbody></table>{{end}}
-{{if .Truncate}}<p class="note">{{.Truncate}}</p>{{end}}
-{{if .Filter}}<p class="note">{{if .ShowArchived}}Archived sessions are shown. <a href="/">Hide archived sessions</a>{{else}}Archived sessions are hidden. <a href="/?archived=1">Show archived sessions</a>{{end}}</p>{{end}}
-</div>
-{{with .Detail}}<section class="session">
-<p><a href="/">back to the list</a></p>
-<h2><span class="badge {{.HarnessClass}}">{{.Harness}}</span> {{.ID}}</h2>
-<dl>
-<dt>Title</dt><dd data-f="title">{{.Title}}</dd>
-<dt>Root</dt><dd data-f="root"><code>{{.Root}}</code></dd>
-<dt>Lifecycle root</dt><dd data-f="lifecycle">{{if .LifecycleRoot}}<code>{{.LifecycleRoot}}</code>{{else}}-{{end}}</dd>
-<dt>State</dt><dd data-f="state">{{.State}}</dd>
-<dt>Guard</dt><dd data-f="guard">{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</dd>
-<dt>Current execution</dt><dd data-f="current">{{if .Current}}{{.Current}}{{else}}-{{end}}</dd>
-<dt>Last activity</dt><dd data-f="last">{{.LastActivity}}</dd>
-</dl>
-{{if $.Pending}}<p class="note">Claude Code: history and diffs unavailable (ADR-021 pending).</p>{{end}}
-</section>
-<section class="executions">
-<h3>Executions</h3>
-{{if $.Executions}}<table>
-<thead><tr><th>Execution</th><th>State</th><th>Started</th><th>Updated</th><th>Ended</th></tr></thead>
-<tbody id="exec-rows">
-{{range $.Executions}}<tr><td>{{.ID}}{{if .Current}} (current){{end}}</td><td>{{.State}}</td><td>{{.Started}}</td><td>{{.Updated}}</td><td>{{.Ended}}</td></tr>
-{{end}}</tbody></table>{{else}}<p>No executions recorded by this Bridge process.</p>{{end}}
-</section>{{end}}
-{{with .Diff}}<section class="changes">
-<h3>Changes</h3>
-{{if .Pending}}<p class="note">diff unavailable (ADR-021 pending)</p>{{end}}
-{{with .Working}}{{template "diffview" .}}{{end}}
-{{with .Single}}{{template "diffview" .}}{{end}}
-{{if .TurnsNote}}<p class="note">{{.TurnsNote}}</p>{{end}}
-{{if .Turns}}<h4>Turns</h4><table class="turns">
-<thead><tr><th>Turn</th><th>Time</th><th>Diff</th></tr></thead>
-<tbody>
-{{range .Turns}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}{{.ID}}{{end}}</td><td>{{.Time}}</td><td>{{.Label}}</td></tr>
-{{end}}</tbody></table>{{end}}
-</section>{{end}}
-{{if .BackHref}}<p><a href="{{.BackHref}}">back to the session</a></p>{{end}}
-{{if .AuditPage}}<section class="audit">
-<h2>Audit</h2>
-<p><a href="/">back to the list</a></p>
-{{if .AuditMsg}}<p class="note">{{.AuditMsg}}</p>{{end}}
-{{if .AuditOn}}<p><label>Filter <input type="search" id="audit-filter" maxlength="64" autocomplete="off"></label></p>
-{{if .Audit}}<table class="audit-feed">
-<thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Error</th><th>Session</th><th>Execution</th><th>Principal</th><th>Other</th></tr></thead>
-<tbody id="audit-rows">
-{{range .Audit}}<tr><td>{{.Time}}</td><td>{{.Event}}</td><td>{{.Outcome}}</td><td>{{.Error}}</td><td>{{.Session}}</td><td>{{.Execution}}</td><td>{{.Principal}}</td><td>{{.Other}}</td></tr>
-{{end}}</tbody></table>{{end}}{{end}}
-</section>{{end}}
-</main>
-<script src="/dashboard.js"></script>
-</body>
-</html>
-{{define "diffview"}}<div class="diff"><p><span class="badge label-{{.LabelClass}}">{{.Label}}</span> {{.Scope}}{{if .Reason}} ({{.Reason}}){{end}}</p>
-{{if .Redaction}}<p class="note">{{.Redaction}}</p>{{end}}
-{{range .Files}}<section class="file"><h5>{{.Path}} <span class="status">{{.Status}}</span> +{{.Additions}} -{{.Deletions}}</h5>
-{{if .Note}}<p class="note">{{.Note}}</p>{{end}}{{if .ShowPatch}}<pre>{{.Patch}}</pre>{{end}}</section>
-{{end}}{{if .More}}<p class="note">{{.More}}</p>{{end}}</div>{{end}}
-`))
 
 // renderPage executes the template into a buffer and never serves a partial page. The
 // 2 MiB bound applies to the escaped body: html/template can expand a capped diff
@@ -363,20 +299,34 @@ func (d *dash) indexHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
-		p := page{Title: "Cirak dashboard", Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
+		now := d.now().UTC()
+		p := page{Title: "Sessions - Cirak", Active: "sessions", ListPage: true, Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
+		p.RefreshHref, p.ToggleHref, p.ToggleText = "/", "/?archived=1", "Show archived"
+		if p.ShowArchived {
+			p.RefreshHref, p.ToggleHref, p.ToggleText = "/?archived=1", "/", "Hide archived"
+		}
 		if _, none := d.src.(NullSource); none {
-			p.Message = "No data source is connected."
+			p.State = &stateBlock{Class: "state", Heading: "No data source", Text: "No data source is connected."}
 			renderPage(w, http.StatusOK, p)
 			return
 		}
 		rows, err := d.src.Sessions(ctx)
 		if err != nil {
-			p.Message = "Data source unavailable."
+			p.State = &stateBlock{Class: "state state--error", Heading: "Data source unavailable",
+				Text: "The Bridge could not read its sessions just now. Nothing was changed. Try again in a few seconds.", LinkHref: p.RefreshHref, LinkText: "Try again"}
 			unavailablePage(w, p)
 			return
 		}
-		p.Message = fmt.Sprintf("%d sessions.", len(rows))
 		p.Rows, p.Truncate = listRows(rows)
+		p.CountText = sessionsCountText(len(rows))
+		p.StatusISO, p.StatusAbs, p.StatusRel = isoTime(now), fmtTime(now), relTime(now, now)
+		for i := range p.Rows {
+			p.Rows[i].LastRel = relTimeISO(now, p.Rows[i].LastISO)
+		}
+		if len(p.Rows) == 0 {
+			p.State = &stateBlock{Class: "state", Heading: "No sessions", Text: "This Bridge lists no session you may see. Archived sessions are hidden unless you ask for them.",
+				LinkHref: p.ToggleHref, LinkText: p.ToggleText}
+		}
 		renderPage(w, http.StatusOK, p)
 	})
 }
@@ -491,7 +441,7 @@ func (d *dash) detailHandler() http.Handler {
 			return
 		}
 		row := toRow(det.Session)
-		p := page{Title: "Cirak dashboard · session " + truncRunes(det.ID, 128), Detail: &row, Pending: harness == harnessClaudeCode}
+		p := page{Title: "Session " + truncRunes(det.ID, 128) + " - Cirak", Active: "sessions", Detail: &row, Pending: harness == harnessClaudeCode}
 		if turn {
 			d.turnPage(ctx, w, p, harness, id, parts[3])
 			return

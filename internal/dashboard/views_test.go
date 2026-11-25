@@ -141,9 +141,9 @@ func TestListRendersRowsWithBadgeLinkGuardAndState(t *testing.T) {
 	}
 	checkSecurityHeaders(t, "GET /", hdr)
 	for _, want := range []string{
-		`class="badge harness-opencode">opencode<`, `class="badge harness-claudecode">claudecode<`,
+		`<span class="badge">OpenCode</span>`, `<span class="badge">Claude Code</span>`,
 		`href="/session/opencode/ses_aaa"`, `href="/session/claudecode/4e59c1bd-4333-4a71-875d-cba9301bd4a9"`,
-		"fix the build", "/opt/proj-x", "held (running)", "exec_1", "2026-11-12 12:04:11Z", "2 sessions.",
+		"fix the build", "/opt/proj-x", "Held, running", "<code>exec_1</code>", `title="2026-11-12 12:04:11Z"`, "2 sessions, updated",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("list lacks %q:\n%s", want, body)
@@ -160,23 +160,23 @@ func TestStateValuesAreNormalised(t *testing.T) {
 	if strings.Contains(body, "<b>") {
 		t.Errorf("a guard state is rendered raw: %s", body)
 	}
-	if !strings.Contains(body, "<td>unknown</td>") {
+	if !strings.Contains(body, `title="unknown">Unknown</span>`) {
 		t.Errorf("an execution state shown as a session state must read unknown: %s", body)
 	}
-	if !strings.Contains(body, "held (unknown)") {
+	if !strings.Contains(body, "Held, unknown") {
 		t.Errorf("an unrecognised guard state must read unknown: %s", body)
 	}
 }
 
 func TestEmptyAndFailingSources(t *testing.T) {
 	code, body, _ := fetch(NewHandler(&fakeSource{rows: []Session{}}, nil), "/")
-	if code != http.StatusOK || !strings.Contains(body, "0 sessions.") || strings.Contains(body, "<table") {
+	if code != http.StatusOK || !strings.Contains(body, "No sessions") || strings.Contains(body, "<table") {
 		t.Errorf("empty list = %d %s", code, body)
 	}
 	// Review #223 P3-1: a failing data source is 503 with Retry-After for the list as
 	// for the detail (one semantics); a configured-absent source is a 200 page.
 	code, body, hdr0 := fetch(NewHandler(&fakeSource{rowsErr: errors.New("boom <b>")}, nil), "/")
-	if code != http.StatusServiceUnavailable || !strings.Contains(body, "Data source unavailable.") || strings.Contains(body, "boom") || hdr0.Get("Retry-After") == "" {
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "Data source unavailable") || strings.Contains(body, "boom") || hdr0.Get("Retry-After") == "" {
 		t.Errorf("failing list = %d %s", code, body)
 	}
 	checkSecurityHeaders(t, "503 list", hdr0)
@@ -325,7 +325,7 @@ func TestRenderingCaps(t *testing.T) {
 		rows = append(rows, Session{Harness: "opencode", ID: fmt.Sprintf("ses_%04d", i), State: "idle"})
 	}
 	_, body, _ := fetch(NewHandler(&fakeSource{rows: rows}, nil), "/")
-	if n := strings.Count(body, "<tr>") - 1; n != maxListRows { // minus the header row
+	if n := strings.Count(body, "<tr data-harness="); n != maxListRows {
 		t.Errorf("rendered %d rows, want %d", n, maxListRows)
 	}
 	if !strings.Contains(body, fmt.Sprintf("Showing the first %d of %d sessions.", maxListRows, maxListRows+50)) {

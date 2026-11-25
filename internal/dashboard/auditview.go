@@ -32,7 +32,7 @@ func toAuditRow(e AuditEntry) auditRow {
 // escaped, with a filter that runs in the browser only.
 func (d *dash) auditPageHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := page{Title: "Cirak dashboard · audit", AuditPage: true}
+		p := page{Title: "Audit - Cirak", Active: "audit", AuditPage: true}
 		if d.audit == nil {
 			p.AuditMsg = "The audit feed is not enabled."
 			renderPage(w, http.StatusOK, p)
