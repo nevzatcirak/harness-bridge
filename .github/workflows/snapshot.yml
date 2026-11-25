@@ -1,0 +1,67 @@
+name: Release snapshot
+
+# ADR-026 section 3.1: a snapshot build on every pull request, so that a broken release configuration is
+# caught before a tag. It builds one target, publishes nothing and uses no secret.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: GoReleaser snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          check-latest: false
+          cache: false
+
+      - name: Verify toolchain
+        run: |
+          go version
+          test "$(go env GOVERSION)" = go1.27.2
+
+      - name: Check the GoReleaser configuration
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.1
+          args: check
+
+      - name: Snapshot build (one target)
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.1
+          args: build --snapshot --single-target --clean
+
+      - name: Gate the snapshot binary
+        run: |
+          set -euo pipefail
+          bin=$(find dist -type f -name cirak | head -n 1)
+          test -n "$bin" || { echo 'no cirak binary under dist/' >&2; exit 1; }
+          scripts/release/check-binary.sh "$bin" "$(git rev-parse HEAD)"
+          plain="$RUNNER_TEMP/cirak-plain"
+          scripts/release/plain-build.sh "$(go env GOOS)" "$(go env GOARCH)" "$plain"
+          cmp "$bin" "$plain" || {
+            echo 'the GoReleaser binary differs from the plain recipe (go build -trimpath -buildvcs=true -ldflags=-buildid=)' >&2
+            exit 1
+          }
+          echo "ok: $bin equals the plain recipe"

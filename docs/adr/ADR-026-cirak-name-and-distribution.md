@@ -17,6 +17,8 @@ code was measured at `main` `e2ac772` (2026-11-21); every statement about an ups
   `CIRAK_*`; the legacy `BRIDGE_*` names stay accepted for one minor release with a single startup warning per
   variable; if both forms are set with different values the binary refuses to start; equal values are accepted.
 
+> **Amendment (D33, recorded in issue #117):** the npm package is scoped **`@nevzatcirak/cirak`**, superseding D29 Q8 "unscoped `cirak`" (§4.3 and §10 Q8); the platform packages stay under the user scope. No other text of this ADR changed.
+
 **What this ADR does not touch.** ADR-010 to ADR-025, the MCP tool contract, the security invariants of
 `AGENTS.md`, and the roles: the Coding Agent never tags, publishes or releases (§3.2 makes every publication a
 maintainer step).
