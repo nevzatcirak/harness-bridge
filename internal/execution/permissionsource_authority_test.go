@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // ADR-024 S6 review fix (#309 P2-1, #310 P2-1): every input filter of the trusted authority has a

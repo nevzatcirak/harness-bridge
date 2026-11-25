@@ -21,7 +21,7 @@ import (
 )
 
 // EnvConfig names the environment variable holding the config file path.
-const EnvConfig = "BRIDGE_LIFECYCLE_CONFIG"
+const EnvConfig = "CIRAK_LIFECYCLE_CONFIG"
 
 // Modes a root may grant (ADR-022 3.1).
 const (
@@ -135,7 +135,7 @@ type validator struct {
 	afterLstat func(path string)
 }
 
-// FromEnv loads the configuration named by BRIDGE_LIFECYCLE_CONFIG. An unset or
+// FromEnv loads the configuration named by CIRAK_LIFECYCLE_CONFIG. An unset or
 // empty variable disables lifecycle and returns (nil, nil). uid is the service
 // user (os.Geteuid()).
 func FromEnv(getenv func(string) string, uid int) (*Config, error) {
@@ -158,7 +158,7 @@ func Parse(data []byte, uid int) (*Config, error) {
 
 func (v validator) load(path string) (*Config, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, refuse(ReasonConfigPath, path, "BRIDGE_LIFECYCLE_CONFIG must be a clean absolute path")
+		return nil, refuse(ReasonConfigPath, path, "CIRAK_LIFECYCLE_CONFIG must be a clean absolute path")
 	}
 	before, err := os.Lstat(path)
 	if err != nil {

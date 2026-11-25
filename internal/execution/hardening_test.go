@@ -11,7 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 type workspaceRunner struct {

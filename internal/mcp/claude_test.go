@@ -10,8 +10,8 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-021 wiring (default off): routing of the claudecode: IDs to the adapter when enabled, and

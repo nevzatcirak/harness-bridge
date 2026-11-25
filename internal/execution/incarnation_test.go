@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // ADR-024 A1 S7 (D21): the epoch is an ADDED verification condition. The run records the epoch armed at

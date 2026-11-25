@@ -45,7 +45,7 @@ func OpenWithOptions(cfg Config, src Source, uid int, opts Options) (*Server, er
 		return nil, nil
 	}
 	if cfg.Socket != "" && cfg.Addr != "" {
-		return nil, fmt.Errorf("set only one of BRIDGE_DASHBOARD_SOCKET and BRIDGE_DASHBOARD_ADDR")
+		return nil, fmt.Errorf("set only one of CIRAK_DASHBOARD_SOCKET and CIRAK_DASHBOARD_ADDR")
 	}
 	var (
 		ln    net.Listener
@@ -61,12 +61,12 @@ func OpenWithOptions(cfg Config, src Source, uid int, opts Options) (*Server, er
 			return nil, err
 		}
 		if ln, err = net.Listen("tcp", cfg.Addr); err != nil {
-			return nil, fmt.Errorf("listen on BRIDGE_DASHBOARD_ADDR: %w", err)
+			return nil, fmt.Errorf("listen on CIRAK_DASHBOARD_ADDR: %w", err)
 		}
 		// Defence in depth: the bound address must still be loopback.
 		if ta, ok := ln.Addr().(*net.TCPAddr); !ok || !ta.IP.IsLoopback() || ta.IP.IsUnspecified() {
 			_ = ln.Close()
-			return nil, fmt.Errorf("BRIDGE_DASHBOARD_ADDR bound a non-loopback address %s", ln.Addr())
+			return nil, fmt.Errorf("CIRAK_DASHBOARD_ADDR bound a non-loopback address %s", ln.Addr())
 		}
 		hosts = DefaultHosts
 	}

@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 type directoryScoped interface{ Directory() string }
@@ -40,6 +40,7 @@ func snapshot(v Execution) Execution {
 	v.MonitorEndedAt = copyTime(v.MonitorEndedAt)
 	v.ReconciledAt = copyTime(v.ReconciledAt)
 	v.GuardReleasedAt = copyTime(v.GuardReleasedAt)
+	v.RetryAttemptSince = copyTime(v.RetryAttemptSince)
 	if v.LocalFailure != nil {
 		local := *v.LocalFailure
 		v.LocalFailure = &local
@@ -368,9 +369,14 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	// ADR-017 option (a): report-only. Computed from the reads above (no extra
 	// native call) and assigned only through setLiveness, which never touches
 	// state, error, unresolved, ended_at or the guard.
-	liveness := assessLiveness(m.clock().UTC(), m.stallThreshold, livenessEvidence{
+	lnow := m.clock().UTC()
+	if !m.noLiveness {
+		x.updateRetryMemory(status, exists, lnow)
+	}
+	liveness := assessLiveness(lnow, m.stallThreshold, livenessEvidence{
 		status: status, statusExists: exists, userFound: userFound, assistants: assistants,
 		unfinished: unfinished, proof: proof != nil, permissionPending: pending, started: x.view.Started,
+		retrySince: x.retrySince,
 	})
 	// ADR-018 (d): report-only, from the reads above plus the in-memory witness.
 	// It is assigned only to x.view.PermissionRejection and never consulted for
@@ -399,6 +405,9 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	if userFound && !unfinished && proof != nil && (!exists || status.Type == "idle") {
 		// A terminal execution carries no liveness or rejection report.
 		m.setLiveness(x, nil)
+		x.retrySince = time.Time{}
+		x.retryAttemptSeen = 0
+		x.view.RetryAttemptSince = nil
 		x.view.PermissionRejection = nil
 		x.view.State = terminalState(*proof)
 		x.view.Updated = now

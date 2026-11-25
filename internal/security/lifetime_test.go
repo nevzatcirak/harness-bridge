@@ -63,7 +63,7 @@ func TestNewRemoteWithMaxLifetime(t *testing.T) {
 		t.Fatalf("default error changed: %v", err)
 	}
 	_, err = NewRemoteWithMaxLifetime("https://bridge.example", "operator", now.Add(200*time.Hour), 168*time.Hour)
-	if err == nil || !strings.Contains(err.Error(), "BRIDGE_TOKEN_MAX_LIFETIME (168h0m0s)") {
+	if err == nil || !strings.Contains(err.Error(), "CIRAK_TOKEN_MAX_LIFETIME (168h0m0s)") {
 		t.Fatalf("lifetime error: %v", err)
 	}
 }

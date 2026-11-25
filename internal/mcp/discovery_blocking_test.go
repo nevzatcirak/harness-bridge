@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/repository"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/repository"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // H4-A F-3: a repository storage call that blocks (hung NFS/FUSE) must not

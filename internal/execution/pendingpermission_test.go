@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 const (

@@ -12,6 +12,31 @@ import (
 	"time"
 )
 
+// ADR-017 A2 S1: the status read keeps the retry free-text message and the
+// structured action raw, and an unexpected shape never fails the decode.
+func TestStatusKeepsRetryMessageAndAction(t *testing.T) {
+	var s Status
+	if err := json.Unmarshal([]byte(`{"type":"retry","attempt":3,"next":1700000000000,"message":"429 rate limited","action":{"reason":"account_rate_limit","provider":"p","title":"t"}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Type != "retry" || string(s.Attempt) != "3" || string(s.Message) != `"429 rate limited"` {
+		t.Fatalf("status %+v", s)
+	}
+	var a struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(s.Action, &a); err != nil || a.Reason != "account_rate_limit" {
+		t.Fatalf("action %s %v", s.Action, err)
+	}
+	// Hostile shapes are kept raw, not decoded into a failing typed field.
+	if err := json.Unmarshal([]byte(`{"type":"retry","message":{},"action":"x"}`), &s); err != nil {
+		t.Fatalf("hostile status failed the read: %v", err)
+	}
+	if string(s.Message) != "{}" || string(s.Action) != `"x"` {
+		t.Fatalf("raw fields %s %s", s.Message, s.Action)
+	}
+}
+
 func TestLiveSchemaTransport(t *testing.T) {
 	calls := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

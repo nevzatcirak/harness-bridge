@@ -95,7 +95,7 @@ func TestLifecycleOpenWorksWithoutASession(t *testing.T) {
 }
 
 // The path is refused outside the lifecycle root even when it lies under
-// BRIDGE_ALLOWED_ROOTS: there is no fallback.
+// CIRAK_ALLOWED_ROOTS: there is no fallback.
 func TestLifecycleOpenNeverFallsBackToAllowedRoots(t *testing.T) {
 	base := canonicalDir(t)
 	allowed := mk(t, base, "allowed")

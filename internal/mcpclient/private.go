@@ -10,7 +10,7 @@ import (
 	"net/url"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ConnectPrivateTLS pins the network destination to a private/loopback IP while
@@ -39,7 +39,7 @@ func ConnectPrivateTLS(ctx context.Context, endpoint, origin, token string, caPE
 	transport.Proxy = nil
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: public.Hostname()}
 	client := &http.Client{Transport: privateBearer{token: token, host: public.Host, base: transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return sdk.NewClient(&sdk.Implementation{Name: "harness-bridge-private-probe", Version: "0.3.0"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	return sdk.NewClient(&sdk.Implementation{Name: "cirak-private-probe", Version: "0.3.0"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
 }
 
 type privateBearer struct {

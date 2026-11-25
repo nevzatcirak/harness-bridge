@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // ADR-020 option (b), accepted 2026-11-08: operator-only fenced guard release.

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // A normal run: prompt over stdin, argv without the prompt, a scrubbed env,
@@ -529,7 +529,7 @@ func TestNewRefuses(t *testing.T) {
 	if _, err := New(cfg); err == nil {
 		t.Error("a missing spawner must be refused")
 	}
-	// BRIDGE_ALLOWED_SESSIONS is enforced by the constructor (#229 P3-4): a listed
+	// CIRAK_ALLOWED_SESSIONS is enforced by the constructor (#229 P3-4): a listed
 	// session missing from it, or no ACL at all, is refused.
 	cfg = h.cfg
 	cfg.AllowedSessions = cfg.AllowedSessions[:2]

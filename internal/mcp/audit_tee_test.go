@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 const goldenExec = "0123456789abcdef0123456789abcdef"

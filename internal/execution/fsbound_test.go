@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // EXEC-FS-BOUND-IMPL: every workspace filesystem check in this package is

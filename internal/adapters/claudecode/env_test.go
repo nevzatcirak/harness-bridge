@@ -13,7 +13,7 @@ func poisoned() []string {
 		"ANTHROPIC_PROFILE=p", "ANTHROPIC_FEDERATION_RULE_ID=r", "ANTHROPIC_ORGANIZATION_ID=o",
 		"CLAUDE_CONFIG_DIR=/tmp/x", "CLAUDE_CODE_OAUTH_TOKEN=oauth", "CLAUDE_CODE_USE_BEDROCK=1",
 		"CLAUDE_CODE_USE_VERTEX=1", "CLAUDE_CODE_USE_FOUNDRY=1",
-		"BRIDGE_TOKEN=bridge-secret", "BRIDGE_CLAUDE_COMMAND=/x", "OPENCODE_SERVER_PASSWORD=pw",
+		"CIRAK_TOKEN=bridge-secret", "CIRAK_CLAUDE_COMMAND=/x", "OPENCODE_SERVER_PASSWORD=pw",
 		"GITHUB_TOKEN=ghp_x", "AWS_SECRET_ACCESS_KEY=aws", "SOME_KEY=k", "DB_SECRET=s",
 		"HTTPS_PROXY=http://proxy", "http_proxy=http://proxy", "NO_PROXY=x", "GOOGLE_APPLICATION_CREDENTIALS=/g.json",
 	}
@@ -34,7 +34,7 @@ func TestScrubEnvIsAnExplicitAllowlist(t *testing.T) {
 		t.Fatalf("env =\n%v\nwant\n%v", got, want)
 	}
 	for _, e := range env {
-		for _, banned := range []string{"ANTHROPIC", "SECRET", "TOKEN", "KEY", "BRIDGE", "OPENCODE", "PROXY", "proxy", "CLAUDE_CONFIG_DIR", "OAUTH", "BEDROCK", "VERTEX", "FOUNDRY", "attacker", "AWS", "GOOGLE"} {
+		for _, banned := range []string{"ANTHROPIC", "SECRET", "TOKEN", "KEY", "CIRAK", "BRIDGE", "OPENCODE", "PROXY", "proxy", "CLAUDE_CONFIG_DIR", "OAUTH", "BEDROCK", "VERTEX", "FOUNDRY", "attacker", "AWS", "GOOGLE"} {
 			if strings.Contains(e, banned) {
 				t.Fatalf("poisoned value leaked into the child environment: %q", e)
 			}

@@ -3,11 +3,11 @@ package mcp
 import (
 	"context"
 
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // replyPermissionCall is ADR-024 4.2 steps 2 and 3 for reply_permission; steps 4-9 are
-// execution.Manager.ReplyPermission. BRIDGE_READ_ONLY (step 1) was already refused in call:
+// execution.Manager.ReplyPermission. CIRAK_READ_ONLY (step 1) was already refused in call:
 // the tool is in mutating(), so a read-only Bridge reads nothing natively.
 func (s *Server) replyPermissionCall(ctx context.Context, a args) (any, error) {
 	if !s.PermissionRelay.enabled() || s.Runs == nil {

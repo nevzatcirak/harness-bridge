@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
 )
 
 func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }

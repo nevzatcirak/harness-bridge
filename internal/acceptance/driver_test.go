@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // Everything here is FABRICATED: a simulator stands in for the wrapper and the CLI. It is not
