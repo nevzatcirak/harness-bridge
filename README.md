@@ -39,6 +39,11 @@ mode `0600`, holds no secret (only a token file or a systemd credential name), a
 with `cirak config check` (exit 0 clean, 1 warnings, 2 refused). With no file nothing changes. See
 [CONTRACTS](docs/CONTRACTS.md#configuration-file-adr-027-s1) and [ADR-027](docs/adr/ADR-027-config-file-and-init.md).
 
+`cirak init` (ADR-027 S2) writes that file for local mode: it probes OpenCode, checks the workspace roots, generates a
+64-character token (shown once, on a terminal only), writes a `0600` config, and prints the connector values. It never
+applies `chown`, `chmod` or `setfacl`, installs no service, and `cirak init --yes --root /path --session ses_... --token-file
+/path/token` is the non-interactive form. See [CONTRACTS](docs/CONTRACTS.md#cirak-init-adr-027-s2).
+
 `CIRAK_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
 `CIRAK_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
 required. The single bearer token represents the local principal with that ACL.

@@ -79,6 +79,10 @@ func ReadChecked(path string, uid uint32) ([]byte, error) {
 	return data, nil
 }
 
+// NoSymlinkComponent refuses a path with a symbolic link in any component, the last one included. It is the
+// rule the file loader and `cirak init` share.
+func NoSymlinkComponent(path string) error { return noSymlinkComponent(path) }
+
 // noSymlinkComponent refuses a path with a symbolic link in any component, the last one included.
 func noSymlinkComponent(path string) error {
 	cur := string(filepath.Separator)
