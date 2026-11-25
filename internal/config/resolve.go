@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Source says where an effective value came from.
@@ -200,10 +202,43 @@ func (r *Result) Describe() []Effective {
 			if v == "" {
 				v = "unset"
 			}
+		} else if k.URL {
+			v = redactURL(v)
 		}
-		out = append(out, Effective{Key: k.Path, Source: r.Source[k.Path], Value: v})
+		out = append(out, Effective{Key: k.Path, Source: r.Source[k.Path], Value: displayValue(v)})
 	}
 	return out
+}
+
+// redactURL is the only form in which a URL-valued key is listed: scheme and host, with any userinfo shown as
+// "***@", and a note when a path, query or fragment was left out (they can carry a token). A value that is not
+// a plain URL is never echoed.
+func redactURL(v string) string {
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return "set (not shown: not a valid URL)"
+	}
+	out := u.Scheme + "://"
+	if u.User != nil {
+		out += "***@"
+	}
+	out += u.Host
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		out += " (path or query not shown)"
+	}
+	return out
+}
+
+// displayValue makes a value safe to put on one line of a report: a value with a control character, an
+// unprintable character or a line separator (a value from the environment is not checked like the file's)
+// is shown quoted, so it cannot forge a line.
+func displayValue(v string) string {
+	for _, r := range v {
+		if !unicode.IsPrint(r) {
+			return strconv.Quote(v)
+		}
+	}
+	return v
 }
 
 // SortedUnresolved is the unresolved list in a stable order.

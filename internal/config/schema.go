@@ -52,6 +52,9 @@ type Key struct {
 	Secret bool
 	// AbsPath marks a key whose non-empty value must be an absolute, clean path.
 	AbsPath bool
+	// URL marks a key whose value is a URL or an origin: it can carry credentials (userinfo, a query), so the
+	// effective listing never prints it as written (see Describe).
+	URL bool
 	// Default is documentation only (print-effective); the runtime applies its own default.
 	Default string
 }
@@ -60,14 +63,14 @@ type Key struct {
 var Keys = []Key{
 	{Path: "server.listen", Env: "CIRAK_LISTEN", Guarded: true, Default: "127.0.0.1:8080"},
 	{Path: "server.read_only", Env: "CIRAK_READ_ONLY", Kind: Bool, Guarded: true, Default: "0"},
-	{Path: "server.public_origin", Env: "CIRAK_PUBLIC_ORIGIN", Guarded: true},
+	{Path: "server.public_origin", Env: "CIRAK_PUBLIC_ORIGIN", Guarded: true, URL: true},
 	{Path: "server.principal", Env: "CIRAK_PRINCIPAL", Guarded: true},
 	{Path: "server.tls.cert_file", Env: "CIRAK_TLS_CERT", Guarded: true, AbsPath: true},
 	{Path: "server.tls.key_file", Env: "CIRAK_TLS_KEY", Guarded: true, Secret: true, AbsPath: true},
 	{Path: "token.file", Env: "CIRAK_TOKEN_FILE", Guarded: true, Secret: true, AbsPath: true},
 	{Path: "token.credential", Env: "CIRAK_TOKEN_CREDENTIAL", Guarded: true, Secret: true},
 	{Path: "token.expires", Env: "CIRAK_TOKEN_EXPIRES", Guarded: true},
-	{Path: "harness.opencode.url", Env: "OPENCODE_URL", Guarded: true, Default: "http://127.0.0.1:4096"},
+	{Path: "harness.opencode.url", Env: "OPENCODE_URL", Guarded: true, URL: true, Default: "http://127.0.0.1:4096"},
 	{Path: "harness.opencode.username", Env: "OPENCODE_SERVER_USERNAME", Guarded: true},
 	{Path: "harness.opencode.password_file", Env: "OPENCODE_SERVER_PASSWORD_FILE", Guarded: true, Secret: true, AbsPath: true},
 	{Path: "harness.opencode.password_credential", Env: "CIRAK_OPENCODE_PASSWORD_CREDENTIAL", Guarded: true, Secret: true},

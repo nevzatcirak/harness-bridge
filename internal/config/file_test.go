@@ -1,6 +1,9 @@
 package config
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,5 +169,47 @@ func TestExists(t *testing.T) {
 	}
 	if ok, err := Exists(link); !ok || err != nil {
 		t.Fatalf("%v %v", ok, err)
+	}
+}
+
+// #526 P3-2: the os.SameFile re-check of ReadChecked cannot be exercised by a deterministic swap without a
+// hook inside production code, so it is pinned structurally: ReadChecked must compare the inspected entry
+// with the opened descriptor, and refuse on a mismatch.
+func TestReadCheckedComparesTheOpenedFileWithTheInspectedOne(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "file.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found, refuses bool
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "ReadChecked" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			ifs, ok := n.(*ast.IfStmt)
+			if !ok {
+				return true
+			}
+			hasSame := false
+			ast.Inspect(ifs.Cond, func(m ast.Node) bool {
+				if sel, ok := m.(*ast.SelectorExpr); ok && sel.Sel.Name == "SameFile" {
+					hasSame = true
+				}
+				return true
+			})
+			if hasSame {
+				found = true
+				for _, st := range ifs.Body.List {
+					if _, ok := st.(*ast.ReturnStmt); ok {
+						refuses = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	if !found || !refuses {
+		t.Fatal("ReadChecked does not refuse when os.SameFile says the opened file is not the inspected one")
 	}
 }
