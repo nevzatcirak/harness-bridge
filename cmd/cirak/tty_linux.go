@@ -17,6 +17,13 @@ func stdinIsTerminal() bool {
 	return err == nil
 }
 
+// stdoutIsTerminal reports whether standard output is a terminal. The token value is shown only then, so a
+// redirected or piped run (init | tee log, init > log) never puts it in a file.
+func stdoutIsTerminal() bool {
+	_, err := unix.IoctlGetTermios(int(os.Stdout.Fd()), unix.TCGETS)
+	return err == nil
+}
+
 // readPasswordNoEcho reads one line from the terminal with echo off and restores the terminal. The line is
 // never written anywhere by this function.
 func readPasswordNoEcho() (string, error) {

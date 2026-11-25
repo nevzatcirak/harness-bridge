@@ -28,21 +28,22 @@ var initNow = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 type probeCall struct{ url, user, password string }
 
 type ih struct {
-	t           *testing.T
-	base        string
-	out, errb   bytes.Buffer
-	runs        [][]string
-	probes      []openCodeProbe // answers in order; the last repeats
-	probeCalls  []probeCall
-	passwordTyp string
-	stage       string
-	tty         bool
-	stdin       string
-	svcUID      int // 0: the invoking user is the service user
-	svcName     string
-	env         map[string]string
-	runErr      error
-	randomBytes []byte
+	t                *testing.T
+	base             string
+	out, errb        bytes.Buffer
+	runs             [][]string
+	probes           []openCodeProbe // answers in order; the last repeats
+	probeCalls       []probeCall
+	passwordTyp      string
+	stage            string
+	tty              bool
+	stdin            string
+	svcUID           int // 0: the invoking user is the service user
+	svcName          string
+	stdoutRedirected bool // stdout is not a terminal although stdin is
+	env              map[string]string
+	runErr           error
+	randomBytes      []byte
 }
 
 func newIH(t *testing.T) *ih {
@@ -89,7 +90,7 @@ func (h *ih) deps() initDeps {
 	i := 0
 	return initDeps{
 		getenv: func(k string) string { return h.env[k] }, stdin: strings.NewReader(h.stdin), stdout: &h.out, stderr: &h.errb,
-		isTTY: h.tty, uid: os.Geteuid(), gid: os.Getegid(), now: func() time.Time { return initNow },
+		isTTY: h.tty, outTTY: h.tty && !h.stdoutRedirected, uid: os.Geteuid(), gid: os.Getegid(), now: func() time.Time { return initNow },
 		random: bytes.NewReader(h.randomBytes), lookup: svc,
 		probe: func(_ context.Context, u, user, pw string) openCodeProbe {
 			h.probeCalls = append(h.probeCalls, probeCall{u, user, pw})
@@ -413,7 +414,7 @@ func TestInitRootChecksPrintTheExactFixAndWriteNothing(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d\n%s", code, h.all())
 	}
-	fix := "chown root:cirak " + ws + " && chmod 0710 " + ws + " && setfacl -m u:cirak:rwx " + ws
+	fix := "chown 'root:cirak' " + qt(ws) + " && chmod 0710 " + qt(ws) + " && setfacl -m 'u:cirak:rwx' " + qt(ws)
 	if !strings.Contains(h.out.String(), "fix (init never applies it): "+fix) || !strings.Contains(h.out.String(), "must be owned by root or cirak") {
 		t.Fatalf("the exact fix is not printed:\n%s", h.out.String())
 	}
@@ -509,7 +510,7 @@ func TestInitSudoProbeIsReadOnlyAskedAndNeverInYes(t *testing.T) {
 		t.Fatalf("--yes: exit %d runs %v", code, h.runs)
 	}
 	// the operator is shown the command and says no
-	if h, code := mk("n", nil, false); code != 1 || len(h.runs) != 0 || !strings.Contains(h.out.String(), "sudo -u cirak test -r") {
+	if h, code := mk("n", nil, false); code != 1 || len(h.runs) != 0 || !strings.Contains(h.out.String(), "sudo -u 'cirak' test -r") {
 		t.Fatalf("declined: exit %d runs %v\n%s", code, h.runs, h.out.String())
 	}
 	// yes: exactly the two read-only tests, nothing else
@@ -560,12 +561,12 @@ func TestInitStagesAndPrintsInstallCommandsWhenTheUIDDiffers(t *testing.T) {
 	}
 	out := h.out.String()
 	for _, want := range []string{
-		"install -d -o cirak -g cirak -m 0700 " + filepath.Dir(cfg),
-		"install -d -o cirak -g cirak -m 0700 /var/lib/cirak/writer-locks",
-		"install -o cirak -g cirak -m 0600 " + filepath.Join(h.stage, "config.json") + " " + cfg,
-		"install -o cirak -g cirak -m 0600 " + filepath.Join(h.stage, "token") + " " + tokenPath,
-		"install -o cirak -g cirak -m 0600 " + filepath.Join(h.stage, "lifecycle.json") + " " + filepath.Join(h.base, "cfg", "lifecycle.json"),
-		"rm -r " + h.stage,
+		"install -d -o 'cirak' -g 'cirak' -m 0700 " + qt(filepath.Dir(cfg)),
+		"install -d -o 'cirak' -g 'cirak' -m 0700 " + qt("/var/lib/cirak/writer-locks"),
+		"install -o 'cirak' -g 'cirak' -m 0600 " + qt(filepath.Join(h.stage, "config.json")) + " " + qt(cfg),
+		"install -o 'cirak' -g 'cirak' -m 0600 " + qt(filepath.Join(h.stage, "token")) + " " + qt(tokenPath),
+		"install -o 'cirak' -g 'cirak' -m 0600 " + qt(filepath.Join(h.stage, "lifecycle.json")) + " " + qt(filepath.Join(h.base, "cfg", "lifecycle.json")),
+		"rm -r " + qt(h.stage),
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -588,7 +589,7 @@ func TestInitSystemDirectoryMustExist(t *testing.T) {
 	before := listTree(t, h.base)
 	code := h.init(args...)
 	dir := filepath.Dir(h.cfgPath())
-	if code != 1 || !strings.Contains(h.out.String(), "install -d -o cirak -g cirak -m 0700 "+dir) {
+	if code != 1 || !strings.Contains(h.out.String(), "install -d -o 'cirak' -g 'cirak' -m 0700 "+qt(dir)) {
 		t.Fatalf("exit %d\n%s", code, h.out.String())
 	}
 	if strings.Join(before, "\n") != strings.Join(listTree(t, h.base), "\n") {
@@ -610,7 +611,7 @@ func TestInitSystemDirectoryMustExist(t *testing.T) {
 	serviceLockDir = filepath.Join(h.base, "state", "writer-locks")
 	lockArgs := h.yesArgs("--service-user", "cirak")
 	before = listTree(t, h.base)
-	if code := h.init(lockArgs...); code != 1 || !strings.Contains(h.out.String(), "install -d -o cirak -g cirak -m 0700 "+serviceLockDir) || exists(h.cfgPath()) {
+	if code := h.init(lockArgs...); code != 1 || !strings.Contains(h.out.String(), "install -d -o 'cirak' -g 'cirak' -m 0700 "+qt(serviceLockDir)) || exists(h.cfgPath()) {
 		t.Fatalf("a missing lock directory: exit %d\n%s", code, h.all())
 	}
 	if strings.Join(before, "\n") != strings.Join(listTree(t, h.base), "\n") {
@@ -705,7 +706,7 @@ func TestInitRefusesSymlinksEverywhere(t *testing.T) {
 	}
 	args := h.yesArgs()
 	args[len(args)-1] = filepath.Join(link, "config.json")
-	args[7] = filepath.Join(link, "token")
+	args[6] = filepath.Join(link, "token")
 	if code := h.init(args...); code == 0 || exists(filepath.Join(real, "config.json")) || exists(filepath.Join(real, "token")) {
 		t.Fatalf("a symlinked directory was followed (exit %d)", code)
 	}
@@ -981,3 +982,7 @@ func TestNoSymlinkInExistingPrefix(t *testing.T) {
 		}
 	}
 }
+
+// qt quotes a value the way a POSIX shell reads it back; written independently of the production helper so a
+// test of the printed commands does not call the code it checks.
+func qt(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }

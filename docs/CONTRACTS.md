@@ -234,13 +234,18 @@ sets up **local mode** and installs nothing: no service unit or plist, no `docto
   `sudo -u <user> test -r/-x` probe runs only after the operator agrees, never with `--yes`) and have a readable
   `.git`. A failing root stops init **before anything is written** and prints the exact fix
   (`chown root:<group> <root> && chmod 0710 <root> && setfacl -m u:<user>:rwx <root>`). **init never applies
-  chown, chmod or setfacl; it only prints them.**
+  chown, chmod or setfacl; it only prints them.** Every printed command is for the operator to run as root and
+  is printed without a confirmation prompt (ADR-027 section 2 item 2 asks for one; that wording is the
+  maintainer's to amend). Every path, user and group in a printed command is single-quoted for a POSIX shell, and a
+  root, config, token, lifecycle or password path with a newline, carriage return or NUL is refused up front
+  (usage error, nothing written or staged).
 - **Token:** generated (64 base64url characters from `crypto/rand`) only when `--token-file` names a **new**
   file, created `0600` with `O_EXCL|O_NOFOLLOW`; an existing file is validated (the `readSecret` rule, at least
   43 characters) and referenced, never regenerated or shown. The deadline is `+7 days` (`--expires` must stay
   within `168h`) and `limits.token_max_lifetime: "168h"` is written with it; local mode records the deadline and
-  enforces no expiry. The token is shown **once in the whole run, only on a terminal**, never with `--yes`, never
-  in the config, a log or an error.
+  enforces no expiry. The token is shown **once in the whole run, only on a terminal**: standard input and
+  standard output must both be terminals (so `init | tee log` and `init > log` never put it in a file), and never
+  with `--yes`, never in the config, a log or an error; otherwise its file path is printed.
 - **Ownership:** run as the service user (or, with no `--service-user`, as yourself). When the invoking uid is
   not the service uid, init writes **nothing at the targets**: it stages the files in a private `0700`
   directory and prints the `install -d` / `install -o <user> -g <group> -m 0600 <src> <dst>` commands. A service
@@ -251,8 +256,10 @@ sets up **local mode** and installs nothing: no service unit or plist, no `docto
   made and the new bytes replace the file through a fresh `O_EXCL` temporary file and a rename; a symlinked
   target is refused. A failing step removes the files this run created and restores a file it had replaced (the
   backup stays).
-- The written config is checked with the S1 `config check` and must come out **clean** (any warning or
-  refusal makes init fail); init then prints the connector values (URL, `Authorization: Bearer`) and the next
+- The written config is checked with the S1 `config check`, run with an empty environment (it checks the file
+  init wrote, not the shell's variables), and must come out **clean** (any warning or refusal makes init fail;
+  **A failed check keeps the files init wrote**, reported above it, so fix the cause and run init again with
+  `--force`, or run `config check` yourself); init then prints the connector values (URL, `Authorization: Bearer`) and the next
   steps.
 - The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
   surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.

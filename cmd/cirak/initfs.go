@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -142,4 +143,11 @@ func noSymlinkInExistingPrefix(path string) error {
 		return fmt.Errorf("%s has a symbolic link in its path", path)
 	}
 	return nil
+}
+
+// shq quotes one value for a POSIX shell: single quotes around it, an embedded single quote written as '\”.
+// Every value init interpolates into a command it PRINTS for root goes through it, so a path with a space or a
+// shell metacharacter cannot split the command or run another one.
+func shq(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

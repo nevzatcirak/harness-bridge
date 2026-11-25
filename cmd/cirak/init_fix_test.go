@@ -139,7 +139,7 @@ func TestInitStagedRefusesSymlinksInTheTargets(t *testing.T) {
 		h := stagedIH(t)
 		d := h.dir("real", 0o700)
 		code := h.init("--yes", "--root", h.dir("ws", 0o755), "--session", "ses_one", "--service-user", "cirak", "--config", filepath.Join(d, "new", "config.json"), "--token-file", filepath.Join(d, "new", "token"))
-		if code != 0 || !strings.Contains(h.out.String(), "install -d -o cirak -g cirak -m 0700 "+filepath.Join(d, "new")) {
+		if code != 0 || !strings.Contains(h.out.String(), "install -d -o 'cirak' -g 'cirak' -m 0700 "+qt(filepath.Join(d, "new"))) {
 			t.Fatalf("exit %d\n%s", code, h.all())
 		}
 	})

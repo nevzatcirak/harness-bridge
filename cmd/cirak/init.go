@@ -127,7 +127,8 @@ type initDeps struct {
 	getenv         func(string) string
 	stdin          io.Reader
 	stdout, stderr io.Writer
-	isTTY          bool
+	isTTY          bool // standard input is a terminal
+	outTTY         bool // standard output is a terminal: the token value is shown only then
 	uid, gid       int
 	now            func() time.Time
 	random         io.Reader
@@ -265,6 +266,9 @@ func (w *wizard) run() error {
 			return err
 		}
 	}
+	if err := w.rejectUnsafePaths(); err != nil {
+		return err
+	}
 	w.listen, w.ocURL = o.listen, o.opencodeURL
 	if w.listen == "" {
 		w.listen = defaultListen
@@ -299,6 +303,20 @@ func (w *wizard) run() error {
 		return err
 	}
 	return w.finish()
+}
+
+// rejectUnsafePaths refuses, before anything is probed, written or printed, a path that holds a newline, a
+// carriage return or a NUL: init prints these paths inside commands for root, and such a character cannot be
+// shown on one line safely even when quoted.
+func (w *wizard) rejectUnsafePaths() error {
+	all := append(append([]string(nil), w.o.roots...), w.o.lifecycleRoots...)
+	all = append(all, w.cfgPath, w.tokenPath, w.lcPath, w.pwPath, w.lockDir)
+	for _, p := range all {
+		if strings.ContainsAny(p, "\n\r\x00") {
+			return usagef("a path contains a newline, a carriage return or a NUL: refused before anything was written")
+		}
+	}
+	return nil
 }
 
 // resolveUser finds the service user. With no --service-user the service is the invoking user (local mode).
@@ -493,7 +511,7 @@ func (w *wizard) checkRoots() error {
 		for _, p := range problems {
 			w.say("root %s: %s", r, p)
 		}
-		w.say("  fix (init never applies it): chown root:%s %s && chmod 0710 %s && setfacl -m u:%s:rwx %s", w.svc.Group, r, r, w.svc.Name, r)
+		w.say("  fix (init never applies it): chown %s %s && chmod 0710 %s && setfacl -m %s %s", shq("root:"+w.svc.Group), shq(r), shq(r), shq("u:"+w.svc.Name+":rwx"), shq(r))
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("%d root(s) cannot be used as they are; nothing was written", len(bad))
@@ -585,7 +603,7 @@ func (w *wizard) sudoProbe(path string, tests ...string) bool {
 	}
 	var cmds []string
 	for _, t := range tests {
-		cmds = append(cmds, fmt.Sprintf("sudo -u %s test %s %s", w.svc.Name, t, path))
+		cmds = append(cmds, fmt.Sprintf("sudo -u %s test %s %s", shq(w.svc.Name), t, shq(path)))
 	}
 	w.say("  The mode bits do not grant it. A read-only probe can check an ACL:\n    %s", strings.Join(cmds, "\n    "))
 	if ok, err := w.askYes("  Run the probe?"); err != nil || !ok {
@@ -775,7 +793,7 @@ func (w *wizard) prepareDirs() error {
 			continue
 		} else if !w.operator {
 			w.say("directory %s: %v", dir, err)
-			w.say("  create it first (init never applies this): install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, dir)
+			w.say("  create it first (init never applies this): install -d -o %s -g %s -m 0700 %s", shq(w.svc.Name), shq(w.svc.Group), shq(dir))
 			return errors.New("a target directory is not ready; nothing was written")
 		}
 		if err := mkdirPrivate(dir); err != nil {
@@ -795,7 +813,7 @@ func (w *wizard) prepareDirs() error {
 			return errors.New("the writer lock directory is not ready; nothing was written")
 		case !exists:
 			w.say("directory %s does not exist yet", w.lockDir)
-			w.say("  create it first (init never applies this): install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, w.lockDir)
+			w.say("  create it first (init never applies this): install -d -o %s -g %s -m 0700 %s", shq(w.svc.Name), shq(w.svc.Group), shq(w.lockDir))
 			return errors.New("the writer lock directory is not ready; nothing was written")
 		}
 	}
@@ -844,6 +862,7 @@ func (w *wizard) stage(cfg, lc []byte) error {
 	if w.typedPw != "" {
 		targets = append(targets, w.pwPath)
 	}
+	targets = append(targets, w.lockDir) // printed as "install -d" for root as well
 	for _, t := range targets {
 		if err := noSymlinkInExistingPrefix(t); err != nil {
 			return fmt.Errorf("%w; nothing was staged and no command was printed", err)
@@ -878,13 +897,13 @@ func (w *wizard) stage(cfg, lc []byte) error {
 	w.say("The invoking user (uid %d) is not the service user %s (uid %d), so init writes nothing the service would refuse.", w.d.uid, w.svc.Name, w.svc.UID)
 	w.say("The files are staged in %s (private, mode 0700). Run as root (init never applies these):", dir)
 	for _, d := range uniq(filepath.Dir(w.cfgPath), filepath.Dir(w.tokenPath)) {
-		w.say("  install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, d)
+		w.say("  install -d -o %s -g %s -m 0700 %s", shq(w.svc.Name), shq(w.svc.Group), shq(d))
 	}
-	w.say("  install -d -o %s -g %s -m 0700 %s", w.svc.Name, w.svc.Group, w.lockDir)
+	w.say("  install -d -o %s -g %s -m 0700 %s", shq(w.svc.Name), shq(w.svc.Group), shq(w.lockDir))
 	for _, it := range items {
-		w.say("  install -o %s -g %s -m 0600 %s %s", w.svc.Name, w.svc.Group, filepath.Join(dir, it.name), it.dst)
+		w.say("  install -o %s -g %s -m 0600 %s %s", shq(w.svc.Name), shq(w.svc.Group), shq(filepath.Join(dir, it.name)), shq(it.dst))
 	}
-	w.say("Then remove the staging directory (it holds the token): rm -r %s", dir)
+	w.say("Then remove the staging directory (it holds the token): rm -r %s", shq(dir))
 	w.connector()
 	w.say("Then: cirak config check --config %s", w.cfgPath)
 	return nil
@@ -925,10 +944,17 @@ func (w *wizard) connector() {
 	w.say("  URL:    http://%s/mcp", w.listen)
 	w.say("  Header: Authorization: Bearer <token>")
 	switch {
-	case w.newToken && w.d.isTTY && !w.o.yes && !w.tokenShown:
+	case w.newToken && w.d.isTTY && w.d.outTTY && !w.o.yes && !w.tokenShown:
 		w.tokenShown = true
 		w.say("  Token (shown once, it is in %s and nowhere else; run `set +o history` before you paste it):", w.tokenPath)
 		w.say("%s", w.token)
+	case w.newToken && !w.o.yes && w.d.isTTY && !w.d.outTTY:
+		// stdin is a terminal but stdout is redirected (init | tee log): the value would land in a file
+		if w.stagedToken != "" {
+			w.say("  Token: staged at %s, and put at %s by the install command above (not printed: standard output is not a terminal)", w.stagedToken, w.tokenPath)
+		} else {
+			w.say("  Token: read it from %s (not printed: standard output is not a terminal)", w.tokenPath)
+		}
 	case w.stagedToken != "":
 		w.say("  Token: staged at %s, and put at %s by the install command above (it is not printed)", w.stagedToken, w.tokenPath)
 	default:
@@ -959,7 +985,7 @@ func productionInit(args []string, getenv func(string) string, stdin io.Reader, 
 func productionDeps(getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) initDeps {
 	return initDeps{
 		getenv: getenv, stdin: stdin, stdout: stdout, stderr: stderr,
-		isTTY: stdinIsTerminal(), uid: os.Geteuid(), gid: os.Getegid(), now: time.Now, random: rand.Reader,
+		isTTY: stdinIsTerminal(), outTTY: stdoutIsTerminal(), uid: os.Geteuid(), gid: os.Getegid(), now: time.Now, random: rand.Reader,
 		lookup: lookupUser, probe: probeOpenCode, readPassword: readPasswordNoEcho,
 		run:      prodRun,
 		stageDir: func() (string, error) { return os.MkdirTemp("", "cirak-init-") },
