@@ -169,6 +169,50 @@ Token lifetime (ADR-019 option (2), accepted 2026-11-06):
   exactly `CIRAK_TOKEN_MAX_LIFETIME` after startup is accepted, a later one is
   rejected, and an expiry at or before startup is rejected.
 
+Remote-mode trigger and the local deadline (ADR-027 S1, amends the ADR-019 trigger sentence only):
+- Remote mode is chosen by a public origin (`CIRAK_PUBLIC_ORIGIN`), a principal
+  (`CIRAK_PRINCIPAL`) or a TLS certificate or key (`CIRAK_TLS_CERT`, `CIRAK_TLS_KEY`),
+  each alone, and then needs all of the checks above. `CIRAK_TOKEN_EXPIRES` alone no longer
+  implies remote mode. A certificate or key alone, or a partial pair, is still refused.
+- `CIRAK_TOKEN_EXPIRES` alone stays local: it must be RFC3339 (otherwise startup
+  fails), it is a rotation deadline that is recorded and never enforced (local mode has
+  no runtime expiry, ADR-019), and an already passed value logs one warning
+  (`CIRAK_TOKEN_EXPIRES has passed ...`) that contains no value. It is not bounded by
+  `CIRAK_TOKEN_MAX_LIFETIME`; that bound applies to remote mode.
+- The network boundary does not move: a non-loopback listen address without remote mode is
+  still a startup refusal, with or without `CIRAK_TOKEN_EXPIRES`.
+
+## Configuration file (ADR-027 S1)
+
+`cirak` reads one optional JSON file (`internal/config`, standard library only). With no file the
+daemon reads the environment exactly as before; every start logs `config: using <path>` or
+`config: no config file (environment only)`, never a value.
+- **Precedence, per setting:** flag (`--config`, `--listen`, `--read-only`, `--token-file`), then the
+  environment (`CIRAK_*`, plus the legacy names of the ADR-026 window), then the file, then the default.
+- **Location:** `--config`, else `CIRAK_CONFIG` (it must exist), else the first existing of
+  `/etc/cirak/config.json` and `$XDG_CONFIG_HOME/cirak/config.json` (`~/.config/cirak/config.json`).
+  A file in the current directory is never read.
+- **Strict file:** at most 1 MiB, one JSON object, no unknown key, no duplicate key, no `null`, every
+  value of its key's type, paths absolute and clean. `token.value` and `harness.opencode.password` do
+  not exist: a secret is only a file (`token.file`, `harness.opencode.password_file`, read by the
+  unchanged `readSecret` rule) or a systemd credential name (`token.credential`,
+  `harness.opencode.password_credential`, resolved only under `$CREDENTIALS_DIRECTORY`). The file, the
+  credential and an inline `CIRAK_TOKEN` are mutually exclusive.
+- **The file itself:** absolute canonical path, no symlink in any component, a regular file owned by the
+  process user, mode exactly `0600`, parent directory not group or world writable; refused otherwise.
+- **Every key except `harness.claude.lang` refuses a differing environment/file pair** at startup,
+  naming the key and the variable, never a value; an equal pair is accepted with one warning. A file `""`
+  or `[]` is an explicit unset, so a differing environment value is a refusal too. Lists replace, never
+  merge. `harness.claude.lang` is display-only and keeps environment-wins.
+- **ACL IDs** are the bare native IDs (`ses_...`, `claudecode:<uuid>`); an `opencode:` prefix is refused.
+- **`cirak config check [--config path] [flags] [--print-effective]`:** static, no network, no listener,
+  nothing written; it runs the daemon's own validators on the effective configuration. Exit `0` clean,
+  `1` warnings or unverified items (for example a token that exists only in a unit's `EnvironmentFile=`
+  or as a systemd credential, which a check outside the unit cannot see), `2` refused. Output names keys
+  and files, never a value; a secret is `set` or `unset`.
+- Not in this slice: `cirak init`, `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the
+  service unit (ADR-027 S2 to S4).
+
 
 Optional `CIRAK_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
 send_prompt and interrupt_execution before native mutation. Default/0 preserves

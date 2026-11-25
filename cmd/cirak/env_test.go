@@ -211,8 +211,9 @@ func TestMainResolvesTheEnvironmentFirst(t *testing.T) {
 	}
 	for _, m := range []struct{ name, old, new string }{
 		{"a direct os.Getenv read comes back", "allSessions := make([]string, 0, len(policy.Sessions))", "_ = os.Getenv(\"CIRAK_WRITER_LOCK_DIR\")\n\tallSessions := make([]string, 0, len(policy.Sessions))"},
-		{"loadStartup runs before the scan", "env, warnings, err := cirakEnv(", "token0, cfg0, err0 := loadStartup(os.Getenv)\n\t_, _, _ = token0, cfg0, err0\n\tenv, warnings, err := cirakEnv("},
-		{"the scan result is not checked", "env, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}", "env, warnings, _ := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))"},
+		{"loadStartup runs before the scan", "envOnly, warnings, err := cirakEnv(", "token0, cfg0, err0 := loadStartup(os.Getenv)\n\t_, _, _ = token0, cfg0, err0\n\tenvOnly, warnings, err := cirakEnv("},
+		{"a reader runs before the config layer", "token, cfg, err := loadStartup(env)", "token, cfg, err := loadStartup(envOnly)"},
+		{"the scan result is not checked", "envOnly, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}", "envOnly, warnings, _ := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))"},
 	} {
 		src := string(raw)
 		if strings.Count(src, m.old) != 1 {
@@ -285,7 +286,8 @@ func mainEnvProblems(src string) []string {
 				inScan := false
 				ast.Inspect(body, func(m ast.Node) bool {
 					if c, ok := m.(*ast.CallExpr); ok {
-						if cid, ok := c.Fun.(*ast.Ident); ok && cid.Name == "cirakEnv" {
+						// runConfig performs its own cirakEnv scan before anything else (config check).
+						if cid, ok := c.Fun.(*ast.Ident); ok && (cid.Name == "cirakEnv" || cid.Name == "runConfig") {
 							for _, a := range c.Args {
 								if a == ast.Expr(x) {
 									inScan = true
@@ -305,5 +307,43 @@ func mainEnvProblems(src string) []string {
 	if firstUse != token.NoPos && firstUse < scan {
 		problems = append(problems, "a reader of the environment runs before the conflict scan")
 	}
+	// ADR-027: the config layer (flag, environment, file, default) is resolved once, before any reader, and the
+	// readers receive its result, never the environment-only view.
+	loadPos, firstServe := token.NoPos, token.NoPos // runAdmin is a client and keeps the environment-only view
+	ast.Inspect(body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok {
+				if id.Name == "loadEffective" && loadPos == token.NoPos {
+					loadPos = c.Pos()
+				}
+				if readers[id.Name] && id.Name != "runAdmin" && firstServe == token.NoPos {
+					firstServe = c.Pos()
+				}
+			}
+		}
+		return true
+	})
+	switch {
+	case loadPos == token.NoPos:
+		problems = append(problems, "main never calls loadEffective")
+	case firstServe != token.NoPos && firstServe < loadPos:
+		problems = append(problems, "a reader of the environment runs before the config layer")
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := c.Fun.(*ast.Ident)
+		if !ok || !readers[id.Name] || id.Name == "runAdmin" {
+			return true
+		}
+		for _, a := range c.Args {
+			if arg, ok := a.(*ast.Ident); ok && arg.Name == "envOnly" {
+				problems = append(problems, id.Name+" is given the environment-only view instead of the config layer's")
+			}
+		}
+		return true
+	})
 	return problems
 }

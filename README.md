@@ -31,6 +31,14 @@ go build -o /tmp/cirak ./cmd/cirak
 /tmp/cirak version   # the module version, revision and toolchain
 ```
 
+**Configuration file (ADR-027 S1).** Every setting below can also live in one JSON file
+(`/etc/cirak/config.json`, `$XDG_CONFIG_HOME/cirak/config.json`, `--config path` or `CIRAK_CONFIG`; never a file
+in the current directory). The order is flag, environment, file, default; a setting that is in both the
+environment and the file with different values stops the start (it names the key, never a value). The file is
+mode `0600`, holds no secret (only a token file or a systemd credential name), and is checked before a restart
+with `cirak config check` (exit 0 clean, 1 warnings, 2 refused). With no file nothing changes. See
+[CONTRACTS](docs/CONTRACTS.md#configuration-file-adr-027-s1) and [ADR-027](docs/adr/ADR-027-config-file-and-init.md).
+
 `CIRAK_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
 `CIRAK_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
 required. The single bearer token represents the local principal with that ACL.
