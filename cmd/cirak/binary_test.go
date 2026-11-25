@@ -320,3 +320,70 @@ func TestBinaryConfigCheck(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+// ---- ADR-027 S2: cirak init, as the real process ----
+
+// The config that `cirak init --yes` writes is the config the daemon starts from: init, then config check,
+// then a real start on a free port. The OpenCode URL is a closed port, never the real :4096.
+func TestBinaryInitWritesAConfigTheDaemonStartsFrom(t *testing.T) {
+	bin := builtBinary(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	base := privDir(t)
+	ws := filepath.Join(base, "ws")
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, tok := filepath.Join(base, "cfg", "config.json"), filepath.Join(base, "cfg", "token")
+	env := []string{"XDG_STATE_HOME=" + filepath.Join(base, "state"), "XDG_CONFIG_HOME=" + filepath.Join(base, "xdg")}
+	out, code := run(t, bin, env, "init", "--yes", "--root", ws, "--session", "ses_bin", "--token-file", tok, "--config", cfg, "--listen", addr, "--opencode-url", "http://127.0.0.1:1")
+	if code != 0 || !strings.Contains(out, "result: clean") || !strings.Contains(out, "OpenCode: not reachable") {
+		t.Fatalf("init: exit %d\n%s", code, out)
+	}
+	token := strings.TrimSpace(readF(t, tok))
+	if len(token) != 64 || strings.Contains(out, token) {
+		t.Fatalf("token length %d, or it was printed by --yes", len(token))
+	}
+	if out, code = run(t, bin, nil, "config", "check", "--config", cfg); code != 0 {
+		t.Fatalf("config check: exit %d\n%s", code, out)
+	}
+	c := exec.Command(bin, "--config", cfg)
+	c.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	var buf lockedBuffer
+	c.Stdout, c.Stderr = &buf, &buf
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill() })
+	var status int
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		req, _ := http.NewRequest("POST", "http://"+addr+"/mcp", strings.NewReader("{}"))
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			status = resp.StatusCode
+			resp.Body.Close()
+			break
+		}
+	}
+	_ = c.Process.Signal(syscall.SIGTERM)
+	_ = c.Wait()
+	if status != http.StatusUnauthorized || !strings.Contains(buf.String(), "config: using "+cfg) {
+		t.Fatalf("the daemon did not start from the init config (status %d):\n%s", status, buf.String())
+	}
+	if strings.Contains(buf.String(), token) {
+		t.Fatal("the token reached the daemon log")
+	}
+}
+
+func TestBinaryInitRefusals(t *testing.T) {
+	bin := builtBinary(t)
+	for _, args := range [][]string{{"init"}, {"init", "--yes"}, {"init", "--remote"}, {"init", "--install-service"}, {"init", "--tls-cert", "/a"}, {"init", "stray"}} {
+		out, code := run(t, bin, nil, args...)
+		if code != 2 {
+			t.Errorf("%v: exit %d\n%s", args, code, out)
+		}
+	}
+}

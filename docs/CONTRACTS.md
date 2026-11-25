@@ -210,8 +210,43 @@ daemon reads the environment exactly as before; every start logs `config: using 
   `1` warnings or unverified items (for example a token that exists only in a unit's `EnvironmentFile=`
   or as a systemd credential, which a check outside the unit cannot see), `2` refused. Output names keys
   and files, never a value; a secret is `set` or `unset`.
-- Not in this slice: `cirak init`, `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the
-  service unit (ADR-027 S2 to S4).
+- Not in the config slice: `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the service
+  unit (ADR-027 S3 and S4).
+
+### `cirak init` (ADR-027 S2)
+
+`cirak init [--yes] [--listen addr] [--root path]... [--session id]... [--lifecycle-root path]...
+[--opencode-url url] [--service-user name] [--config path] [--token-file path] [--expires RFC3339] [--force]`
+sets up **local mode** and installs nothing: no service unit or plist, no `doctor`, no remote or TLS path
+(`--remote`, `--tls-cert`, `--tls-key`, `--install-service` are refused with a usage error).
+- **Interactive** needs a terminal; **`--yes`** never prompts and needs `--root`, `--session` and `--token-file`.
+- **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
+  as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
+  goes only to a `0600` `opencode-password` file that the config references, never to the config, argv or a log.
+  An unreachable server is reported, not fatal.
+- **Roots** (workspace and lifecycle) must be canonical, owned by root or the service user, readable and
+  traversable by the service user (mode bits; an ACL is not evaluated, and the optional
+  `sudo -u <user> test -r/-x` probe runs only after the operator agrees, never with `--yes`) and have a readable
+  `.git`. A failing root stops init **before anything is written** and prints the exact fix
+  (`chown root:<group> <root> && chmod 0710 <root> && setfacl -m u:<user>:rwx <root>`). **init never applies
+  chown, chmod or setfacl; it only prints them.**
+- **Token:** generated (64 base64url characters from `crypto/rand`) only when `--token-file` names a **new**
+  file, created `0600` with `O_EXCL|O_NOFOLLOW`; an existing file is validated (the `readSecret` rule, at least
+  43 characters) and referenced, never regenerated or shown. The deadline is `+7 days` (`--expires` must stay
+  within `168h`) and `limits.token_max_lifetime: "168h"` is written with it; local mode records the deadline and
+  enforces no expiry. The token is shown **once in the whole run, only on a terminal**, never with `--yes`, never
+  in the config, a log or an error.
+- **Ownership:** run as the service user (or, with no `--service-user`, as yourself). When the invoking uid is
+  not the service uid, init writes **nothing at the targets**: it stages the files in a private `0700`
+  directory and prints the `install -d` / `install -o <user> -g <group> -m 0600 <src> <dst>` commands. A service
+  user's system directory must already exist (otherwise `install -d` is printed and init stops).
+- **Existing files:** an existing config or lifecycle file needs `--force`; a `.bak-<UTC stamp>` copy (`0600`) is
+  made and the new bytes replace the file through a fresh `O_EXCL` temporary file and a rename; a symlinked
+  target is refused. A failing step removes the files this run created.
+- The written config is checked with the S1 `config check` (it must not be refused); init then prints the
+  connector values (URL, `Authorization: Bearer`) and the next steps.
+- The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
+  surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
 
 
 Optional `CIRAK_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for

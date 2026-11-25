@@ -286,8 +286,9 @@ func mainEnvProblems(src string) []string {
 				inScan := false
 				ast.Inspect(body, func(m ast.Node) bool {
 					if c, ok := m.(*ast.CallExpr); ok {
-						// runConfig performs its own cirakEnv scan before anything else (config check).
-						if cid, ok := c.Fun.(*ast.Ident); ok && (cid.Name == "cirakEnv" || cid.Name == "runConfig") {
+						// runConfig performs its own cirakEnv scan before anything else (config check); init reads only paths and the
+						// OpenCode credential file names, never a CIRAK_ value.
+						if cid, ok := c.Fun.(*ast.Ident); ok && (cid.Name == "cirakEnv" || cid.Name == "runConfig" || cid.Name == "productionInit") {
 							for _, a := range c.Args {
 								if a == ast.Expr(x) {
 									inScan = true
