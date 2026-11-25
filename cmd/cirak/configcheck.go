@@ -98,10 +98,16 @@ func runConfig(args []string, getenv func(string) string, environ []string, uid 
 }
 
 func checkConfiguration(rep *report, f serveFlags, getenv func(string) string, environ []string, uid int, printEffective bool) {
+	checkConfigurationFull(rep, f, getenv, environ, uid, printEffective)
+}
+
+// checkConfigurationFull is checkConfiguration that also returns the effective environment and the loaded
+// configuration (nil when the configuration was refused), so `cirak doctor` can add its own checks to the same view.
+func checkConfigurationFull(rep *report, f serveFlags, getenv func(string) string, environ []string, uid int, printEffective bool) (func(string) string, *loaded) {
 	env0, legacy, err := cirakEnv(getenv, legacyPhaseFor(version.Version()))
 	if err != nil {
 		rep.refuse("environment: %v", err)
-		return
+		return nil, nil
 	}
 	for _, w := range legacy {
 		rep.warn("%s", w)
@@ -109,7 +115,7 @@ func checkConfiguration(rep *report, f serveFlags, getenv func(string) string, e
 	ld, err := loadEffective(f, env0, uint32(uid), processHome)
 	if err != nil {
 		rep.refuse("%v", err)
-		return
+		return nil, nil
 	}
 	fmt.Fprintln(rep.out, ld.describePath())
 	for _, w := range ld.warnings {
@@ -167,6 +173,7 @@ func checkConfiguration(rep *report, f serveFlags, getenv func(string) string, e
 			fmt.Fprintf(rep.out, "  %-40s %-12s %s\n", e.Key, e.Source, e.Value)
 		}
 	}
+	return env, ld
 }
 
 func unresolved(ld *loaded, key string) bool {

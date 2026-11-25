@@ -213,15 +213,15 @@ daemon reads the environment exactly as before; every start logs `config: using 
   (`harness.opencode.url`, `server.public_origin`) is shown as scheme and host only, userinfo as `***@`, a path,
   query or fragment not shown, and a value that is not a plain URL not echoed; any value with a control or
   unprintable character is shown quoted, so it cannot forge a line.
-- Not in the config slice: `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the service
-  unit (ADR-027 S3 and S4).
+- Not in the config slice: `config import`, and `--from-unit`/`--env-file`/`--as` on `config check` (ADR-027
+  S4; `cirak doctor` has `--from-unit` and `--env-file`, see below).
 
 ### `cirak init` (ADR-027 S2)
 
 `cirak init [--yes] [--listen addr] [--root path]... [--session id]... [--lifecycle-root path]...
 [--opencode-url url] [--service-user name] [--config path] [--token-file path] [--expires RFC3339] [--force]`
-sets up **local mode** and installs nothing: no service unit or plist, no `doctor`, no remote or TLS path
-(`--remote`, `--tls-cert`, `--tls-key`, `--install-service` are refused with a usage error).
+sets up **local mode**: no remote or TLS path (`--remote`, `--tls-cert`, `--tls-key` are refused with a usage
+error); a service file only with `--install-service` (below). It never starts or loads a service.
 - **Interactive** needs a terminal; **`--yes`** never prompts and needs `--root`, `--session` and `--token-file`.
 - **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
   as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
@@ -263,6 +263,69 @@ sets up **local mode** and installs nothing: no service unit or plist, no `docto
   steps.
 - The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
   surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
+
+### Service install (ADR-027 S3)
+
+`cirak init --install-service [--service-user name] [--launch-daemon] [--claude-home path] [--force]` renders a
+service file and places it by the same pattern as the config files; `--no-service` (the default) installs none.
+**init never runs `systemctl`, `launchctl`, `sudo`, `chown` or `chmod` for it** (an AST test pins that the service
+code has no exec call): the reload and start commands are printed, quoted, for the operator.
+- **Linux (systemd):** needs `--service-user` and root to write `/etc/systemd/system`. The up-front line says so. If
+  the invoker can write the directory the file is written there (`0644`, exclusively); otherwise it is staged in a
+  private directory and the quoted `install -d` / `install -o root -g root -m 0644` command is printed.
+  - **No packaged unit** (`/usr/lib/systemd/system/cirak.service` absent): the full unit `cirak.service`: `User=`
+    and `Group=` of the service user, `ExecStart=/usr/bin/cirak` (bare `cirak` is `cirak serve`),
+    `Environment=CIRAK_CONFIG=`, `StateDirectory=cirak cirak/writer-locks cirak/overlay` with mode `0700` (the
+    writer lock is persistent, never under `/run`), `RuntimeDirectory=cirak-admin cirak-dashboard` with mode
+    `0700`, `LoadCredential=token:<token file>`, `ProtectSystem=strict`, `PrivateTmp=yes`,
+    `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` and `NoNewPrivileges=yes`. The unit's header comment
+    states the split: `LoadCredential=`, `RuntimeDirectory=` and `StateDirectory=` are **proven live** (F-H5-3),
+    the hardening keys are **proposed**, not verified on a live host. The config then holds
+    `token.credential: "token"` and no `token.file`.
+  - **Packaged unit present:** only the drop-in `/etc/systemd/system/cirak.service.d/zz-cirak-init.conf` (`CIRAK_CONFIG`,
+    and the credential list reset and set to this host's token file); never a second `cirak.service` that would
+    shadow the package (an existing one is warned about and left alone). The config names neither `token.file` nor
+    `token.credential`: the packaged unit supplies the token file.
+  - **Claude adapter** (`--claude-home path`): `NoNewPrivileges=yes` is **omitted** (the adapter child runs under
+    `sudo -u hbclaude`, and sudo is setuid), the drop-in sets `NoNewPrivileges=no`, and the chosen form is
+    `ProtectHome=off` with `ReadWritePaths=<claude home>`; the unit says which it chose.
+- **macOS (launchd):** a `LaunchAgent` for you by default (`~/Library/LaunchAgents/dev.cirak.agent.plist`, no root,
+  logs under `~/Library/Logs/cirak`), or with `--launch-daemon --service-user` a `LaunchDaemon`
+  (`/Library/LaunchDaemons/dev.cirak.daemon.plist`, root-owned, so staged unless you can write it). `KeepAlive`,
+  `RunAtLoad`, `CIRAK_CONFIG` in the environment; there is no credential equivalent, so the config keeps `token.file`
+  (a `0600` file of the run user).
+- A path or user that a service file cannot hold without quoting (a space, a quote, a backslash, `%`, `$`, `;`) is
+  refused up front. An existing service file needs `--force` and gets a `0600` backup, in every flow.
+- The generated config is checked with the service's view of the token: a private copy in a temporary
+  credentials directory (the full unit) or `CIRAK_TOKEN_FILE` (the packaged unit), removed afterwards, so the check
+  can come out clean instead of `UNVERIFIED`.
+- Not done by this release: a real systemd or launchd host was not exercised (UNVERIFIED), the unit's
+  `ExecStart` is fixed at `/usr/bin/cirak`, and the service is never started by init.
+
+### `cirak doctor` (ADR-027 S3)
+
+`cirak doctor [--config path] [--listen addr] [--read-only] [--token-file path] [--from-unit name | --env-file path]
+[--smoke]`: read-only diagnostics, safe to paste. It runs everything `config check` runs, always prints the
+effective settings with their source, then adds: the token's recorded deadline; a TLS certificate's expiry (a key
+only by presence and mode); the live OpenCode reads (`GET /session/status` and `GET /session`: a 401 or 403 is a
+credential problem and fails, an unreachable server warns, the version is `unknown`); the admin and dashboard
+sockets (private directory, `srw-------`, a stale-socket note) and whether anything listens; each lifecycle root
+(owner, `r-x`, readable `.git`) and the overlay directory; duplicate or nested ACL entries and the Claude wrapper
+(stat only, its content is never read); and the names of the environment variables in effect.
+- Exit `0` all checks pass, `1` warnings or unverified items, `2` a check failed. It starts no listener, writes
+  nothing, restarts nothing, and prints no token, password, key, certificate content or free-text provider error.
+- **`--from-unit name`** reads what the unit would run with: `systemctl show -p Environment -p EnvironmentFiles -p
+  UnsetEnvironment`, then the files it names, merged with systemd's order (`EnvironmentFile=` overrides
+  `Environment=`; `UnsetEnvironment=` removes). The paths of the files actually read are printed, never a value. A
+  missing file is skipped only when its entry is optional (`-`-prefixed); an unreadable or unparseable file, a line
+  that is not `NAME=VALUE`, or an unexpanded specifier such as `%d` is an **error** that stops the command, never an
+  empty source. Run it as root or as a user that can read every file. `--env-file path` is the explicit alternative.
+  The `systemctl show` property formats were taken from systemd's documentation, not a live host: UNVERIFIED.
+- **`--smoke`** makes one bounded `initialize` and `tools/list` call against the **already running** local endpoint
+  (a client call: no prompt, no mutation, no listener). The surface must match the configuration: the 11 base tools,
+  `reply_permission` unless the relay is `off`, `list_catalog` and `create_session` with a lifecycle config (the
+  archive trio is allowed with an overlay); a missing tool or a wider surface fails, no answer warns, a token the
+  process cannot see is `UNVERIFIED`.
 
 
 Optional `CIRAK_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for

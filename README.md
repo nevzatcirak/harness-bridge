@@ -41,8 +41,14 @@ with `cirak config check` (exit 0 clean, 1 warnings, 2 refused). With no file no
 
 `cirak init` (ADR-027 S2) writes that file for local mode: it probes OpenCode, checks the workspace roots, generates a
 64-character token (shown once, on a terminal only), writes a `0600` config, and prints the connector values. It never
-applies `chown`, `chmod` or `setfacl`, installs no service, and `cirak init --yes --root /path --session ses_... --token-file
-/path/token` is the non-interactive form. See [CONTRACTS](docs/CONTRACTS.md#cirak-init-adr-027-s2).
+applies `chown`, `chmod` or `setfacl`, and `cirak init --yes --root /path --session ses_... --token-file /path/token` is the
+non-interactive form. `--install-service` also renders a systemd unit (or a launchd plist) and prints the install and
+reload commands; init never starts it. See [CONTRACTS](docs/CONTRACTS.md#cirak-init-adr-027-s2).
+
+`cirak doctor` (ADR-027 S3) is the read-only diagnosis to paste into a bug report: the config and where each setting
+comes from, the live OpenCode reads, the sockets, the lifecycle and ACL files, and the environment names, with no
+secret. `--from-unit <name>` reads a systemd unit's environment instead of your shell, and `--smoke` makes one
+`initialize` + `tools/list` call against the running service. See [CONTRACTS](docs/CONTRACTS.md#cirak-doctor-adr-027-s3).
 
 `CIRAK_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
 `CIRAK_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are

@@ -2,12 +2,15 @@
 
 package main
 
-import "errors"
+import (
+	"bufio"
+	"errors"
+)
 
 func stdinIsTerminal() bool { return false }
 
 func stdoutIsTerminal() bool { return false }
 
-func readPasswordNoEcho() (string, error) {
+func readPasswordNoEcho(*bufio.Reader) (string, error) {
 	return "", errors.New("a hidden password prompt is not available on this platform")
 }

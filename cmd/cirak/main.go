@@ -29,6 +29,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		os.Exit(runConfig(os.Args[2:], os.Getenv, os.Environ(), os.Geteuid(), os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		os.Exit(productionDoctor(os.Args[2:], os.Getenv, os.Environ(), os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		os.Exit(productionInit(os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr))
 	}

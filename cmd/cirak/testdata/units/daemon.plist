@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by "cirak init" (ADR-027 section 2 item 5). Nothing in it is a secret. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.cirak.daemon</string>
+	<key>UserName</key>
+	<string>_cirak</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/cirak</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CIRAK_CONFIG</key>
+		<string>/etc/cirak/config.json</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/cirak/cirak.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/cirak/cirak.err.log</string>
+</dict>
+</plist>

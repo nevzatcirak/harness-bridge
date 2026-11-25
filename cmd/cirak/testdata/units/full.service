@@ -1,0 +1,28 @@
+# Written by "cirak init" (ADR-027 section 2 item 5). Nothing in it is a secret.
+# Proven live on the H5 host (F-H5-3): LoadCredential=, RuntimeDirectory=, StateDirectory=.
+# Proposed hardening, NOT yet verified on a live host: ProtectSystem=, PrivateTmp=, RestrictAddressFamilies=,
+# NoNewPrivileges=.
+
+[Unit]
+Description=Cirak: the MCP bridge to existing OpenCode sessions
+After=network.target
+
+[Service]
+User=cirak
+Group=cirak
+ExecStart=/usr/bin/cirak
+Environment=CIRAK_CONFIG=/etc/cirak/config.json
+# proven live:
+StateDirectory=cirak cirak/writer-locks cirak/overlay
+StateDirectoryMode=0700
+RuntimeDirectory=cirak-admin cirak-dashboard
+RuntimeDirectoryMode=0700
+LoadCredential=token:/etc/cirak/token
+# proposed:
+ProtectSystem=strict
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
