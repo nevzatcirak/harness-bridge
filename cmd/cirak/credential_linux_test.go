@@ -67,14 +67,14 @@ func TestSecretFileBoundaries(t *testing.T) {
 				}
 			}
 			_, err := readSecret(func(k string) string {
-				if k == "BRIDGE_TOKEN_FILE" {
+				if k == "CIRAK_TOKEN_FILE" {
 					return tc.path
 				}
 				if k == "CREDENTIALS_DIRECTORY" {
 					return dir
 				}
 				return ""
-			}, "BRIDGE_TOKEN")
+			}, "CIRAK_TOKEN")
 			if err == nil {
 				t.Fatal("unsafe credential accepted")
 			}
@@ -90,11 +90,11 @@ func TestSystemdManagedCredential(t *testing.T) {
 	}
 	dir := os.Getenv("CREDENTIALS_DIRECTORY")
 	value, err := readSecret(func(k string) string {
-		if k == "BRIDGE_TOKEN_FILE" {
+		if k == "CIRAK_TOKEN_FILE" {
 			return filepath.Join(dir, "fixture")
 		}
 		return os.Getenv(k)
-	}, "BRIDGE_TOKEN")
+	}, "CIRAK_TOKEN")
 	if err != nil || value != "synthetic-systemd-fixture" {
 		t.Fatal("systemd credential read failed (value withheld)", err)
 	}

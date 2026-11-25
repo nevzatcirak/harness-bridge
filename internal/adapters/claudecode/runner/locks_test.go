@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // The per-session flock namespace: claudecode:<uuid> is held for the writer

@@ -1,5 +1,7 @@
 # Read-only dashboard: operator setup (ADR-023)
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 The dashboard is a **local, read-only** view of the sessions the Bridge already authorizes: the
 session list and detail, native diffs, and the audit ring. It is **off by default**. It has no
 write route and cannot send a prompt, interrupt or release anything. Status: implemented and
@@ -16,14 +18,14 @@ response shapes are unverified against a live server.
 2. Set one variable in the Bridge's environment (never both):
 
    ```text
-   BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge-dashboard/dash.sock
+   CIRAK_DASHBOARD_SOCKET=/run/harness-bridge-dashboard/dash.sock
    ```
 
 3. Restart the Bridge. A bad configuration (a directory that is not `0700`, a non-loopback address,
    both variables set) stops the start. With neither variable set there is no listener, no
    socket and no goroutine.
 
-The alternative `BRIDGE_DASHBOARD_ADDR=127.0.0.1:8765` (host exactly `127.0.0.1` or `::1`) serves
+The alternative `CIRAK_DASHBOARD_ADDR=127.0.0.1:8765` (host exactly `127.0.0.1` or `::1`) serves
 TCP on the loopback interface only; requests must carry a `Host` of `localhost`, `127.0.0.1` or
 `[::1]`, and an `Origin` header from any other host is refused. The unix socket skips the Host
 allowlist (its `0700` directory is the fence and no browser can reach it), but it refuses **any**
@@ -49,7 +51,7 @@ always on for diffs and the audit ring. To add your own patterns set (this varia
 **slice-5a proposal**, not an ADR decision, and may be renamed):
 
 ```text
-BRIDGE_DASHBOARD_REDACT_EXTRA=["corp-[0-9a-f]{16}"]
+CIRAK_DASHBOARD_REDACT_EXTRA=["corp-[0-9a-f]{16}"]
 ```
 
 A JSON array of at most 16 RE2 patterns of 1 to 256 bytes. An invalid value stops the start and is
@@ -58,7 +60,7 @@ whoever can open the dashboard.
 
 ## What you see
 
-- **Sessions:** exactly the sessions in `BRIDGE_ALLOWED_SESSIONS` that the Bridge can read (the same
+- **Sessions:** exactly the sessions in `CIRAK_ALLOWED_SESSIONS` that the Bridge can read (the same
   set as `list_sessions`), with their state, guard and current execution. A `claudecode:` entry is a
   pending row (no history or diff until ADR-021's dashboard interface exists).
 - **Lifecycle root:** when the lifecycle catalog is configured (ADR-022), a session's directory is

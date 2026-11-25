@@ -15,18 +15,18 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/audit"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/audit"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 func TestPermissionRelayModeSwitch(t *testing.T) {
 	env := func(v string) func(string) string {
 		return func(k string) string {
-			if k == "BRIDGE_PERMISSION_RELAY" {
+			if k == "CIRAK_PERMISSION_RELAY" {
 				return v
 			}
 			return ""

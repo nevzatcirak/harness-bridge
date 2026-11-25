@@ -19,15 +19,15 @@ func TestReadSecret(t *testing.T) {
 		want string
 		fail bool
 	}{
-		{"file", map[string]string{"BRIDGE_TOKEN_FILE": path}, "secret-value", false},
-		{"environment", map[string]string{"BRIDGE_TOKEN": "inline"}, "inline", false},
-		{"both", map[string]string{"BRIDGE_TOKEN": "inline", "BRIDGE_TOKEN_FILE": path}, "", true},
-		{"relative", map[string]string{"BRIDGE_TOKEN_FILE": "secret"}, "", true},
-		{"missing", map[string]string{"BRIDGE_TOKEN_FILE": path + "-missing"}, "", true},
+		{"file", map[string]string{"CIRAK_TOKEN_FILE": path}, "secret-value", false},
+		{"environment", map[string]string{"CIRAK_TOKEN": "inline"}, "inline", false},
+		{"both", map[string]string{"CIRAK_TOKEN": "inline", "CIRAK_TOKEN_FILE": path}, "", true},
+		{"relative", map[string]string{"CIRAK_TOKEN_FILE": "secret"}, "", true},
+		{"missing", map[string]string{"CIRAK_TOKEN_FILE": path + "-missing"}, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := readSecret(func(k string) string { return tc.env[k] }, "BRIDGE_TOKEN")
+			got, err := readSecret(func(k string) string { return tc.env[k] }, "CIRAK_TOKEN")
 			if (err != nil) != tc.fail || (!tc.fail && got != tc.want) {
 				t.Fatalf("got=%q err=%v", got, err)
 			}
@@ -37,11 +37,11 @@ func TestReadSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := readSecret(func(k string) string {
-		if k == "BRIDGE_TOKEN_FILE" {
+		if k == "CIRAK_TOKEN_FILE" {
 			return path
 		}
 		return ""
-	}, "BRIDGE_TOKEN"); err == nil {
+	}, "CIRAK_TOKEN"); err == nil {
 		t.Fatal("world-readable credential accepted")
 	}
 	if err := os.Chmod(path, 0600); err != nil {
@@ -52,11 +52,11 @@ func TestReadSecret(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := readSecret(func(k string) string {
-			if k == "BRIDGE_TOKEN_FILE" {
+			if k == "CIRAK_TOKEN_FILE" {
 				return path
 			}
 			return ""
-		}, "BRIDGE_TOKEN"); err == nil {
+		}, "CIRAK_TOKEN"); err == nil {
 			t.Fatalf("accepted malformed credential of length %d", len(bad))
 		}
 	}

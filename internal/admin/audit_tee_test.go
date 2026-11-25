@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 func captureAdminJournal(t *testing.T, install bool, write func()) (string, []dashboard.AuditEntry) {

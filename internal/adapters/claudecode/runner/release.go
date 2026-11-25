@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-021 §3 (last bullet), allowed by D14 Q8 and implemented in slice 4: the ADR-020

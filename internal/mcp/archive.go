@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
-	"github.com/nevzatcirak/harness-bridge/internal/overlay"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/overlay"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-022 slice S6 with ADR-025 (accepted, D18): archive_session, unarchive_session and
@@ -48,7 +48,7 @@ type ArchiveStore interface {
 }
 
 // ArchiveConfig enables the three tools. A Server whose Archive is nil registers none of them
-// (ADR-022 3.1: no lifecycle configuration, no lifecycle tools; ADR-025 Q5: BRIDGE_OVERLAY_DIR
+// (ADR-022 3.1: no lifecycle configuration, no lifecycle tools; ADR-025 Q5: CIRAK_OVERLAY_DIR
 // unset means no archive tools).
 type ArchiveConfig struct {
 	cfg   *lifecycle.Config

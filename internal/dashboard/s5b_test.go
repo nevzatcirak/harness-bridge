@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
 )
 
 // ADR-023 slice 5b (D17 Q6, Q7): the lifecycle-root label and the archived filter reach the

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/claudewire"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/claudewire"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // newMCPServer builds the one mcp.Server that serves /mcp and the dashboard source. The Claude

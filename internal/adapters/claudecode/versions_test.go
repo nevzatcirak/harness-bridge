@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// ADR-021 §8.5, D14 Q7: BRIDGE_CLAUDE_VERSIONS is an exact-version allowlist, nothing else.
+// ADR-021 §8.5, D14 Q7: CIRAK_CLAUDE_VERSIONS is an exact-version allowlist, nothing else.
 func TestParseVersionsAcceptsOnlyExactVersions(t *testing.T) {
 	got, err := ParseVersions("2.1.322,2.1.323")
 	if err != nil || len(got) != 2 || got[0] != "2.1.322" || got[1] != "2.1.323" {

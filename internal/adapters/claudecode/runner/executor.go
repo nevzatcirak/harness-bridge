@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // Config is everything an Executor needs. Nothing here is read from the
 // environment or from a Claude user's files.
 type Config struct {
-	Wrapper string // absolute path (BRIDGE_CLAUDE_COMMAND), validated by ValidateWrapper
+	Wrapper string // absolute path (CIRAK_CLAUDE_COMMAND), validated by ValidateWrapper
 	FS      claudecode.FS
 	Env     claudecode.EnvConfig
 
@@ -30,14 +30,14 @@ type Config struct {
 	// leaves it empty.
 	ConfigDir string
 
-	// AllowedVersions (BRIDGE_CLAUDE_VERSIONS, parsed by claudecode.ParseVersions) must be a
+	// AllowedVersions (CIRAK_CLAUDE_VERSIONS, parsed by claudecode.ParseVersions) must be a
 	// non-empty list of exact versions and Tools a valid profile: New refuses anything else,
 	// so no wiring can skip the §8.5 check.
 	AllowedVersions []string
 	Tools           []string
 
 	Sessions []claudecode.Session
-	// AllowedSessions is BRIDGE_ALLOWED_SESSIONS: every allowlisted session must also
+	// AllowedSessions is CIRAK_ALLOWED_SESSIONS: every allowlisted session must also
 	// be listed here (§6). New enforces it, so no wiring can skip the check.
 	AllowedSessions []string
 	Locks           *Locks

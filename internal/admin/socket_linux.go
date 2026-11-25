@@ -16,7 +16,7 @@ import (
 // owned by uid; anything else at path refuses startup. The socket is 0600.
 func Listen(path string, uid int) (net.Listener, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, fmt.Errorf("BRIDGE_ADMIN_SOCKET must be a clean absolute path")
+		return nil, fmt.Errorf("CIRAK_ADMIN_SOCKET must be a clean absolute path")
 	}
 	dir := filepath.Dir(path)
 	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)

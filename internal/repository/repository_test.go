@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 	"os"
 	"os/exec"
 	"path/filepath"

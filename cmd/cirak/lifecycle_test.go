@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 
 	"net/http/httptest"
 )
@@ -55,9 +55,9 @@ func lcEnv(t *testing.T, overlayDir string) (func(string) string, string) {
 	}
 	return func(k string) string {
 		switch k {
-		case "BRIDGE_LIFECYCLE_CONFIG":
+		case "CIRAK_LIFECYCLE_CONFIG":
 			return cfgPath
-		case "BRIDGE_OVERLAY_DIR":
+		case "CIRAK_OVERLAY_DIR":
 			return overlayDir
 		}
 		return ""
@@ -160,7 +160,7 @@ func TestLifecycleValidConfigRegistersTheTools(t *testing.T) {
 	sameTools(t, listTools(t, w2, false), lifecycleTool("list_catalog", "create_session", "archive_session", "unarchive_session", "close_session"), "config with overlay")
 }
 
-// BRIDGE_READ_ONLY hides every mutating lifecycle tool; list_catalog stays, and the overlay (when
+// CIRAK_READ_ONLY hides every mutating lifecycle tool; list_catalog stays, and the overlay (when
 // set) is opened without the write role.
 func TestLifecycleReadOnlyHidesTheMutatingTools(t *testing.T) {
 	env, _ := lcEnv(t, newOverlayDir(t))
@@ -200,13 +200,13 @@ func TestLifecycleInvalidConfigurationRefusesToStart(t *testing.T) {
 	work := realDir(t)
 	junk := filepath.Join(work, "junk.json")
 	_ = os.WriteFile(junk, []byte(`{"roots": [`), 0o600)
-	bad["config is not JSON"] = with(map[string]string{"BRIDGE_LIFECYCLE_CONFIG": junk})
+	bad["config is not JSON"] = with(map[string]string{"CIRAK_LIFECYCLE_CONFIG": junk})
 	missing := filepath.Join(work, "missing.json")
-	bad["config file missing"] = with(map[string]string{"BRIDGE_LIFECYCLE_CONFIG": missing})
-	bad["config path relative"] = with(map[string]string{"BRIDGE_LIFECYCLE_CONFIG": "lifecycle.json"})
+	bad["config file missing"] = with(map[string]string{"CIRAK_LIFECYCLE_CONFIG": missing})
+	bad["config path relative"] = with(map[string]string{"CIRAK_LIFECYCLE_CONFIG": "lifecycle.json"})
 	noRoots := filepath.Join(work, "noroots.json")
 	_ = os.WriteFile(noRoots, []byte(`{"roots":[]}`), 0o600)
-	bad["config names no root"] = with(map[string]string{"BRIDGE_LIFECYCLE_CONFIG": noRoots})
+	bad["config names no root"] = with(map[string]string{"CIRAK_LIFECYCLE_CONFIG": noRoots})
 	for name, env := range bad {
 		if w, err := openLifecycle(env, uid, false); err == nil {
 			if w != nil {
@@ -250,7 +250,7 @@ func TestLifecycleOverlayDirectoryIsValidatedAtStartup(t *testing.T) {
 	}
 	// the overlay directory without a lifecycle configuration is not silently ignored
 	only := func(k string) string {
-		if k == "BRIDGE_OVERLAY_DIR" {
+		if k == "CIRAK_OVERLAY_DIR" {
 			return target
 		}
 		return ""
@@ -259,7 +259,7 @@ func TestLifecycleOverlayDirectoryIsValidatedAtStartup(t *testing.T) {
 		if w != nil {
 			w.Close()
 		}
-		t.Error("BRIDGE_OVERLAY_DIR without BRIDGE_LIFECYCLE_CONFIG started")
+		t.Error("CIRAK_OVERLAY_DIR without CIRAK_LIFECYCLE_CONFIG started")
 	}
 }
 
@@ -309,7 +309,7 @@ func TestLifecycleSummaryNamesToolsAndRootsWithoutPaths(t *testing.T) {
 		t.Errorf("inert summary %q", got)
 	}
 	rw, err := openLifecycle(func(k string) string {
-		if k == "BRIDGE_OVERLAY_DIR" {
+		if k == "CIRAK_OVERLAY_DIR" {
 			return newOverlayDir(t)
 		}
 		return env(k)
@@ -516,7 +516,7 @@ func TestMainOpensAppliesAndAnnouncesTheLifecycle(t *testing.T) {
 	}
 	// The pin must see each mutation of main that breaks the property (#379 P3-1).
 	for _, m := range []struct{ name, old, new string }{
-		{"an invalid configuration is only logged", "lc, err := openLifecycle(os.Getenv, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Fatal(err)", "lc, err := openLifecycle(os.Getenv, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Print(err)"},
+		{"an invalid configuration is only logged", "lc, err := openLifecycle(env, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Fatal(err)", "lc, err := openLifecycle(env, os.Geteuid(), cfg.readOnly)\n\tif err != nil {\n\t\tlog.Print(err)"},
 		{"the wiring is applied to another server", "lc.apply(mcpServer, runs)", "lc.apply(newMCPServer(client, runs, token, policy, cfg.remote, cfg.readOnly, claude), runs)"},
 		{"the wiring is never closed", "defer lc.Close()", "lc.Close()"},
 		{"the wiring is never applied", "lc.apply(mcpServer, runs)\n", "\n"},

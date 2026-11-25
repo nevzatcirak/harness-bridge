@@ -3,14 +3,14 @@ package mcp
 import (
 	"context"
 	"encoding/pem"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 func TestHTTPSListenerRejectsPlaintextAndUntrustedCertificate(t *testing.T) {

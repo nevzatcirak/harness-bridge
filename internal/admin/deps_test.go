@@ -14,7 +14,7 @@ func TestAdminDoesNotLinkTheRunner(t *testing.T) {
 		t.Fatalf("go list: %v", err)
 	}
 	deps := strings.Fields(string(out))
-	for _, bad := range []string{"os/exec", "github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode/runner"} {
+	for _, bad := range []string{"os/exec", "github.com/nevzatcirak/cirak/internal/adapters/claudecode/runner"} {
 		for _, d := range deps {
 			if d == bad {
 				t.Errorf("internal/admin links %s", bad)

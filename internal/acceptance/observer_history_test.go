@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // ADR021-OBSERVER (#372): the history check of ADR-021 §8.3 ("the decoy content appears nowhere in the

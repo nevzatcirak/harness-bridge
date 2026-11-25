@@ -12,8 +12,8 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // H4-A F-3 (second half): the workspace authorization check that every

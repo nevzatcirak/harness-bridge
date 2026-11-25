@@ -1,5 +1,7 @@
 # Orphan assistant message recovery (F-6)
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 Status: runbook, 2026-11-06; Step 4 updated 2026-11-08 for the ADR-020 (b)
 fenced guard release (release first, restart only as fallback). Finding F-6 (R5/R5b, P2). Applies to OpenCode
 1.19.4 (`anomalyco/opencode` `148842ef7cb1bc34192b3fff57d0f9721ab9c801`). Source
@@ -222,11 +224,11 @@ This runbook does not cover them: stop and escalate.
      run recorded exactly this (`R5_EVIDENCE_2026-11-05.md`, "Guard recovery").
 3. If the guard is held, **first** use the fenced guard release (ADR-020 option
    (b), accepted 2026-11-08; `docs/CONTRACTS.md`, "ADR-020 operator guard
-   release"). It needs the writer started with `BRIDGE_ADMIN_SOCKET`. As the
+   release"). It needs the writer started with `CIRAK_ADMIN_SOCKET`. As the
    maintainer on the host, with a ticket ID for this recovery:
    ```bash
-   sudo -u <SERVICE_USER> env BRIDGE_ADMIN_SOCKET=<ADMIN_SOCKET> \
-     <BRIDGE_BINARY> admin release-guard \
+   sudo -u <SERVICE_USER> env CIRAK_ADMIN_SOCKET=<ADMIN_SOCKET> \
+     <CIRAK_BINARY> admin release-guard \
        --session opencode:<SESSION_ID> --execution <EXECUTION_ID> --ticket <TICKET_ID>
    ```
    - `<EXECUTION_ID>` is the `unknown` execution that holds the guard

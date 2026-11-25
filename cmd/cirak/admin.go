@@ -10,19 +10,19 @@ import (
 	"os"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/admin"
+	"github.com/nevzatcirak/cirak/internal/admin"
 )
 
 // openAdmin opens the ADR-020 (b) admin socket in writer mode only, after
-// writer ownership is acquired. It returns nil when BRIDGE_ADMIN_SOCKET is
+// writer ownership is acquired. It returns nil when CIRAK_ADMIN_SOCKET is
 // unset or the ingress is read-only.
 func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser, claude admin.ClaudeReleaser) (*admin.Server, error) {
-	path := env("BRIDGE_ADMIN_SOCKET")
+	path := env("CIRAK_ADMIN_SOCKET")
 	if path == "" {
 		return nil, nil
 	}
 	if readOnly {
-		log.Printf("BRIDGE_ADMIN_SOCKET ignored: read-only ingress opens no admin socket")
+		log.Printf("CIRAK_ADMIN_SOCKET ignored: read-only ingress opens no admin socket")
 		return nil, nil
 	}
 	uid := os.Geteuid()
@@ -42,12 +42,12 @@ func openAdmin(env func(string) string, readOnly bool, runs admin.Releaser, clau
 	return srv, nil
 }
 
-const adminUsage = `usage: bridge admin release-guard --session opencode:ses_<id>|claudecode:<uuid> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message] [--socket <path>]
+const adminUsage = `usage: cirak admin release-guard --session opencode:ses_<id>|claudecode:<uuid> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message] [--socket <path>]
 
 Releases the busy guard of one session through the writer's private admin
 socket (ADR-020 b; for claudecode: sessions the Claude extension of ADR-021
 slice 4, which has no native read and is refused while no Claude Code adapter is
-running; --allow-missing-user-message does not apply to it). The socket defaults to $BRIDGE_ADMIN_SOCKET. Run as the
+running; --allow-missing-user-message does not apply to it). The socket defaults to $CIRAK_ADMIN_SOCKET. Run as the
 service user (sudo -u <service user>). --ticket must match [A-Za-z0-9._-]{1,64}.
 Exit status: 0 released, 1 refused or unreachable, 2 usage error.
 `
@@ -65,7 +65,7 @@ func runAdmin(args []string, env func(string) string, stdout, stderr io.Writer) 
 	executionID := fs.String("execution", "", "execution ID holding the guard")
 	ticket := fs.String("ticket", "", "ticket ID, [A-Za-z0-9._-]{1,64}")
 	allowMissing := fs.Bool("allow-missing-user-message", false, "release although the correlated user message is absent (audited)")
-	socket := fs.String("socket", env("BRIDGE_ADMIN_SOCKET"), "admin socket path")
+	socket := fs.String("socket", env("CIRAK_ADMIN_SOCKET"), "admin socket path")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}

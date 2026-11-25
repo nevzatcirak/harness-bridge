@@ -1,4 +1,4 @@
-module github.com/nevzatcirak/harness-bridge
+module github.com/nevzatcirak/cirak
 
 go 1.25.0
 

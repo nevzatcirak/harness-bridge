@@ -7,27 +7,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/overlay"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/overlay"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-022 / ADR-025 production wiring (maintainer decision D22): the merged lifecycle surface is
 // enabled by default, with no extra enable switch, and is inert until the operator configures it.
 //
-//	BRIDGE_LIFECYCLE_CONFIG  path of the lifecycle configuration (internal/lifecycle: roots, modes, caps).
-//	BRIDGE_OVERLAY_DIR       directory of the archive overlay (ADR-025 4.1, D18 Q5/Q6).
+//	CIRAK_LIFECYCLE_CONFIG  path of the lifecycle configuration (internal/lifecycle: roots, modes, caps).
+//	CIRAK_OVERLAY_DIR       directory of the archive overlay (ADR-025 4.1, D18 Q5/Q6).
 //
-// Unset BRIDGE_LIFECYCLE_CONFIG: no lifecycle tool, exactly the previous tool set. Set and valid:
-// list_catalog and create_session are registered; with a valid BRIDGE_OVERLAY_DIR the three archive
-// tools too. Invalid configuration is a refusal to start, never "start without it". BRIDGE_READ_ONLY
+// Unset CIRAK_LIFECYCLE_CONFIG: no lifecycle tool, exactly the previous tool set. Set and valid:
+// list_catalog and create_session are registered; with a valid CIRAK_OVERLAY_DIR the three archive
+// tools too. Invalid configuration is a refusal to start, never "start without it". CIRAK_READ_ONLY
 // registers list_catalog only (the overlay is then opened without the write role): create_session and
 // the archive tools never exist on a read-only ingress. ADR-012 authorization and the per-session
 // ACL are untouched: the lifecycle roots grant nothing to the existing tools (ADR-022 3.2).
 
-const envOverlayDir = "BRIDGE_OVERLAY_DIR"
+const envOverlayDir = "CIRAK_OVERLAY_DIR"
 
 // The archived-session refusal of send_prompt (ADR-025 4.5, D18 Q1) is installed in every process that
 // can send and has the overlay loaded: the lock holder through ArchiveConfig.Install, a process without the
@@ -49,7 +49,7 @@ type lifecycleWiring struct {
 	catalog *mcp.CatalogConfig
 	create  *mcp.CreateConfig  // nil on a read-only ingress
 	archive *mcp.ArchiveConfig // nil without an overlay, on a read-only ingress, or without the write lock
-	store   *overlay.Store     // nil without BRIDGE_OVERLAY_DIR
+	store   *overlay.Store     // nil without CIRAK_OVERLAY_DIR
 	roots   int
 
 	readOnly bool

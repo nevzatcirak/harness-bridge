@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/claudewire"
+	"github.com/nevzatcirak/cirak/internal/claudewire"
 )
 
 // #276 P3-1: a nil adapter must leave Server.Claude a nil INTERFACE (not an interface holding a

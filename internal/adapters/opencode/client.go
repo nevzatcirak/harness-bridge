@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/repository"
+	"github.com/nevzatcirak/cirak/internal/repository"
 )
 
 type Session struct {

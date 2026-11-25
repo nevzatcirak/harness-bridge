@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // Step is one signal of a signal plan: after an event of the given kind (a type such as "init",

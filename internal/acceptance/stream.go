@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // StreamInfo is what the driver keeps of one recorded NDJSON stream: shapes and counts, never text.

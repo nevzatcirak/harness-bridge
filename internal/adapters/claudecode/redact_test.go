@@ -71,3 +71,19 @@ func TestRedactUnterminatedPrivateKey(t *testing.T) {
 		t.Errorf("a public key is not a secret: %q", got)
 	}
 }
+
+// ADR-026 S1: the daemon's own variables are CIRAK_* and a legacy host still sets BRIDGE_*: a
+// credential assignment under either prefix never reaches a history record.
+func TestRedactMasksBothEnvironmentPrefixes(t *testing.T) {
+	for _, in := range []string{
+		"CIRAK_TOKEN=hunter2value", "BRIDGE_TOKEN=hunter2value", "export CIRAK_TOKEN='hunter2value'",
+		`BRIDGE_TOKEN_FILE="hunter2value"`, "CIRAK_CLAUDE_HOME=hunter2value", "ANTHROPIC_API_KEY=hunter2value", "OPENCODE_SERVER_PASSWORD=hunter2value",
+	} {
+		if got := Redact("use " + in + " here"); strings.Contains(got, "hunter2value") {
+			t.Errorf("%q leaked: %q", in, got)
+		}
+	}
+	if got := Redact("plain text, CIRAK is a word and so is BRIDGE"); got != "plain text, CIRAK is a word and so is BRIDGE" {
+		t.Fatalf("a bare prefix must stay: %q", got)
+	}
+}
