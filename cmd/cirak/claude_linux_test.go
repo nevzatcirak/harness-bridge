@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
-	"github.com/nevzatcirak/harness-bridge/internal/admin"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/admin"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-021 wiring: default off, complete-or-nothing configuration.
@@ -21,9 +21,9 @@ func claudeEnv(t *testing.T) map[string]string {
 	t.Helper()
 	dir := t.TempDir()
 	return map[string]string{
-		"BRIDGE_CLAUDE_COMMAND": "/usr/local/libexec/hb-claude", "BRIDGE_CLAUDE_SESSIONS": filepath.Join(dir, "sessions.json"), "BRIDGE_CLAUDE_VERSIONS": "2.1.322",
-		"BRIDGE_CLAUDE_HISTORY_DIR": filepath.Join(dir, "history"), "BRIDGE_CLAUDE_HOME": "/home/claude", "BRIDGE_CLAUDE_MODEL": "claude-sonnet-5-5",
-		"BRIDGE_WRITER_LOCK_DIR": filepath.Join(dir, "locks"),
+		"CIRAK_CLAUDE_COMMAND": "/usr/local/libexec/hb-claude", "CIRAK_CLAUDE_SESSIONS": filepath.Join(dir, "sessions.json"), "CIRAK_CLAUDE_VERSIONS": "2.1.322",
+		"CIRAK_CLAUDE_HISTORY_DIR": filepath.Join(dir, "history"), "CIRAK_CLAUDE_HOME": "/home/claude", "CIRAK_CLAUDE_MODEL": "claude-sonnet-5-5",
+		"CIRAK_WRITER_LOCK_DIR": filepath.Join(dir, "locks"),
 	}
 }
 
@@ -38,12 +38,12 @@ func TestClaudeIsOffWithoutConfiguration(t *testing.T) {
 	}
 }
 
-// Any BRIDGE_CLAUDE_* value without BRIDGE_CLAUDE_COMMAND is a configuration error: complete or
+// Any CIRAK_CLAUDE_* value without CIRAK_CLAUDE_COMMAND is a configuration error: complete or
 // not at all, never a silent partial enablement.
 func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 	full := claudeEnv(t)
 	for name := range full {
-		if name == "BRIDGE_CLAUDE_COMMAND" || name == "BRIDGE_WRITER_LOCK_DIR" {
+		if name == "CIRAK_CLAUDE_COMMAND" || name == "CIRAK_WRITER_LOCK_DIR" {
 			continue
 		}
 		env := map[string]string{name: full[name]}
@@ -52,7 +52,7 @@ func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 		}
 	}
 	// COMMAND set but a required value missing
-	for _, missing := range []string{"BRIDGE_CLAUDE_SESSIONS", "BRIDGE_CLAUDE_VERSIONS", "BRIDGE_CLAUDE_HISTORY_DIR", "BRIDGE_CLAUDE_HOME", "BRIDGE_CLAUDE_MODEL", "BRIDGE_WRITER_LOCK_DIR"} {
+	for _, missing := range []string{"CIRAK_CLAUDE_SESSIONS", "CIRAK_CLAUDE_VERSIONS", "CIRAK_CLAUDE_HISTORY_DIR", "CIRAK_CLAUDE_HOME", "CIRAK_CLAUDE_MODEL", "CIRAK_WRITER_LOCK_DIR"} {
 		env := claudeEnv(t)
 		delete(env, missing)
 		if _, err := claudeConfig(envOf(env), nil, nil); err == nil || !strings.Contains(err.Error(), missing) {
@@ -60,15 +60,15 @@ func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 		}
 	}
 	for name, mod := range map[string]func(map[string]string){
-		"relative command":  func(e map[string]string) { e["BRIDGE_CLAUDE_COMMAND"] = "hb-claude" },
-		"unclean sessions":  func(e map[string]string) { e["BRIDGE_CLAUDE_SESSIONS"] = "/a/../b/s.json" },
-		"relative home":     func(e map[string]string) { e["BRIDGE_CLAUDE_HOME"] = "home" },
-		"turns zero":        func(e map[string]string) { e["BRIDGE_CLAUDE_MAX_TURNS"] = "0" },
-		"turns text":        func(e map[string]string) { e["BRIDGE_CLAUDE_MAX_TURNS"] = "many" },
-		"turns huge":        func(e map[string]string) { e["BRIDGE_CLAUDE_MAX_TURNS"] = "100000" },
-		"run max text":      func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "soon" },
-		"run max too short": func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "10ms" },
-		"run max too long":  func(e map[string]string) { e["BRIDGE_CLAUDE_RUN_MAX"] = "48h" },
+		"relative command":  func(e map[string]string) { e["CIRAK_CLAUDE_COMMAND"] = "hb-claude" },
+		"unclean sessions":  func(e map[string]string) { e["CIRAK_CLAUDE_SESSIONS"] = "/a/../b/s.json" },
+		"relative home":     func(e map[string]string) { e["CIRAK_CLAUDE_HOME"] = "home" },
+		"turns zero":        func(e map[string]string) { e["CIRAK_CLAUDE_MAX_TURNS"] = "0" },
+		"turns text":        func(e map[string]string) { e["CIRAK_CLAUDE_MAX_TURNS"] = "many" },
+		"turns huge":        func(e map[string]string) { e["CIRAK_CLAUDE_MAX_TURNS"] = "100000" },
+		"run max text":      func(e map[string]string) { e["CIRAK_CLAUDE_RUN_MAX"] = "soon" },
+		"run max too short": func(e map[string]string) { e["CIRAK_CLAUDE_RUN_MAX"] = "10ms" },
+		"run max too long":  func(e map[string]string) { e["CIRAK_CLAUDE_RUN_MAX"] = "48h" },
 	} {
 		env := claudeEnv(t)
 		mod(env)
@@ -78,9 +78,9 @@ func TestAPartialClaudeConfigurationFailsClosed(t *testing.T) {
 	}
 	// a valid one
 	env := claudeEnv(t)
-	env["BRIDGE_CLAUDE_MAX_TURNS"], env["BRIDGE_CLAUDE_RUN_MAX"] = "7", "90s"
+	env["CIRAK_CLAUDE_MAX_TURNS"], env["CIRAK_CLAUDE_RUN_MAX"] = "7", "90s"
 	cfg, err := claudeConfig(envOf(env), []string{"/srv"}, []string{"claudecode:x"})
-	if err != nil || cfg == nil || cfg.MaxTurns != 7 || cfg.Runner.RunMax != 90*time.Second || cfg.Command != env["BRIDGE_CLAUDE_COMMAND"] || len(cfg.AllowedRoots) != 1 {
+	if err != nil || cfg == nil || cfg.MaxTurns != 7 || cfg.Runner.RunMax != 90*time.Second || cfg.Command != env["CIRAK_CLAUDE_COMMAND"] || len(cfg.AllowedRoots) != 1 {
 		t.Fatalf("cfg %+v err %v", cfg, err)
 	}
 }
@@ -100,7 +100,7 @@ func TestReadOnlyIngressNeverEnablesClaude(t *testing.T) {
 		t.Fatalf("read-only: %v %v", h, err)
 	}
 	// still an inconsistent configuration is an error even read-only
-	if _, err := openClaude(envOf(map[string]string{"BRIDGE_CLAUDE_MODEL": "x"}), nil, nil, true); err == nil {
+	if _, err := openClaude(envOf(map[string]string{"CIRAK_CLAUDE_MODEL": "x"}), nil, nil, true); err == nil {
 		t.Fatal("a partial configuration passed in read-only mode")
 	}
 }
@@ -118,7 +118,7 @@ func TestAdminGetsTheClaudeReleaserOnlyWhenEnabled(t *testing.T) {
 	const session, exec = "claudecode:00000000-0000-4000-8000-000000000001", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 	for name, rel := range map[string]admin.ClaudeReleaser{"off": nil, "on": &claudeStub{}} {
 		path := filepath.Join(adminDir(t), "admin.sock")
-		srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), false, &countingReleaser{}, rel)
+		srv, err := openAdmin(envOf(map[string]string{"CIRAK_ADMIN_SOCKET": path}), false, &countingReleaser{}, rel)
 		if err != nil || srv == nil {
 			t.Fatalf("%s: %v", name, err)
 		}

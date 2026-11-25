@@ -4,14 +4,14 @@ import (
 	"errors"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 type ingress struct {
 	addr, cert, key string
 	remote          *security.Remote
 	readOnly        bool
-	// maxLifetime is BRIDGE_TOKEN_MAX_LIFETIME (ADR-019), default 24h. It is
+	// maxLifetime is CIRAK_TOKEN_MAX_LIFETIME (ADR-019), default 24h. It is
 	// validated in every mode and sets the minimum token length.
 	maxLifetime time.Duration
 }
@@ -20,30 +20,30 @@ type ingress struct {
 // Any remote setting opts into remote validation; partial TLS never falls back
 // to plaintext, including when a private address is requested.
 func readIngress(env func(string) string) (ingress, error) {
-	c := ingress{addr: env("BRIDGE_LISTEN"), cert: env("BRIDGE_TLS_CERT"), key: env("BRIDGE_TLS_KEY")}
-	switch env("BRIDGE_READ_ONLY") {
+	c := ingress{addr: env("CIRAK_LISTEN"), cert: env("CIRAK_TLS_CERT"), key: env("CIRAK_TLS_KEY")}
+	switch env("CIRAK_READ_ONLY") {
 	case "", "0":
 	case "1":
 		c.readOnly = true
 	default:
-		return c, errors.New("BRIDGE_READ_ONLY must be 0 or 1")
+		return c, errors.New("CIRAK_READ_ONLY must be 0 or 1")
 	}
 	if c.addr == "" {
 		c.addr = "127.0.0.1:8080"
 	}
 	var err error
-	if c.maxLifetime, err = security.ParseTokenMaxLifetime(env("BRIDGE_TOKEN_MAX_LIFETIME")); err != nil {
+	if c.maxLifetime, err = security.ParseTokenMaxLifetime(env("CIRAK_TOKEN_MAX_LIFETIME")); err != nil {
 		return c, err
 	}
-	if env("BRIDGE_PUBLIC_ORIGIN") != "" || env("BRIDGE_PRINCIPAL") != "" || env("BRIDGE_TOKEN_EXPIRES") != "" || c.cert != "" || c.key != "" {
+	if env("CIRAK_PUBLIC_ORIGIN") != "" || env("CIRAK_PRINCIPAL") != "" || env("CIRAK_TOKEN_EXPIRES") != "" || c.cert != "" || c.key != "" {
 		if c.cert == "" || c.key == "" {
 			return c, errors.New("remote mode requires TLS certificate and key")
 		}
-		expires, err := time.Parse(time.RFC3339, env("BRIDGE_TOKEN_EXPIRES"))
+		expires, err := time.Parse(time.RFC3339, env("CIRAK_TOKEN_EXPIRES"))
 		if err != nil {
-			return c, errors.New("BRIDGE_TOKEN_EXPIRES must be RFC3339")
+			return c, errors.New("CIRAK_TOKEN_EXPIRES must be RFC3339")
 		}
-		c.remote, err = security.NewRemoteWithMaxLifetime(env("BRIDGE_PUBLIC_ORIGIN"), env("BRIDGE_PRINCIPAL"), expires, c.maxLifetime)
+		c.remote, err = security.NewRemoteWithMaxLifetime(env("CIRAK_PUBLIC_ORIGIN"), env("CIRAK_PRINCIPAL"), expires, c.maxLifetime)
 		if err != nil {
 			return c, err
 		}

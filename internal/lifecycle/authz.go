@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // Codes of a refusal. They are the ADR-022 section 4.2 result codes of the

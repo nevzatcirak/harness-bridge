@@ -4,11 +4,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
 )
 
 // openDashboard starts the ADR-023 read-only dashboard when
-// BRIDGE_DASHBOARD_SOCKET or BRIDGE_DASHBOARD_ADDR is set, and returns nil, nil
+// CIRAK_DASHBOARD_SOCKET or CIRAK_DASHBOARD_ADDR is set, and returns nil, nil
 // when neither is (the default: no listener, no port, no socket). A bad
 // configuration (a non-loopback address, a socket directory that is not 0700,
 // both settings at once, an invalid operator redaction pattern) is a startup error.

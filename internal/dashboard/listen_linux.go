@@ -32,7 +32,7 @@ import (
 // stays the stated same-UID/root residual.
 func listenUnix(path string, uid int) (net.Listener, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, fmt.Errorf("BRIDGE_DASHBOARD_SOCKET must be a clean absolute path")
+		return nil, fmt.Errorf("CIRAK_DASHBOARD_SOCKET must be a clean absolute path")
 	}
 	dir := filepath.Dir(path)
 	fd, err := syscall.Open(dir, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)

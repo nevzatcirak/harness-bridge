@@ -39,7 +39,7 @@ var (
 const (
 	runnerDir  = "runner"
 	spawnFile  = "spawn_linux.go"
-	modulePath = "github.com/nevzatcirak/harness-bridge/"
+	modulePath = "github.com/nevzatcirak/cirak/"
 )
 
 // bannedImport reports import paths that must never appear, allowlist or not.
@@ -184,8 +184,8 @@ func TestNoExecInThePureCore(t *testing.T) {
 // execution package (the pure core never imports it back).
 var runnerImportsExtra = map[string]bool{
 	"context": true, "crypto/rand": true, "os/exec": true, "os/signal": false, "path/filepath": true, "sync/atomic": true, "math/rand": false,
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode": true,
-	"github.com/nevzatcirak/harness-bridge/internal/execution":           true,
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode": true,
+	"github.com/nevzatcirak/cirak/internal/execution":           true,
 }
 
 func TestExecIsConfinedToTheSpawnFile(t *testing.T) {

@@ -1,36 +1,45 @@
-# Harness Bridge
+# Cirak
+
+> **Harness Bridge is now Cirak** (ADR-026, decisions D26 and D29). The binary is `cirak`, the Go module path
+> `github.com/nevzatcirak/cirak`, the MCP server name `cirak`, and every environment variable `CIRAK_*`. The old
+> `BRIDGE_*` names are still read until v0.2.0: each one prints one warning at startup (never a value); if a
+> `CIRAK_X` and its `BRIDGE_X` twin are both set to different values the daemon refuses to start and names both
+> variables; an empty value counts as unset on both sides. The tool contract, the audit field names, the
+> `harness-bridge-agent` / `harness-bridge-planner` protocol markers and host-side names are unchanged. The GitHub
+> repository keeps its current name until the maintainer renames it.
 
 Go bridge for continuing **existing** OpenCode sessions. Uses the official MCP Go SDK v1.8.0 with authenticated
 Streamable HTTP on loopback (MCP 2025-11-25). Remote Claude Chat integration is a
 later phase and has not been tested.
 
 On Ubuntu 24.04 ARM64, install Go 1.25 or newer (verified with Go 1.27.2 linux/arm64), clone
-this repository, and use an already running OpenCode HTTP server. The bridge
+this repository, and use an already running OpenCode HTTP server. Cirak
 never starts OpenCode or creates a native session.
 
 ```sh
 export OPENCODE_URL=http://127.0.0.1:4096
-export BRIDGE_ALLOWED_ROOTS=/absolute/project/root
-export BRIDGE_ALLOWED_SESSIONS=ses_EXISTING_NATIVE_ID
+export CIRAK_ALLOWED_ROOTS=/absolute/project/root
+export CIRAK_ALLOWED_SESSIONS=ses_EXISTING_NATIVE_ID
 # Writer only: provision an existing 0700 directory owned by the service user.
 # Every writer on this host MUST share its inodes; never delete live lock files.
-export BRIDGE_WRITER_LOCK_DIR=/var/lib/harness-bridge/writer-locks
-# For additional read-only instances instead: BRIDGE_READ_ONLY=1 (no writer lock).
-# Set BRIDGE_TOKEN securely (at least 32 characters).
+export CIRAK_WRITER_LOCK_DIR=/var/lib/harness-bridge/writer-locks
+# For additional read-only instances instead: CIRAK_READ_ONLY=1 (no writer lock).
+# Set CIRAK_TOKEN securely (at least 32 characters).
 # Set OPENCODE_SERVER_PASSWORD securely if the native server requires Basic auth.
-go build -o /tmp/harness-bridge ./cmd/bridge
-/tmp/harness-bridge
+go build -o /tmp/cirak ./cmd/cirak
+/tmp/cirak
+/tmp/cirak version   # the module version, revision and toolchain
 ```
 
-`BRIDGE_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
-`BRIDGE_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
+`CIRAK_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
+`CIRAK_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
 required. The single bearer token represents the local principal with that ACL.
 Both lists must name only sessions in workspaces whose `.opencode` content
 (up to the worktree root) the operator trusts: read-only discovery can make
 OpenCode bootstrap those directories and execute their plugins, also with
-`BRIDGE_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
+`CIRAK_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
 `OPENCODE_SERVER_USERNAME` defaults to `opencode`. Listener defaults to
-`127.0.0.1:8080`, endpoint `/mcp`; `BRIDGE_LISTEN` must remain loopback.
+`127.0.0.1:8080`, endpoint `/mcp`; `CIRAK_LISTEN` must remain loopback.
 Keep tokens in the environment; do not commit them or enable shell tracing.
 
 Tools: `list_sessions`, `get_session`, `read_session_history`, `send_prompt`,
@@ -70,7 +79,7 @@ go run ./cmd/mcpsmoke
 ```
 
 To exercise the separately running bridge started above, pass its loopback URL
-and the same securely supplied `BRIDGE_TOKEN`. Omit `H2_MCP_URL` to use the
+and the same securely supplied `CIRAK_TOKEN`. Omit `H2_MCP_URL` to use the
 embedded ephemeral bridge. Optional idle verification waits 65 seconds without
 MCP requests, checks expiration of the one-minute transport session, reconnects
 with the official SDK, and verifies history and completed executions remain.

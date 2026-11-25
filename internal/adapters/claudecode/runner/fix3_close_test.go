@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // Test (iii): Close is bounded by abandoning the wait, never by killing: it returns, the

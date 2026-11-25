@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevzatcirak/harness-bridge/internal/admin"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/admin"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 var _ admin.Releaser = (*execution.Manager)(nil)
@@ -42,7 +42,7 @@ func envOf(m map[string]string) func(string) string { return func(k string) stri
 // ADR-020 group 9: the admin socket is never opened in read-only mode.
 func TestAdminSocketNotOpenedReadOnly(t *testing.T) {
 	path := filepath.Join(adminDir(t), "admin.sock")
-	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), true, &countingReleaser{}, nil)
+	srv, err := openAdmin(envOf(map[string]string{"CIRAK_ADMIN_SOCKET": path}), true, &countingReleaser{}, nil)
 	if err != nil || srv != nil {
 		t.Fatalf("read-only: srv=%v err=%v", srv, err)
 	}
@@ -59,7 +59,7 @@ func TestAdminSocketUnsafeDirectoryFailsStartup(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": filepath.Join(dir, "admin.sock")}), false, &countingReleaser{}, nil); err == nil {
+	if srv, err := openAdmin(envOf(map[string]string{"CIRAK_ADMIN_SOCKET": filepath.Join(dir, "admin.sock")}), false, &countingReleaser{}, nil); err == nil {
 		srv.Close()
 		t.Fatal("0755 directory accepted")
 	}
@@ -68,12 +68,12 @@ func TestAdminSocketUnsafeDirectoryFailsStartup(t *testing.T) {
 func TestAdminCLIReleaseGuard(t *testing.T) {
 	path := filepath.Join(adminDir(t), "admin.sock")
 	runs := &countingReleaser{}
-	srv, err := openAdmin(envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path}), false, runs, nil)
+	srv, err := openAdmin(envOf(map[string]string{"CIRAK_ADMIN_SOCKET": path}), false, runs, nil)
 	if err != nil || srv == nil {
 		t.Fatalf("writer: srv=%v err=%v", srv, err)
 	}
 	defer srv.Close()
-	env := envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": path})
+	env := envOf(map[string]string{"CIRAK_ADMIN_SOCKET": path})
 	var out, errOut bytes.Buffer
 	code := runAdmin([]string{"release-guard", "--session", "opencode:ses_example", "--execution", "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "--ticket", "OPS-1234"}, env, &out, &errOut)
 	if code != 0 || runs.calls != 1 {
@@ -92,7 +92,7 @@ func TestAdminCLIReleaseGuard(t *testing.T) {
 }
 
 func TestAdminCLIUsage(t *testing.T) {
-	env := envOf(map[string]string{"BRIDGE_ADMIN_SOCKET": "/nonexistent/admin.sock"})
+	env := envOf(map[string]string{"CIRAK_ADMIN_SOCKET": "/nonexistent/admin.sock"})
 	for name, args := range map[string][]string{
 		"no_subcommand":  {},
 		"unknown":        {"restart"},

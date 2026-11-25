@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
-// ADR-024 A1 S7 (D21 Q2): BRIDGE_PERMISSION_INCARNATION, off by default.
+// ADR-024 A1 S7 (D21 Q2): CIRAK_PERMISSION_INCARNATION, off by default.
 
 func TestPermissionIncarnationModeIsOffByDefaultAndStrict(t *testing.T) {
 	env := func(v string) func(string) string {
 		return func(k string) string {
-			if k == "BRIDGE_PERMISSION_INCARNATION" {
+			if k == "CIRAK_PERMISSION_INCARNATION" {
 				return v
 			}
 			return ""
@@ -106,7 +106,7 @@ func TestIncarnationObservedThatCannotStartIsAStartupError(t *testing.T) {
 	if err == nil || inc != nil || stop == nil {
 		t.Fatalf("observed without a client started silently: inc=%v err=%v", inc, err)
 	}
-	if !strings.Contains(err.Error(), "BRIDGE_PERMISSION_INCARNATION=observed") {
+	if !strings.Contains(err.Error(), "CIRAK_PERMISSION_INCARNATION=observed") {
 		t.Fatalf("the error does not name the variable: %v", err)
 	}
 	stop() // safe

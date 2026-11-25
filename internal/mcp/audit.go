@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // Audit lines for mutating tools (AUDIT-01). Exactly one line is written per
@@ -33,7 +33,7 @@ type auditRecord struct {
 
 var auditExecutionPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// mutating names the tools that mutate a native session. The set gates BRIDGE_READ_ONLY (call)
+// mutating names the tools that mutate a native session. The set gates CIRAK_READ_ONLY (call)
 // and the AUDIT-01 middleware. reply_permission (ADR-024 S3) is in it: a tool missing here would
 // be neither blocked in read-only mode nor audited.
 func mutating(name string) bool {

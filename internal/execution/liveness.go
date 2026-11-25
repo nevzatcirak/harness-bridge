@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
 )
 
 // defaultStallThreshold is the NO_PROGRESS report threshold (ADR-017 §3(a)).

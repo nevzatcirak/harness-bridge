@@ -103,7 +103,7 @@ func mustAppend(t *testing.T, s *Store, exec string, r Record) {
 func TestStoreRedactsBeforeTheFirstByte(t *testing.T) {
 	s, dir := newStore(t, nil)
 	secret := "sk-ant-api03-AbCdEfGhIjKlMnOp"
-	if err := s.BeginTurn(testUUID, "e", TurnStart{Prompt: "use " + secret + " and BRIDGE_TOKEN=hunter2value", Principal: "op"}); err != nil {
+	if err := s.BeginTurn(testUUID, "e", TurnStart{Prompt: "use " + secret + " and CIRAK_TOKEN=hunter2value", Principal: "op"}); err != nil {
 		t.Fatal(err)
 	}
 	mustAppend(t, s, "e", Record{Kind: KindToolResult, ToolUseID: "t", Content: "Authorization: Bearer abcdef123456"})

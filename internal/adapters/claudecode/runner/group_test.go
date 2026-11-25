@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // #242 residual (wiring slice): the wrapper's known exit is not proof that the CLI behind

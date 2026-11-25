@@ -5,21 +5,21 @@ import (
 	"time"
 )
 
-// ADR-019 option (2): BRIDGE_TOKEN_MAX_LIFETIME bounds BRIDGE_TOKEN_EXPIRES.
+// ADR-019 option (2): CIRAK_TOKEN_MAX_LIFETIME bounds CIRAK_TOKEN_EXPIRES.
 // These tests use only readIngress, so they run unchanged against the code
 // before the change.
 
 func remoteEnv(expires time.Time, maxLifetime string, set bool) func(string) string {
 	v := map[string]string{
-		"BRIDGE_LISTEN":        "172.18.0.1:8443",
-		"BRIDGE_PUBLIC_ORIGIN": "https://bridge.example",
-		"BRIDGE_PRINCIPAL":     "operator",
-		"BRIDGE_TOKEN_EXPIRES": expires.UTC().Format(time.RFC3339),
-		"BRIDGE_TLS_CERT":      "/not-opened/server.crt",
-		"BRIDGE_TLS_KEY":       "/not-opened/server.key",
+		"CIRAK_LISTEN":        "172.18.0.1:8443",
+		"CIRAK_PUBLIC_ORIGIN": "https://bridge.example",
+		"CIRAK_PRINCIPAL":     "operator",
+		"CIRAK_TOKEN_EXPIRES": expires.UTC().Format(time.RFC3339),
+		"CIRAK_TLS_CERT":      "/not-opened/server.crt",
+		"CIRAK_TLS_KEY":       "/not-opened/server.key",
 	}
 	if set {
-		v["BRIDGE_TOKEN_MAX_LIFETIME"] = maxLifetime
+		v["CIRAK_TOKEN_MAX_LIFETIME"] = maxLifetime
 	}
 	return func(k string) string { return v[k] }
 }
@@ -36,7 +36,7 @@ func TestTokenMaxLifetimeDefaultUnchanged(t *testing.T) {
 	}
 	// The empty value is the same as unset.
 	if _, err := readIngress(remoteEnv(now.Add(25*time.Hour), "", true)); err == nil {
-		t.Fatal("empty BRIDGE_TOKEN_MAX_LIFETIME: 25 h expiry accepted")
+		t.Fatal("empty CIRAK_TOKEN_MAX_LIFETIME: 25 h expiry accepted")
 	}
 }
 
@@ -67,17 +67,17 @@ func TestTokenMaxLifetimeInvalid(t *testing.T) {
 	now := time.Now()
 	for _, v := range []string{"0", "0s", "-1h", "-24h", "garbage", "1d", "24", " 24h", "24h "} {
 		if _, err := readIngress(remoteEnv(now.Add(time.Hour), v, true)); err == nil {
-			t.Fatalf("invalid BRIDGE_TOKEN_MAX_LIFETIME %q accepted", v)
+			t.Fatalf("invalid CIRAK_TOKEN_MAX_LIFETIME %q accepted", v)
 		}
 		// Fail closed in local mode too: a typo is never silently ignored.
 		local := func(k string) string {
-			if k == "BRIDGE_TOKEN_MAX_LIFETIME" {
+			if k == "CIRAK_TOKEN_MAX_LIFETIME" {
 				return v
 			}
 			return ""
 		}
 		if _, err := readIngress(local); err == nil {
-			t.Fatalf("local mode: invalid BRIDGE_TOKEN_MAX_LIFETIME %q accepted", v)
+			t.Fatalf("local mode: invalid CIRAK_TOKEN_MAX_LIFETIME %q accepted", v)
 		}
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/bounded"
 )
 
 // F-5: OpenCode keeps no status entry for a session whose assistant message was

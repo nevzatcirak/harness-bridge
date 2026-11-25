@@ -1,5 +1,7 @@
 # Private TLS backend handoff and connectivity procedure
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 Coordination: [harness-bridge PR #3](https://github.com/nevzatcirak/harness-bridge/pull/3)
 and [ix-deployment PR #1](https://github.com/nevzatcirak/ix-deployment/pull/1).
 This is a prepared procedure, NOT observed deployment proof. No Docker service,
@@ -16,8 +18,8 @@ retested during this change. Reinspect before running a probe; container IPs
 and PIDs can change.
 
 ```sh
-BRIDGE_LISTEN=172.18.0.1:8443
-BRIDGE_PUBLIC_ORIGIN=https://bridge.nevzatcirak.com
+CIRAK_LISTEN=172.18.0.1:8443
+CIRAK_PUBLIC_ORIGIN=https://bridge.nevzatcirak.com
 ```
 
 Use the existing remote configuration contract for certificate/key, named
@@ -29,7 +31,7 @@ approved remote target. See [local validation evidence](SYSTEMD_LOCAL_VALIDATION
 Neither private/public listener is started by this document.
 
 Local mode still defaults to `127.0.0.1:8080` and permits only the previous
-loopback names/addresses. Private binding is an explicit BRIDGE_LISTEN opt-in in
+loopback names/addresses. Private binding is an explicit CIRAK_LISTEN opt-in in
 remote TLS mode only. RFC1918 IPv4 or IPv6 ULA literals are supported. Public,
 wildcard, DNS, link-local, multicast, mapped IPv6, scoped IPv6 and invalid
 host/port configurations fail before listening. The OS must own the exact
@@ -80,7 +82,7 @@ container/service configuration as a workaround.
 TRAEFIK_PID=$(docker inspect --format '{{.State.Pid}}' "$TRAEFIK_CONTAINER_ID")
 # Confirm running=true and positive PID again immediately before each probe.
 # Set to an existing, operator-provisioned public CA PEM bundle (no private key).
-BRIDGE_CA_FILE='/operator/secure/backend-ca.pem'
+CIRAK_CA_FILE='/operator/secure/backend-ca.pem'
 nsenter --target "$TRAEFIK_PID" --net -- ip route get 172.18.0.1
 ```
 
@@ -96,7 +98,7 @@ timeout 10s nsenter --target "$TRAEFIK_PID" --net -- \
   openssl s_client -connect 172.18.0.1:8443 \
   -servername bridge.nevzatcirak.com \
   -verify_hostname bridge.nevzatcirak.com -verify_return_error \
-  -CAfile "$BRIDGE_CA_FILE" -brief </dev/null
+  -CAfile "$CIRAK_CA_FILE" -brief </dev/null
 ```
 
 Require successful TCP connection, TLS >=1.2 and chain/hostname verification OK.
@@ -110,7 +112,7 @@ HTTP boundary probes, still no credentials and no native operation:
 nsenter --target "$TRAEFIK_PID" --net -- \
   curl --noproxy '*' --proto '=https' --tlsv1.2 --connect-timeout 3 --max-time 10 \
   --resolve bridge.nevzatcirak.com:8443:172.18.0.1 \
-  --cacert "$BRIDGE_CA_FILE" -H 'Host: bridge.nevzatcirak.com' \
+  --cacert "$CIRAK_CA_FILE" -H 'Host: bridge.nevzatcirak.com' \
   --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
   https://bridge.nevzatcirak.com:8443/mcp
 ```

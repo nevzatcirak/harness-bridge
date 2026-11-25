@@ -1,8 +1,10 @@
 # ADR-021 slice 3: acceptance (code part ships here; the live items are operator-run)
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 This PR ships the **code** of slice 3 (ADR-021 §10): init verification wired through the
 runner, the SIGINT → SIGTERM escalation, `Executor.Interrupt`, the hardening argv,
-`BRIDGE_CLAUDE_VERSIONS` parsing and the credential-canary harness code. The adapter stays
+`CIRAK_CLAUDE_VERSIONS` parsing and the credential-canary harness code. The adapter stays
 unwired. **R6 (the live acceptance) is complete on 2026-11-21**: the runtime, the five runs, the
 per-item verdicts, the fixes and the limitations are in
 [`docs/evidence/R6_EVIDENCE_2026-11-21.md`](../../../docs/evidence/R6_EVIDENCE_2026-11-21.md).
@@ -18,7 +20,7 @@ finding and marks the final status.
 | result with the child alive → `running`, guard held, second send `SESSION_BUSY`; grace → row 6a / `EXIT_UNCONFIRMED` / `child_unconfirmed`; wait failure after a result → row 6a | `runner/s3_test.go` |
 | overlap pairs (cap+success, cap+`aborted_*`, grace+late result/exit, shutdown+`aborted_*`, user+`aborted_*` = `interrupted`, user escalation exhausted = 6b, row 6 only without a result) | `runner/s3_test.go`, `state_test.go` |
 | SIGINT → SIGTERM sequence and timing with fake children, and with real processes and real signals; no SIGKILL; a child that ignores both is abandoned, never killed | `runner/s3_test.go`, `runner/s3_linux_test.go` |
-| argv hardening flags, settings JSON and deny rules; `BRIDGE_CLAUDE_VERSIONS` | `argv_test.go`, `versions_test.go` |
+| argv hardening flags, settings JSON and deny rules; `CIRAK_CLAUDE_VERSIONS` | `argv_test.go`, `versions_test.go` |
 | canary pre-flight and verdict logic against FABRICATED streams | `canary_test.go` |
 
 ## The live driver (task #314; the live run is a separate task)

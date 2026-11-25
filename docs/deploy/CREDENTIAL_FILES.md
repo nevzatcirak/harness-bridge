@@ -1,33 +1,35 @@
 # H3 credential file implementation and local validation
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 PR branch `feat/h3-secure-claude-remote-connector`. Credential-file input is optional and mutually exclusive with the corresponding inline environment variable. No plaintext credential is ever committed.
 
 ## Configuration
 - `OPENCODE_SERVER_PASSWORD_FILE=/absolute/path/to/credential`
-- `BRIDGE_TOKEN_FILE=/absolute/path/to/credential`
+- `CIRAK_TOKEN_FILE=/absolute/path/to/credential`
 - Alternative legacy environment variables continue to work, but cannot be combined with file variables.
 - A normal file must be a direct regular file (no final symlink), private permissions (no group/other permission bits), 1–16384 bytes. Linux additionally accepts verified systemd root-owned read-only credential mounts with exact service-UID ACLs; the apparent 0440 mode is an ACL mask, not general group access. Arbitrary 0640/0440 files remain rejected. One final LF or CRLF is accepted. Embedded line breaks/NUL and empty content fail closed.
 - For systemd `LoadCredential`, use the service's actual `CREDENTIALS_DIRECTORY` path in an `ExecStart` wrapper or a supported expansion of `%d` in `Environment=`. Do not copy secrets to command-line arguments. Inspect the resolved environment keys, never their values.
-- `BRIDGE_TOKEN` (from either source) must remain at least 32 characters, or at least 43 characters when `BRIDGE_TOKEN_MAX_LIFETIME` is above `24h` (ADR-019).
+- `CIRAK_TOKEN` (from either source) must remain at least 32 characters, or at least 43 characters when `CIRAK_TOKEN_MAX_LIFETIME` is above `24h` (ADR-019).
 
 ## Operator's sandboxed test target
 ```text
 OPENCODE_URL=http://127.0.0.1:4097
-BRIDGE_ALLOWED_ROOTS=/opt/harness-bridge-test/workspace
-BRIDGE_ALLOWED_SESSIONS=ses_e9329c0b4ffebOlm7GRyKxbMQ5
+CIRAK_ALLOWED_ROOTS=/opt/harness-bridge-test/workspace
+CIRAK_ALLOWED_SESSIONS=ses_e9329c0b4ffebOlm7GRyKxbMQ5
 ```
 
 Both lists must name only sessions in workspaces whose `.opencode` content
 (up to the worktree root) the operator trusts: read-only discovery can make
 OpenCode bootstrap those directories and execute their plugins, also with
-`BRIDGE_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
+`CIRAK_READ_ONLY=1` (CONTRACTS.md, "Discovery bootstraps native instances").
 
 The native OpenCode server on 4097 is nonroot with Basic Auth and verified session survival across restart; current original root server at 4096 is **not** an approved remote target.
 
 ## Quality gates
 After `git pull --ff-only` on the matching branch and checking that the tree is clean:
 ```sh
-gofmt -w cmd/bridge/main.go cmd/bridge/secret.go cmd/bridge/secret_test.go
+gofmt -w cmd/cirak/main.go cmd/cirak/secret.go cmd/cirak/secret_test.go
 git diff --exit-code
 go build ./...
 go vet ./...
@@ -57,12 +59,12 @@ The Bridge never reads, copies, prints or logs any of the files below except the
 | `~/.claude/` of the Claude service user (`hbclaude`), including the subscription login | `hbclaude`, 0700/0600 | the CLI only | The Bridge user cannot read it and the Bridge never opens it (ADR-021 §8.4). The read tools of the CLI could, so the credential deny rules of ADR-021 §8.3 item 6 are passed on every run and must also be in the managed file. They are UNVERIFIED until the live canary (slice 3) passes. |
 | `~/.config/anthropic/` of the same user | `hbclaude` | the CLI only | Profiles and `active_config`. A profile of `oidc_federation` auth ranks above the subscription login and is not detected by `init.apiKeySource`: the operator must not configure one for this user. |
 | `/etc/claude-code/managed-settings.json` | root, 0644 | the CLI | Optional host-level policy (D14 Q5: the runbook may REQUIRE it). Whether managed settings apply in `-p` is UNVERIFIED. |
-| `BRIDGE_CLAUDE_COMMAND` (the wrapper) | root, not group/other writable, in root-owned directories | the Bridge user executes it | Validated at startup; never found through `PATH`. |
-| `BRIDGE_CLAUDE_SESSIONS` (allowlist JSON) | Bridge user, mode exactly 0600, one link, in directories owned by root or the Bridge user | the Bridge | Strict JSON: a top-level array, keys exactly `session_id`, `root`, `label`, no duplicate key, no `null`. |
-| `BRIDGE_CLAUDE_VERSIONS` | environment value | the Bridge | Exact `MAJOR.MINOR.PATCH` strings, comma separated, no default: empty means the adapter refuses to start. |
+| `CIRAK_CLAUDE_COMMAND` (the wrapper) | root, not group/other writable, in root-owned directories | the Bridge user executes it | Validated at startup; never found through `PATH`. |
+| `CIRAK_CLAUDE_SESSIONS` (allowlist JSON) | Bridge user, mode exactly 0600, one link, in directories owned by root or the Bridge user | the Bridge | Strict JSON: a top-level array, keys exactly `session_id`, `root`, `label`, no duplicate key, no `null`. |
+| `CIRAK_CLAUDE_VERSIONS` | environment value | the Bridge | Exact `MAJOR.MINOR.PATCH` strings, comma separated, no default: empty means the adapter refuses to start. |
 | history directory | Bridge user, 0700; segment files 0600 | the Bridge | Holds redacted turn records; as sensitive as the CLI's own transcripts (ADR-021 §5). |
 | writer lock directory | Bridge user, 0700 | the Bridge | One lock per allowlisted session. |
-| the admin socket (`BRIDGE_ADMIN_SOCKET`) | Bridge user, 0700 directory | the Bridge user's operator | Carries the guard release of ADR-020, extended for `claudecode:` sessions. |
+| the admin socket (`CIRAK_ADMIN_SOCKET`) | Bridge user, 0700 directory | the Bridge user's operator | Carries the guard release of ADR-020, extended for `claudecode:` sessions. |
 
 Secrets never belong in the wrapper, the sudoers file, argv, the environment of the child, the
 allowlist or any committed file. The credential canary (decoy files only) must never name or
