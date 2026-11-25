@@ -375,3 +375,64 @@ func TestS3ConfigReachesTheManager(t *testing.T) {
 		t.Fatalf("liveness thresholds %+v", l.Thresholds)
 	}
 }
+
+// ADR-017 A2.12 item 9 / A2.4 item 1: a non-counting failure clears unavailable_since, so a
+// harness that alternates a 5xx/transport failure with a 404 must not reach HARNESS_UNREACHABLE
+// at 120 s from the FIRST failure; the next counting failure opens a new window.
+func TestS3NonCountingFailureClearsTheUnreachableWindow(t *testing.T) {
+	f := &fake{status: "idle"}
+	start := time.Now()
+	clock := &fakeClock{t: start}
+	m := NewWithTiming(f, time.Minute, 2*time.Millisecond)
+	m.clock = clock.Now
+	m.stallThreshold = time.Minute
+	t.Cleanup(m.Close)
+	x, err := m.Send(context.Background(), "ses_test", "fixture", "s3-clear-window")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. A counting failure opens the window at the first observation.
+	locked(f, func() { f.readErrHistory = opencode.ErrTransport })
+	got := waitLiveness(t, m, x.ID, func(x Execution) bool {
+		return x.UnavailableSince != nil && x.Liveness != nil && x.Liveness.StallReason == ""
+	})
+	if !got.UnavailableSince.Equal(start) {
+		t.Fatalf("unavailable_since %v, want %v", got.UnavailableSince, start)
+	}
+
+	// 2. A non-counting failure (404) at +60 s clears it.
+	clock.Advance(60 * time.Second)
+	locked(f, func() { f.readErrHistory = &opencode.HTTPError{Status: 404} })
+	got = waitLiveness(t, m, x.ID, func(x Execution) bool {
+		return x.UnavailableSince == nil && x.Liveness != nil &&
+			x.Liveness.NativeStatus == "unavailable" && !x.Liveness.ObservedAt.Before(clock.Now())
+	})
+	if got.Liveness.StallReason != "" || got.Liveness.StallSuspected {
+		t.Fatalf("a non-counting failure became a stall: %+v", got.Liveness)
+	}
+
+	// 3. A counting failure at +130 s (130 s after the FIRST failure) must open a NEW window,
+	// not inherit the old one: no HARNESS_UNREACHABLE yet.
+	clock.Advance(70 * time.Second)
+	now := clock.Now()
+	locked(f, func() { f.readErrHistory = opencode.ErrTransport })
+	got = waitLiveness(t, m, x.ID, func(x Execution) bool {
+		return x.UnavailableSince != nil && x.Liveness != nil && !x.Liveness.ObservedAt.Before(now)
+	})
+	if !got.UnavailableSince.Equal(now) {
+		t.Fatalf("the window was not restarted by the non-counting failure: unavailable_since %v, want %v (first failure %v)", got.UnavailableSince, now, start)
+	}
+	if got.Liveness.StallSuspected || got.Liveness.StallReason != "" {
+		t.Fatalf("a window older than 120 s survived the non-counting failure: %+v", got.Liveness)
+	}
+
+	// 4. The new window still produces HARNESS_UNREACHABLE after its own 120 s.
+	clock.Advance(120 * time.Second)
+	got = waitLiveness(t, m, x.ID, func(x Execution) bool {
+		return x.Liveness != nil && x.Liveness.StallReason == "HARNESS_UNREACHABLE" && x.Liveness.StallSuspected
+	})
+	if !got.UnavailableSince.Equal(now) {
+		t.Fatalf("unavailable_since %v, want the restarted window %v", got.UnavailableSince, now)
+	}
+}
