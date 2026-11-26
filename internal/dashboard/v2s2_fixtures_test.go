@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -124,8 +125,29 @@ func hostileSource() *fakeSource {
 		turns: []Turn{{MessageID: `msg"><script>alert(7)</script>`, Created: v2Now, State: TurnChanges}, {MessageID: "msg_ok", Created: v2Now, State: TurnChanges}}}
 }
 
-// s2Pages renders every S2 page and state with the fixed clock. The names are the golden file names.
+var (
+	s2Mu    sync.Mutex
+	s2Cache map[string]string
+)
+
+// s2Pages renders every S2 page and state with the fixed clock, once per process (the render is deterministic and
+// read-only, and a dozen tests share it); every caller gets its own copy of the map. The names are the golden file
+// names.
 func s2Pages(t *testing.T) map[string]string {
+	t.Helper()
+	s2Mu.Lock()
+	defer s2Mu.Unlock()
+	if s2Cache == nil {
+		s2Cache = renderS2Pages(t)
+	}
+	out := make(map[string]string, len(s2Cache))
+	for k, v := range s2Cache {
+		out[k] = v
+	}
+	return out
+}
+
+func renderS2Pages(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	get := func(name string, src Source, target string) {
