@@ -50,6 +50,11 @@ comes from, the live OpenCode reads, the sockets, the lifecycle and ACL files, a
 secret. `--from-unit <name>` reads a systemd unit's environment instead of your shell, and `--smoke` makes one
 `initialize` + `tools/list` call against the running service. See [CONTRACTS](docs/CONTRACTS.md#cirak-doctor-adr-027-s3).
 
+`cirak config import --from-unit <name> --out /etc/cirak/config.json` (ADR-027 S4) turns a running unit's environment
+into the config file, value-free in every output, and `cirak init --remote` sets up remote mode (TLS certificate and key, an
+HTTPS public origin, a named principal). The step-by-step migration of an existing host, with its rollback, is in
+[CONFIG_MIGRATION](docs/deploy/CONFIG_MIGRATION.md); it is an operator procedure, never run by the tools.
+
 `CIRAK_ALLOWED_ROOTS` is an OS path-list (`:` on Ubuntu);
 `CIRAK_ALLOWED_SESSIONS` is a comma-separated list of native IDs. Both are
 required. The single bearer token represents the local principal with that ACL.

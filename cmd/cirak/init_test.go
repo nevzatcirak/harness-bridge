@@ -46,6 +46,7 @@ type ih struct {
 	env              map[string]string
 	runErr           error
 	randomBytes      []byte
+	clock            func() time.Time // nil: the fixed initNow; a remote setup uses the real clock, as the daemon's own validator does
 }
 
 func newIH(t *testing.T) *ih {
@@ -92,7 +93,12 @@ func (h *ih) deps() initDeps {
 	i := 0
 	return initDeps{
 		getenv: func(k string) string { return h.env[k] }, stdin: strings.NewReader(h.stdin), stdout: &h.out, stderr: &h.errb,
-		isTTY: h.tty, outTTY: h.tty && !h.stdoutRedirected, uid: os.Geteuid(), gid: os.Getegid(), now: func() time.Time { return initNow },
+		isTTY: h.tty, outTTY: h.tty && !h.stdoutRedirected, uid: os.Geteuid(), gid: os.Getegid(), now: func() time.Time {
+			if h.clock != nil {
+				return h.clock()
+			}
+			return initNow
+		},
 		random: bytes.NewReader(h.randomBytes), lookup: svc,
 		probe: func(_ context.Context, u, user, pw string) openCodeProbe {
 			h.probeCalls = append(h.probeCalls, probeCall{u, user, pw})

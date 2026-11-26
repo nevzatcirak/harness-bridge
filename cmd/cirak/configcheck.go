@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
@@ -29,10 +31,13 @@ import (
 // or unset. Exit 0 clean, 1 warnings or unverified items, 2 refused.
 
 const configCheckUsage = `usage: cirak config check [--config path] [--listen addr] [--read-only] [--token-file path] [--print-effective]
+                         [--from-unit name | --env-file path]
 
 Validates the configuration that a start would use (flag, environment, config file, default), with no listener
 and no network. Exit 0 clean, 1 warnings or unverified items, 2 refused. --print-effective lists every key with
-its source; a secret reference is shown only as set or unset.
+its source; a secret reference is shown only as set or unset. --from-unit reads the environment of a systemd unit
+(systemctl show, then its EnvironmentFile= files; run as root or as a user that can read them) instead of your
+shell; --env-file reads one environment file the same way.
 
 `
 
@@ -68,32 +73,58 @@ func (r *report) code() int {
 	return 0
 }
 
-// runConfig is the "config" subcommand.
+// runConfig is the "config" subcommand with the real process: the production unit reader and file reader.
 func runConfig(args []string, getenv func(string) string, environ []string, uid int, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "check" {
-		fmt.Fprint(stderr, configCheckUsage)
-		return 2
+	return runConfigDeps(args, doctorDeps{
+		getenv: getenv, environ: environ, uid: uid, now: time.Now, stdout: stdout, stderr: stderr,
+		showUnit: prodShowUnit, readFile: osReadEnvFile, stageDir: prodStageDir, random: rand.Reader,
+	})
+}
+
+// runConfigDeps is runConfig with every side effect injected: tests use temp files and fakes only.
+func runConfigDeps(args []string, d doctorDeps) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "check":
+			return runConfigCheck(args[1:], d)
+		case "import":
+			return runConfigImport(args[1:], d)
+		}
 	}
+	fmt.Fprint(d.stderr, configCheckUsage+configImportUsage)
+	return 2
+}
+
+func runConfigCheck(args []string, d doctorDeps) int {
 	fs, flags := newFlagSet("cirak config check", io.Discard)
 	printEffective := fs.Bool("print-effective", false, "list every key with its source")
-	fs.Usage = func() { fmt.Fprint(stderr, configCheckUsage) }
+	fromUnit := fs.String("from-unit", "", "read the environment of this systemd unit instead of the shell")
+	envFile := fs.String("env-file", "", "read this environment file instead of the shell")
+	fs.Usage = func() { fmt.Fprint(d.stderr, configCheckUsage) }
 	// The check takes the daemon's flags, so it resolves what a start with the same arguments would.
-	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
-		fmt.Fprint(stderr, configCheckUsage)
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		fmt.Fprint(d.stderr, configCheckUsage)
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
 	}
-	rep := &report{out: stdout}
-	checkConfiguration(rep, *flags, getenv, environ, uid, *printEffective)
+	if *fromUnit != "" && *envFile != "" {
+		fmt.Fprintln(d.stderr, "config check: --from-unit and --env-file are exclusive")
+		return 2
+	}
+	rep := &report{out: d.stdout}
+	src, ok := d.selectSource(rep, *fromUnit, *envFile)
+	if ok {
+		checkConfigurationHome(rep, *flags, src.getenv, src.environ, d.uid, *printEffective, src.home, src.fromSrc)
+	}
 	switch rep.code() {
 	case 0:
-		fmt.Fprintln(stdout, "result: clean")
+		fmt.Fprintln(d.stdout, "result: clean")
 	case 1:
-		fmt.Fprintln(stdout, "result: warnings (exit 1)")
+		fmt.Fprintln(d.stdout, "result: warnings (exit 1)")
 	default:
-		fmt.Fprintln(stdout, "result: refused (exit 2)")
+		fmt.Fprintln(d.stdout, "result: refused (exit 2)")
 	}
 	return rep.code()
 }
@@ -105,6 +136,12 @@ func checkConfiguration(rep *report, f serveFlags, getenv func(string) string, e
 // checkConfigurationFull is checkConfiguration that also returns the effective environment and the loaded
 // configuration (nil when the configuration was refused), so `cirak doctor` can add its own checks to the same view.
 func checkConfigurationFull(rep *report, f serveFlags, getenv func(string) string, environ []string, uid int, printEffective bool) (func(string) string, *loaded) {
+	return checkConfigurationHome(rep, f, getenv, environ, uid, printEffective, processHome, false)
+}
+
+// checkConfigurationHome is checkConfigurationFull with the home directory of the per-user discovery and whether
+// the environment is a unit or a file (fromSrc), which changes only the wording of an unresolvable credential.
+func checkConfigurationHome(rep *report, f serveFlags, getenv func(string) string, environ []string, uid int, printEffective bool, home func() (string, error), fromSrc bool) (func(string) string, *loaded) {
 	env0, legacy, err := cirakEnv(getenv, legacyPhaseFor(version.Version()))
 	if err != nil {
 		rep.refuse("environment: %v", err)
@@ -113,7 +150,7 @@ func checkConfigurationFull(rep *report, f serveFlags, getenv func(string) strin
 	for _, w := range legacy {
 		rep.warn("%s", w)
 	}
-	ld, err := loadEffective(f, env0, uint32(uid), processHome)
+	ld, err := loadEffective(f, env0, uint32(uid), home)
 	if err != nil {
 		rep.refuse("%v", err)
 		return nil, nil
@@ -130,7 +167,11 @@ func checkConfigurationFull(rep *report, f serveFlags, getenv func(string) strin
 	token, tokenKnown := "", false
 	switch {
 	case unresolved(ld, "token.credential"):
-		rep.unverified("token: it is a systemd credential and CREDENTIALS_DIRECTORY is not set here; run the check under the unit or pass the unit's source (not in this slice)")
+		if fromSrc {
+			rep.unverified("token: the unit delivers it as a systemd credential; `systemctl show` does not expose $CREDENTIALS_DIRECTORY, so this command cannot resolve it and never reads /run/credentials (check the token file the credential is loaded from)")
+		} else {
+			rep.unverified("token: it is a systemd credential and CREDENTIALS_DIRECTORY is not set here; run the check under the unit, or use --from-unit (which still cannot resolve a credential)")
+		}
 	case env("CIRAK_TOKEN") == "" && env("CIRAK_TOKEN_FILE") == "":
 		rep.unverified("token: no token source is visible to this process (a token in the unit's EnvironmentFile= or a credential cannot be seen here)")
 	default:
@@ -375,6 +416,13 @@ func checkLiveness(rep *report, env func(string) string) {
 }
 
 func checkUnknownNames(rep *report, environ []string) {
+	for _, n := range unknownEnvNames(environ) {
+		rep.warn("unknown environment name %s is not read by the daemon", n)
+	}
+}
+
+// unknownEnvNames lists, sorted, the variables of either prefix that the daemon does not know. Names only.
+func unknownEnvNames(environ []string) []string {
 	known := config.KnownEnvNames()
 	var unknown []string
 	for _, kv := range environ {
@@ -393,9 +441,7 @@ func checkUnknownNames(rep *report, environ []string) {
 		}
 	}
 	sort.Strings(unknown)
-	for _, n := range unknown {
-		rep.warn("unknown environment name %s is not read by the daemon", n)
-	}
+	return unknown
 }
 
 // privateDir checks an existing directory is owned by the service user with mode 0700. A missing directory is

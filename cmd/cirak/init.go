@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -27,21 +28,24 @@ import (
 
 // `cirak init` core (ADR-027 section 2, slice S2): detect OpenCode, check the workspace roots, generate a
 // token, write the config and the lifecycle file, and print the connector values and the smoke steps. It
-// installs no service, writes no unit or plist, runs no doctor, and has no remote or TLS path (S3, S4).
+// installs no service by itself (S3 adds --install-service) and, with --remote (S4), writes remote mode.
 //
 // init writes ONLY the explicit target paths, never follows a symlink, and never applies chown, chmod or
 // setfacl: where a fix needs them it PRINTS the exact command. The token is shown once, on a terminal only.
 
-const initUsage = `usage: cirak init [--yes] [--local] [--listen addr] [--root path]... [--session id]... [--opencode-url url]
+const initUsage = `usage: cirak init [--yes] [--local | --remote] [--listen addr] [--root path]... [--session id]... [--opencode-url url]
                   [--service-user name] [--config path] [--token-file path] [--expires RFC3339]
                   [--lifecycle-root path]... [--force]
+                  [--remote --tls-cert path --tls-key path --public-origin https://host --principal name]
                   [--install-service [--launch-daemon] [--claude-home path]] [--no-service]
 
 Interactive by default (a terminal is required); --yes never prompts and needs --root, --session and
---token-file. A token is generated only when --token-file names a NEW file; an existing file is referenced.
-Local mode only in this release: --remote, --tls-cert and --tls-key are refused. --install-service renders a
-systemd unit (linux) or a launchd plist (macOS) and places it only where you can write it, otherwise it prints
-the install command; init never starts or loads a service.
+--token-file (and, with --remote, --tls-cert, --tls-key, --public-origin and --principal). A token is generated
+only when --token-file names a NEW file; an existing file is referenced. --remote writes remote mode: the Bridge
+needs a TLS certificate and key (there is no plaintext fallback), an HTTPS public origin, a named principal and a
+token deadline; init never opens a firewall or edits a proxy. --install-service renders a systemd unit (linux) or a
+launchd plist (macOS) and places it only where you can write it, otherwise it prints the install command; init
+never starts or loads a service.
 `
 
 // Defaults of section 2 item 3: 64 characters, 7 days, and the pair written explicitly.
@@ -72,6 +76,7 @@ type initOptions struct {
 	serviceUser, configPath   string
 	tokenFile, expires        string
 	tlsCert, tlsKey           string
+	publicOrigin, principal   string
 	roots, sessions           listFlag
 	lifecycleRoots            listFlag
 }
@@ -81,8 +86,8 @@ func parseInitFlags(args []string, stderr io.Writer) (*initOptions, error) {
 	fs := flag.NewFlagSet("cirak init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.BoolVar(&o.yes, "yes", false, "never prompt; every non-secret answer is a flag")
-	fs.BoolVar(&o.local, "local", false, "local mode (the only mode in this release)")
-	fs.BoolVar(&o.remote, "remote", false, "remote mode (not in this release)")
+	fs.BoolVar(&o.local, "local", false, "local mode (the default)")
+	fs.BoolVar(&o.remote, "remote", false, "remote mode: TLS certificate and key, an HTTPS public origin and a named principal")
 	fs.StringVar(&o.listen, "listen", "", "listen address (loopback)")
 	fs.Var(&o.roots, "root", "workspace root (repeatable)")
 	fs.Var(&o.sessions, "session", "native session ID of the ACL (repeatable)")
@@ -92,8 +97,10 @@ func parseInitFlags(args []string, stderr io.Writer) (*initOptions, error) {
 	fs.StringVar(&o.configPath, "config", "", "config file to write")
 	fs.StringVar(&o.tokenFile, "token-file", "", "token file; generated when it does not exist")
 	fs.StringVar(&o.expires, "expires", "", "rotation deadline, RFC3339, within 168h")
-	fs.StringVar(&o.tlsCert, "tls-cert", "", "TLS certificate (not in this release)")
-	fs.StringVar(&o.tlsKey, "tls-key", "", "TLS key (not in this release)")
+	fs.StringVar(&o.tlsCert, "tls-cert", "", "TLS certificate file (remote mode)")
+	fs.StringVar(&o.tlsKey, "tls-key", "", "TLS key file (remote mode; a private regular file)")
+	fs.StringVar(&o.publicOrigin, "public-origin", "", "the HTTPS origin Claude Chat reaches (remote mode), for example https://bridge.example")
+	fs.StringVar(&o.principal, "principal", "", "the named principal of the remote token (remote mode)")
 	fs.BoolVar(&o.installService, "install-service", false, "write a systemd unit (linux) or a launchd plist (macOS); never starts it")
 	fs.BoolVar(&o.noService, "no-service", false, "install no service (the default)")
 	fs.BoolVar(&o.launchDaemon, "launch-daemon", false, "macOS: a system LaunchDaemon instead of the user LaunchAgent (needs --service-user)")
@@ -107,8 +114,8 @@ func parseInitFlags(args []string, stderr io.Writer) (*initOptions, error) {
 		return nil, errors.New("unexpected argument " + fs.Arg(0))
 	}
 	switch {
-	case o.remote, o.tlsCert != "", o.tlsKey != "":
-		return nil, errors.New("remote and TLS setup are not in this release (ADR-027 S4); init sets up local mode")
+	case !o.remote && (o.tlsCert != "" || o.tlsKey != "" || o.publicOrigin != "" || o.principal != ""):
+		return nil, errors.New("--tls-cert, --tls-key, --public-origin and --principal need --remote (a certificate alone never switches a local setup to remote)")
 	case o.installService && o.noService:
 		return nil, errors.New("--install-service and --no-service are exclusive")
 	case (o.launchDaemon || o.claudeHome != "") && !o.installService:
@@ -269,6 +276,14 @@ func (w *wizard) run() error {
 		if o.tokenFile == "" {
 			missing = append(missing, "--token-file")
 		}
+		if o.remote {
+			for flagName, v := range map[string]string{"--tls-cert": o.tlsCert, "--tls-key": o.tlsKey, "--public-origin": o.publicOrigin, "--principal": o.principal} {
+				if v == "" {
+					missing = append(missing, flagName)
+				}
+			}
+			sort.Strings(missing)
+		}
 		if len(missing) > 0 {
 			return usagef("--yes never prompts: %s required", strings.Join(missing, ", "))
 		}
@@ -297,13 +312,19 @@ func (w *wizard) run() error {
 	if w.ocURL == "" {
 		w.ocURL = defaultOpenCode
 	}
-	if err := security.ValidateListen(w.listen, false); err != nil {
-		return fmt.Errorf("--listen: %w (init sets up local mode)", err)
+	if err := security.ValidateListen(w.listen, o.remote); err != nil {
+		if o.remote {
+			return fmt.Errorf("--listen: %w", err)
+		}
+		return fmt.Errorf("--listen: %w (use --remote for a private address)", err)
 	}
 	if err := validateOpenCodeURL(w.ocURL); err != nil {
 		return err
 	}
 	if err := w.parseExpiry(); err != nil {
+		return err
+	}
+	if err := w.checkRemote(); err != nil {
 		return err
 	}
 	w.detectOpenCode()
@@ -334,7 +355,7 @@ func (w *wizard) run() error {
 // shown on one line safely even when quoted.
 func (w *wizard) rejectUnsafePaths() error {
 	all := append(append([]string(nil), w.o.roots...), w.o.lifecycleRoots...)
-	all = append(all, w.cfgPath, w.tokenPath, w.lcPath, w.pwPath, w.lockDir)
+	all = append(all, w.cfgPath, w.tokenPath, w.lcPath, w.pwPath, w.lockDir, w.o.tlsCert, w.o.tlsKey)
 	for _, p := range all {
 		if strings.ContainsAny(p, "\n\r\x00") {
 			return usagef("a path contains a newline, a carriage return or a NUL: refused before anything was written")
@@ -429,6 +450,19 @@ func (w *wizard) interview() error {
 	}
 	if len(o.roots) == 0 || len(o.sessions) == 0 {
 		return usagef("at least one workspace root and one session ID are required")
+	}
+	if o.remote {
+		w.say("Remote mode: the Bridge itself needs a TLS certificate and key (there is no plaintext fallback); a reverse proxy may terminate the client TLS and forward over verified TLS to this backend.")
+		for _, q := range []struct {
+			label string
+			dst   *string
+		}{{"TLS certificate file", &o.tlsCert}, {"TLS key file", &o.tlsKey}, {"Public origin (https://host)", &o.publicOrigin}, {"Principal name", &o.principal}} {
+			if *q.dst == "" {
+				if *q.dst, err = w.ask(q.label, ""); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	if len(o.lifecycleRoots) == 0 {
 		if o.lifecycleRoots, err = w.askList("Lifecycle root where Chat may create sessions (default none)"); err != nil {
@@ -702,8 +736,14 @@ func (w *wizard) render() (cfg, lc []byte, err error) {
 	case "packaged": // the packaged unit sets CIRAK_TOKEN_FILE itself: the config names neither
 		tokenCfg = map[string]any{"expires": w.expires.Format(time.RFC3339)}
 	}
+	server := map[string]any{"listen": w.listen}
+	if w.o.remote {
+		server["public_origin"] = w.o.publicOrigin
+		server["principal"] = w.o.principal
+		server["tls"] = map[string]any{"cert_file": w.o.tlsCert, "key_file": w.o.tlsKey}
+	}
 	m := map[string]any{
-		"server":  map[string]any{"listen": w.listen},
+		"server":  server,
 		"token":   tokenCfg,
 		"harness": map[string]any{"opencode": opencodeCfg},
 		"acl":     map[string]any{"roots": []string(w.o.roots), "sessions": []string(w.o.sessions)},
@@ -896,7 +936,18 @@ func removeStagingDir(dir string) {
 
 // stage handles an invoking uid that is not the service uid: the files are written to a private staging
 // directory the invoking user owns, and the exact install commands are printed. init never applies chown.
-func (w *wizard) stage(cfg, lc []byte) error {
+func (w *wizard) stage(cfg, lc []byte) (err error) {
+	// Nothing reaches the operator until the last step that can fail has run: the install commands name a staging
+	// directory that a failed run removes, so a failed run prints no command (#557 P3-3).
+	realOut := w.d.stdout
+	var held bytes.Buffer
+	w.d.stdout = &held
+	defer func() {
+		w.d.stdout = realOut
+		if err == nil {
+			_, _ = realOut.Write(held.Bytes())
+		}
+	}()
 	// The printed commands run as root: refuse a symlink anywhere in the existing part of every target path
 	// BEFORE anything is staged or printed (a missing tail is fine, install -d creates it).
 	targets := []string{w.cfgPath}
@@ -1010,7 +1061,11 @@ var generatedConfigCheck = checkConfiguration
 // whole run, only on a terminal, and only when this run generated it; --yes prints the file path.
 func (w *wizard) connector() {
 	w.say("Connector values (Claude Chat, custom connector):")
-	w.say("  URL:    http://%s/mcp", w.listen)
+	if w.o.remote {
+		w.say("  URL:    %s/mcp", w.o.publicOrigin)
+	} else {
+		w.say("  URL:    http://%s/mcp", w.listen)
+	}
 	w.say("  Header: Authorization: Bearer <token>")
 	switch {
 	case w.newToken && w.d.isTTY && w.d.outTTY && !w.o.yes && !w.tokenShown:

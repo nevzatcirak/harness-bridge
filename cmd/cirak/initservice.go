@@ -46,17 +46,19 @@ func (w *wizard) planService() error {
 	return usagef("--install-service is supported on linux (systemd) and darwin (launchd), not %s", w.d.goos)
 }
 
-// systemClaudeHomes are the top-level directories that are never a Claude Code adapter HOME: ReadWritePaths= on one
-// of them would make part of the system writable again.
-var systemClaudeHomes = map[string]bool{
-	"/etc": true, "/usr": true, "/var": true, "/bin": true, "/sbin": true, "/lib": true, "/lib32": true, "/lib64": true,
-	"/libx32": true, "/boot": true, "/proc": true, "/sys": true, "/dev": true, "/run": true, "/root": true,
+// systemTrees are the directory trees that are never a Claude Code adapter HOME. A ReadWritePaths= entry on one
+// of them, or below one, makes part of the system writable again, and a name like /var/run or /proc/sys reaches
+// the same place by another route. The test is a prefix test, not a list of exact names (#557 P3-1).
+var systemTrees = []string{
+	"/etc", "/usr", "/var", "/proc", "/sys", "/dev", "/run", "/boot", "/root",
+	"/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
 }
 
 // validateClaudeHome checks --claude-home before anything is written, staged or printed. The value becomes a
 // ReadWritePaths= entry of a sandboxed unit with ProtectHome=off, so a careless value (for example "/") would switch
 // the sandbox off, and systemd gives a leading "-", "+", "!" or "@" in that field a meaning of its own. It must be
-// an absolute, canonical path that is not "/" and not a top-level system directory.
+// an absolute, canonical path of at least two components (so never "/" and never a top-level directory such as
+// /home or /opt) that is not one of the system trees or below one.
 func validateClaudeHome(p string) error {
 	switch p[0] {
 	case '-', '+', '!', '@', ':':
@@ -65,14 +67,16 @@ func validateClaudeHome(p string) error {
 	if !filepath.IsAbs(p) {
 		return fmt.Errorf("--claude-home must be an absolute path (got %q)", p)
 	}
-	if strings.Contains(p, "..") && filepath.Clean(p) != p {
-		return fmt.Errorf("--claude-home must not contain .. components (got %q)", p)
-	}
 	if filepath.Clean(p) != p {
-		return fmt.Errorf("--claude-home must be a clean path (no trailing slash, //, or . component): use %q", filepath.Clean(p))
+		return fmt.Errorf("--claude-home must be a clean path, with no .. or . component, no // and no trailing slash: use %q", filepath.Clean(p))
 	}
-	if p == "/" || systemClaudeHomes[p] {
-		return fmt.Errorf("--claude-home %s is a system directory: ReadWritePaths= on it would make the system writable; name the adapter's own home", p)
+	if len(strings.Split(strings.Trim(p, "/"), "/")) < 2 {
+		return fmt.Errorf("--claude-home %s is too broad: name the adapter's own home directory (at least two path components, such as /home/hbclaude)", p)
+	}
+	for _, tree := range systemTrees {
+		if p == tree || strings.HasPrefix(p, tree+"/") {
+			return fmt.Errorf("--claude-home %s is under %s, a system tree: ReadWritePaths= there would make part of the system writable; name the adapter's own home", p, tree)
+		}
 	}
 	return nil
 }
@@ -160,7 +164,7 @@ func (w *wizard) refuseExistingServiceFiles() error {
 	// here, in the pre-flight, before any config or token command is printed and before anything is staged
 	for _, f := range w.svcFiles {
 		if err := noSymlinkInExistingPrefix(f.dst); err != nil {
-			return fmt.Errorf("%w; no service file was written or staged", err)
+			return usagef("%v; no service file was written or staged", err)
 		}
 	}
 	for _, f := range w.svcFiles {
