@@ -18,7 +18,7 @@
 <span class="spacer"></span>
 <span class="label">Read-only</span>
 </div></header>
-<main id="content" tabindex="-1" class="wrap" data-poll="detail" data-harness="opencode" data-session="ses_demo0001">
+<main id="content" tabindex="-1" class="wrap" data-poll="detail" data-harness="opencode" data-session="ses_demo0001" data-sig="7a2c91e0:running:c">
 <p class="banner" id="stale" role="status" hidden></p>
 
 <section class="session cards" aria-labelledby="h-main">
@@ -27,31 +27,40 @@
 <div class="card">
 <dl class="kv">
 <dt>Harness</dt><dd><span class="badge">OpenCode</span></dd>
+<dt>Session ID</dt><dd><code class="copyable">ses_demo0001</code> <button class="btn" type="button" id="copy" data-copy="ses_demo0001" hidden>Copy ID</button></dd>
 <dt>Title</dt><dd data-f="title">Fix flaky retry test</dd>
-<dt>Root</dt><dd data-f="root"><code>/srv/demo/work/payments-api/services/billing</code></dd>
+<dt>Path</dt><dd data-f="root"><code>/srv/demo/work/payments-api/services/billing</code></dd>
 <dt>Lifecycle root</dt><dd data-f="lifecycle"><code>/srv/demo/work</code></dd>
-<dt>State</dt><dd data-f="state">running</dd>
-<dt>Guard</dt><dd data-f="guard">held (running)</dd>
-<dt>Current execution</dt><dd data-f="current">7a2c91e0</dd>
-<dt>Last activity</dt><dd data-f="last">2026-11-21 17:47:12Z</dd>
+<dt>State</dt><dd data-f="state"><span class="chip chip--info" title="running">Running</span></dd>
+<dt>Guard</dt><dd data-f="guard">Held, running</dd>
+<dt>Current execution</dt><dd data-f="current"><code>7a2c91e0</code></dd>
+<dt>Last activity</dt><dd data-f="last"><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time>, 2026-11-21 17:47:12Z</dd>
 </dl>
 
 </div>
 </section>
-<section class="executions card" aria-labelledby="h-exec">
-<h2 id="h-exec">Executions</h2>
-<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-exec"><table>
-<caption class="visually-hidden">Executions of this session recorded by this Bridge process</caption>
-<thead><tr><th scope="col">Execution</th><th scope="col">State</th><th scope="col">Started</th><th scope="col">Updated</th><th scope="col">Ended</th></tr></thead>
-<tbody id="exec-rows">
-<tr><td>7a2c91e0 (current)</td><td>running</td><td>2026-11-21 17:40:00Z</td><td>2026-11-21 17:40:00Z</td><td>-</td></tr>
+<section class="card" aria-labelledby="h-tl">
+<h2 id="h-tl">Execution timeline</h2>
+<p class="label">Newest first. The liveness report is advisory: it never changes an execution and the Bridge takes no action.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-tl"><table class="timeline">
+<caption class="visually-hidden">Executions of this session with the liveness report of the current one</caption>
+<thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="chip chip--info" title="running">Running</span> <span class="label">current</span></td>
+<td><code>7a2c91e0</code></td>
+<td><time datetime="2026-11-21T17:40:00Z" title="2026-11-21 17:40:00Z">8 min ago</time>, 2026-11-21 17:40:00Z</td>
+<td class="num">Running for 8 min 05 s</td>
+<td><span class="label">No report yet</span></td>
+</tr>
 </tbody></table></div>
 
 </section>
 <section class="changes card" aria-labelledby="h-changes">
-<h2 id="h-changes">Changes</h2>
+<h2 id="h-changes">Changes in the working tree</h2>
 
-<div class="diff"><p><span class="badge label-computed-empty">computed, no changes</span> working tree (not per turn) (an empty answer is also what OpenCode returns for a non-git project or the default branch)</p>
+<div class="diff-block"><p class="label"><span class="badge label-computed-empty">computed, no changes</span> working tree (not per turn) (an empty answer is also what OpenCode returns for a non-git project or the default branch)</p>
+
 
 </div>
 
@@ -64,4 +73,7 @@
 <script src="/dashboard.js"></script>
 </body>
 </html>
+
+
+
 

@@ -6,6 +6,7 @@ package dashboard
 
 import (
 	"context"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -86,6 +87,9 @@ func v2Pages(t *testing.T) map[string]string {
 		}
 		out[name] = body
 	}
+	for name, body := range s2Pages(t) { // slice S2: the detail page, one per liveness reason, and its states
+		out[name] = body
+	}
 	_, out["empty"], _ = v2Get(t, v2Handler(&fakeSource{rows: []Session{}}), "/")
 	code, body, _ := v2Get(t, v2Handler(&fakeSource{rowsErr: context.DeadlineExceeded}), "/")
 	if code != http.StatusServiceUnavailable {
@@ -98,23 +102,34 @@ func v2Pages(t *testing.T) map[string]string {
 
 // A1.10 item 3: the CSP string of section 3 on every response, and nothing inline in any page.
 func TestV2S1CSPAndNoInlineOnEveryPage(t *testing.T) {
-	inlineStyle := regexp.MustCompile(`(?i)<style|\sstyle\s*=`)
-	handler := regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
+	styleElement := regexp.MustCompile(`(?i)<style`)
 	inlineScript := regexp.MustCompile(`(?is)<script(\s[^>]*)?>`)
 	srcOnly := regexp.MustCompile(`(?i)^<script src="/dashboard\.js"></script>$`)
 	for name, body := range v2Pages(t) {
-		if inlineStyle.MatchString(body) {
-			t.Errorf("%s: an inline <style> or style attribute", name)
+		// Attributes are parsed, not grepped: a hostile fixture legitimately shows "onerror=" or "javascript:" as
+		// escaped TEXT or inside an escaped attribute VALUE, which is not an attribute.
+		for _, a := range htmlAttrs(body) {
+			switch {
+			case a.name == "style":
+				t.Errorf("%s: an inline style attribute", name)
+			case strings.HasPrefix(a.name, "on"):
+				t.Errorf("%s: an on* event-handler attribute: %s", name, a.name)
+			case a.name == "href" || a.name == "src" || a.name == "action" || a.name == "formaction":
+				v := strings.ToLower(strings.TrimSpace(a.value))
+				if strings.HasPrefix(v, "javascript:") || strings.HasPrefix(v, "data:") || strings.HasPrefix(v, "//") || strings.HasPrefix(v, "http:") || strings.HasPrefix(v, "https:") {
+					t.Errorf("%s: %s=%q points outside the dashboard or runs script", name, a.name, a.value)
+				}
+			}
 		}
-		if handler.MatchString(body) {
-			t.Errorf("%s: an on* event-handler attribute", name)
+		if styleElement.MatchString(body) {
+			t.Errorf("%s: an inline <style> element", name)
 		}
 		for _, s := range inlineScript.FindAllString(body, -1) {
 			if !srcOnly.MatchString(s+"</script>") && !strings.HasPrefix(s, `<script src="/`) {
 				t.Errorf("%s: a script tag that is not a same-origin file: %s", name, s)
 			}
 		}
-		if strings.Contains(body, "javascript:") || strings.Contains(strings.ToLower(body), "<iframe") {
+		if strings.Contains(strings.ToLower(body), "<iframe") {
 			t.Errorf("%s: active content", name)
 		}
 	}
@@ -303,12 +318,19 @@ func TestV2S1SessionsTableShape(t *testing.T) {
 // form and no button that could submit anything.
 func TestV2S1NoScriptRenderHasNoDeadControl(t *testing.T) {
 	for name, body := range v2Pages(t) {
-		if strings.Contains(body, "<form") || strings.Contains(body, "<button") {
-			t.Errorf("%s: a form or button on a read-only page", name)
+		if strings.Contains(body, "<form") {
+			t.Errorf("%s: a form on a read-only page", name)
+		}
+		// The one button is the copy button of the detail page (JS-1): it is hidden until the script runs, so it is
+		// never a dead control without script.
+		for _, b := range regexp.MustCompile(`<button[^>]*>`).FindAllString(body, -1) {
+			if !strings.Contains(b, ` id="copy"`) || !regexp.MustCompile(`\shidden(\s|>)`).MatchString(b) {
+				t.Errorf("%s: a button that is not the hidden copy button: %s", name, b)
+			}
 		}
 	}
 	body := v2Pages(t)["list"]
-	i := strings.Index(body, `<div class="filters" id="filters" hidden>`)
+	i := strings.Index(body, `<div class="filters" id="filters" role="search" aria-label="Filter sessions" hidden>`)
 	if i < 0 {
 		t.Fatal("the filter controls are not in a hidden group (dead controls without script)")
 	}
@@ -407,4 +429,25 @@ func TestV2S1RouteAndMethodSweep(t *testing.T) {
 			}
 		}
 	}
+}
+
+// htmlAttr is one attribute of a start tag: its lower-case name and its value, unescaped as a browser reads it.
+type htmlAttr struct{ name, value string }
+
+var (
+	startTag = regexp.MustCompile(`<[a-zA-Z][^\s/>]*((?:\s+[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>` + "`" + `]+))?)*)\s*/?>`)
+	attrRE   = regexp.MustCompile(`\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>` + "`" + `]+)))?`)
+)
+
+// htmlAttrs lists the attributes of every start tag of a page. Text content never has a literal "<" (html/template
+// escapes it), so a "<" followed by a letter always opens a real tag.
+func htmlAttrs(body string) []htmlAttr {
+	var out []htmlAttr
+	for _, tag := range startTag.FindAllStringSubmatch(body, -1) {
+		for _, m := range attrRE.FindAllStringSubmatch(tag[1], -1) {
+			v := m[2] + m[3] + m[4]
+			out = append(out, htmlAttr{name: strings.ToLower(m[1]), value: html.UnescapeString(v)})
+		}
+	}
+	return out
 }

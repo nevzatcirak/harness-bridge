@@ -1,7 +1,5 @@
-// Cirak dashboard script (ADR-023 A1.6, slice S1). Read-only: only GET requests, every value from the server is
-// set with textContent or setAttribute, no markup is built from data, and nothing is evaluated. Every page is
-// fully functional without this script: it adds the filters (JS-4), the poll refresh that pauses when the tab is
-// hidden (JS-3, A1.7), the relative times (JS-5) and the menu behaviour below 60rem (JS-6).
+// Cirak dashboard script (ADR-023 A1.6, S1 and S2). GET only; server values go in through textContent or
+// setAttribute; no markup is built from data; nothing is evaluated. Every page works without it.
 (function () {
   'use strict';
   var doc = document;
@@ -19,7 +17,7 @@
   function show(e) { if (e) { e.hidden = false; if (e.removeAttribute) { e.removeAttribute('hidden'); } } }
   function safeHref(href) { return typeof href === 'string' && href.indexOf('/session/') === 0 ? href : ''; }
 
-  // The relative form of a time: the same buckets as the server (display.go relTime).
+  // as display.go relTime
   function rel(iso) {
     var t = Date.parse(iso);
     if (isNaN(t)) { return '-'; }
@@ -32,7 +30,7 @@
   }
   function chipClass(tone) { return /^(ok|info|secondary|error|warn|outline)$/.test(tone) ? 'chip chip--' + tone : 'chip'; }
 
-  // ---- JS-6: the menu is open without script; below 60rem the script closes it, above it opens it ----
+  // JS-6: menu open below 60rem
   var menu = byId('menu');
   if (menu && typeof window.matchMedia === 'function') {
     var narrow = window.matchMedia('(max-width: 60rem)');
@@ -40,7 +38,7 @@
     if (narrow.addEventListener) { narrow.addEventListener('change', function (e) { menu.open = !e.matches; }); }
   }
 
-  // ---- JS-4: filters with their state in the URL (replaceState); values reach the page only through .value ----
+  // JS-4: filters, state in the URL
   var archived = /(^|[?&])archived=1(&|$)/.test(window.location.search);
   var query = {};
   window.location.search.replace(/^\?/, '').split('&').forEach(function (pair) {
@@ -100,7 +98,7 @@
     applyAudit();
   }
 
-  // ---- the sessions table, rebuilt from the JSON model with the same markup the server renders ----
+  // the sessions table, rebuilt from the model
   function cell(tr, text, cls) { var td = el('td', text, cls); tr.appendChild(td); return td; }
   function sessionRow(s) {
     var tr = el('tr');
@@ -188,33 +186,58 @@
     status.appendChild(t);
   }
 
-  function renderDetail(m) {
-    var s = m.session || {};
-    var set = { title: s.title, root: s.root, lifecycle: s.lifecycle_root || '', state: s.state, guard: s.guard && s.guard.held ? 'held (' + (s.guard.state || 'unknown') + ')' : 'none', current: s.current_execution || '-', last: s.last_activity };
-    Object.keys(set).forEach(function (k) {
-      var dd = app.querySelector('dd[data-f="' + k + '"]');
-      if (!dd) { return; }
-      if (k === 'root' || k === 'lifecycle') {
-        clear(dd);
-        if (set[k]) { dd.appendChild(el('code', set[k])); } else { dd.textContent = '-'; }
-      } else { dd.textContent = set[k]; }
-    });
-    var tbody = byId('exec-rows');
-    if (!tbody) {
-      // The page was rendered with no executions: a table appears only on a reload.
-      if (m.executions && m.executions.length) { window.location.reload(); }
-      return;
-    }
-    clear(tbody);
-    (m.executions || []).forEach(function (x) {
-      var tr = el('tr');
-      cell(tr, x.id + (x.current ? ' (current)' : ''));
-      cell(tr, x.state); cell(tr, x.started); cell(tr, x.updated); cell(tr, x.ended);
-      tbody.appendChild(tr);
+  // parts: as the server renders them
+  function addParts(node, ps) {
+    (ps || []).forEach(function (p) {
+      if (p.kind === 'chip') { node.appendChild(el('span', p.text, chipClass(p.tone))); }
+      else if (p.kind === 'code') { node.appendChild(el('code', p.text)); }
+      else if (p.kind === 'time') {
+        var t = el('time', rel(p.iso));
+        t.setAttribute('datetime', p.iso);
+        t.setAttribute('title', p.abs);
+        node.appendChild(t);
+        node.appendChild(doc.createTextNode(', ' + p.abs));
+      } else { node.appendChild(doc.createTextNode(p.text)); }
     });
   }
+  function renderReport(box, r) {
+    clear(box);
+    (r.sentences || []).forEach(function (t) { box.appendChild(el('p', t, 'report')); });
+    var dl = el('dl', null, 'kv');
+    (r.rows || []).forEach(function (row) {
+      dl.appendChild(el('dt', row.label));
+      var dd = el('dd');
+      addParts(dd, row.parts);
+      dl.appendChild(dd);
+    });
+    box.appendChild(dl);
+    box.appendChild(el('p', r.note, 'label'));
+  }
+  function renderDetail(m) {
+    var s = m.session || {};
+    function field(k) { return app.querySelector('dd[data-f="' + k + '"]'); }
+    var d = field('title');
+    if (d) { d.textContent = s.title || ''; }
+    if ((d = field('root'))) { clear(d); d.appendChild(el('code', s.root)); }
+    if ((d = field('lifecycle'))) { clear(d); if (s.lifecycle_root) { d.appendChild(el('code', s.lifecycle_root)); } else { d.textContent = '-'; } }
+    if ((d = field('state'))) { clear(d); var c = el('span', s.state_label, chipClass(s.state_tone)); c.setAttribute('title', s.state); d.appendChild(c); }
+    if ((d = field('guard'))) { d.textContent = s.guard_text; }
+    if ((d = field('current'))) { clear(d); if (s.current_execution) { d.appendChild(el('code', s.current_execution)); } else { d.textContent = 'None'; } }
+    if ((d = field('last'))) { clear(d); addParts(d, [s.last_activity_iso ? { kind: 'time', iso: s.last_activity_iso, abs: s.last_activity } : { kind: 'text', text: '-' }]); }
+    // the timeline changed shape: reload
+    if (m.sig !== app.getAttribute('data-sig')) { window.location.reload(); return; }
+    var cur = (m.executions || []).filter(function (x) { return x.current; })[0];
+    var box = byId('report'), perm = byId('perm');
+    if (cur && cur.report && box) { renderReport(box, cur.report); }
+    if (cur && cur.permission && perm) {
+      clear(perm);
+      perm.appendChild(el('span', cur.permission.label, chipClass(cur.permission.tone)));
+      perm.appendChild(doc.createTextNode(' '));
+      addParts(perm, cur.permission.parts);
+    }
+  }
 
-  // ---- JS-5: relative times are re-rendered from their datetime every 30 s; no network ----
+  // JS-5: relative times every 30 s
   var tickTimer = null;
   function refreshTimes() {
     var ts = app.querySelectorAll('time');
@@ -229,7 +252,7 @@
     if (!doc.hidden) { tickTimer = setTimeout(tick, 30000); }
   }
 
-  // ---- JS-3 and A1.7: poll the JSON model, pause while the tab is hidden, back off on failure ----
+  // JS-3, A1.7: poll, pause while hidden, back off
   var kind = app.getAttribute('data-poll');
   var base = kind === 'list' ? 5000 : (kind === 'detail' ? 2000 : 0);
   var url = null;
@@ -238,15 +261,14 @@
     var h = app.getAttribute('data-harness'), id = app.getAttribute('data-session');
     if (h && id) { url = '/api/state/session/' + encodeURIComponent(h) + '/' + encodeURIComponent(id) + (archived ? '?archived=1' : ''); }
   }
-  var etag = null, timer = null, ctl = null, failures = 0, retryMs = 0, lastOk = Date.now();
+  var etag = null, fresh = null, timer = null, ctl = null, failures = 0, retryMs = 0, lastOk = Date.now();
   var statusEl = byId('status');
   var statusTime = statusEl ? statusEl.querySelector('time') : null;
   if (statusTime && statusTime.getAttribute('datetime') && !isNaN(Date.parse(statusTime.getAttribute('datetime')))) {
     lastOk = Date.parse(statusTime.getAttribute('datetime'));
   }
 
-  // The delay after a failure: max(the page's own interval, Retry-After), doubled on each further failure, at most 60 s.
-  // The floor is the page's own interval, so a failed poll never retries faster than a healthy one.
+  // failure delay: max(interval, Retry-After), doubling, at most 60 s
   function delay() {
     if (failures === 0) { return base; }
     return Math.min(Math.max(base, retryMs) * Math.pow(2, failures - 1), 60000);
@@ -293,7 +315,7 @@
     fetch(url, { method: 'GET', headers: headers, credentials: 'same-origin', cache: 'no-store', signal: mine.signal }).then(function (r) {
       if (r.status === 304) { done(); ok(); return null; }
       if (!r.ok) { done(); fail(r); return null; }
-      etag = r.headers.get('ETag');
+      fresh = r.headers.get('ETag');
       return r.json().then(function (m) { done(); return m; });
     }).then(function (m) {
       if (!m) { return; }
@@ -301,10 +323,11 @@
         var live = byId('live');
         if (live) { renderList(m, live); setStatus(m); }
       } else { renderDetail(m); }
+      etag = fresh; // only after a successful render
       ok();
     }).catch(function (e) {
       done();
-      if (e && e.name === 'AbortError') { return; } // the tab was hidden: not a failure, nothing is scheduled
+      if (e && e.name === 'AbortError') { return; } // hidden: not a failure
       fail(null);
     });
   }
@@ -318,10 +341,34 @@
     refreshTimes();
     if (tickTimer === null) { tickTimer = setTimeout(tick, 30000); }
     if (timer !== null) { clearTimeout(timer); timer = null; }
-    poll(); // one immediate refresh when the tab becomes visible again
+    poll();
+  });
+  // pagehide stops timers and aborts; a restored page refreshes once
+  window.addEventListener('pagehide', function () {
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (tickTimer !== null) { clearTimeout(tickTimer); tickTimer = null; }
+    if (ctl) { ctl.abort(); ctl = null; }
+  });
+  window.addEventListener('pageshow', function (e) {
+    if (!e || !e.persisted || doc.hidden) { return; }
+    refreshTimes();
+    if (tickTimer === null) { tickTimer = setTimeout(tick, 30000); }
+    poll();
   });
   if (!doc.hidden) {
     tickTimer = setTimeout(tick, 30000);
     schedule(base);
+  }
+
+  // JS-1: copy button
+  var copyBtn = byId('copy');
+  if (copyBtn && window.navigator && window.navigator.clipboard && window.navigator.clipboard.writeText) {
+    show(copyBtn);
+    copyBtn.addEventListener('click', function () {
+      window.navigator.clipboard.writeText(copyBtn.getAttribute('data-copy') || '').then(
+        function () { copyBtn.textContent = 'Copied'; },
+        function () { copyBtn.textContent = 'Copy failed'; });
+      setTimeout(function () { copyBtn.textContent = 'Copy ID'; }, 2000);
+    });
   }
 })();

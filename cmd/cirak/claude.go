@@ -11,6 +11,7 @@ import (
 
 	"github.com/nevzatcirak/cirak/internal/adapters/claudecode/runner"
 	"github.com/nevzatcirak/cirak/internal/claudewire"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-021 wiring, default off. The adapter exists only when CIRAK_CLAUDE_COMMAND is set;
@@ -76,6 +77,15 @@ func claudeConfig(env func(string) string, allowedRoots, allowedSessions []strin
 		}
 		cfg.Runner = runner.Config{RunMax: d}
 	}
+	// ADR-017 A2 S4: the Claude side reads the same operator liveness thresholds. The
+	// CIRAK_LIVENESS_* names and the ADR-027 liveness.* file keys resolve to the same
+	// value through the effective configuration; the runner caps tool_long_s at RUN_MAX
+	// (D32 Q12).
+	lc, err := execution.ParseLivenessEnv(env)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Runner.NoProgressS, cfg.Runner.ToolLongS = lc.NoProgressS, lc.ToolLongS
 	return cfg, nil
 }
 

@@ -80,10 +80,58 @@ func unavailableReason(err error) string {
 
 type fileView struct {
 	Path, Status         string
+	StatusWord           string // the sentence-case word of the file list: Modified, Added, Deleted, Unknown status
 	Additions, Deletions string
 	Patch                string
-	Note                 string // why Patch is empty, or that it was cut
+	Lines                []diffLine // Patch split into the lines the page tints (A1.4 item 2); nil when no patch is shown
+	Note                 string     // why Patch is empty, or that it was cut
 	ShowPatch            bool
+}
+
+// diffLine is one line of a unified diff: its text as received (with the "+" or "-" character) and the class
+// that tints it. The tint is never the only cue: the character stays in the text (A1.4 item 2, WCAG 1.4.1).
+type diffLine struct {
+	Class, Text string
+}
+
+// splitDiff turns a patch into lines. A line that starts with "+" is added, "-" is removed, "@@" and the file
+// headers "+++ "/"--- " and "\ No newline" notes are muted, everything else is context. The class values are a
+// closed set; the text is data and reaches the page escaped. A blank line keeps one space so it keeps its height.
+func splitDiff(patch string) []diffLine {
+	if patch == "" {
+		return nil
+	}
+	raw := strings.Split(strings.TrimSuffix(patch, "\n"), "\n")
+	out := make([]diffLine, 0, len(raw))
+	for _, l := range raw {
+		class := "ln"
+		switch {
+		case strings.HasPrefix(l, "+++ ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "\\"):
+			class = "ln hunk"
+		case strings.HasPrefix(l, "+"):
+			class = "ln add"
+		case strings.HasPrefix(l, "-"):
+			class = "ln del"
+		}
+		if l == "" {
+			l = " "
+		}
+		out = append(out, diffLine{Class: class, Text: l})
+	}
+	return out
+}
+
+// statusWord is the word of the file list for a closed status.
+func statusWord(s string) string {
+	switch s {
+	case "added":
+		return "Added"
+	case "deleted":
+		return "Deleted"
+	case "modified":
+		return "Modified"
+	}
+	return "Unknown status"
 }
 
 type diffView struct {
@@ -94,6 +142,7 @@ type diffView struct {
 	Files      []fileView
 	More       string // "N more files not shown"
 	Redaction  string // "redaction on: N values redacted"
+	Totals     string // "3 files, +42 -7" (A1.4 item 2), empty when there is no file
 }
 
 func countText(v float64) string {
@@ -167,7 +216,7 @@ func buildDiffView(label, scope string, res DiffResult, red *Redactor) diffView 
 	}
 	redacted, total := 0, 0
 	for _, f := range files {
-		fv := fileView{Status: statusText(f.Status), Additions: countText(f.Additions), Deletions: countText(f.Deletions)}
+		fv := fileView{Status: statusText(f.Status), StatusWord: statusWord(statusText(f.Status)), Additions: countText(f.Additions), Deletions: countText(f.Deletions)}
 		path := "(no file name)"
 		if f.HasPath {
 			path = truncRunes(f.Path, maxPathRunes)
@@ -199,7 +248,7 @@ func buildDiffView(label, scope string, res DiffResult, red *Redactor) diffView 
 				text, cut = cutUTF8(text, remaining), true
 			}
 			total += len(text)
-			fv.Patch, fv.ShowPatch = text, true
+			fv.Patch, fv.ShowPatch, fv.Lines = text, true, splitDiff(text)
 			if cut {
 				fv.Note = fmt.Sprintf("truncated (per-file cap %d bytes, total cap %d bytes)", maxPatchPerFile, maxPatchTotal)
 			}
@@ -207,7 +256,34 @@ func buildDiffView(label, scope string, res DiffResult, red *Redactor) diffView 
 		v.Files = append(v.Files, fv)
 	}
 	v.Redaction = fmt.Sprintf("redaction on: %d values redacted", redacted)
+	v.Totals = diffTotals(files)
 	return v
+}
+
+// diffTotals is "N files, +A -D". When any count of the answer is not a plain number the sums would be a guess, so
+// they are shown as "+? -?".
+func diffTotals(files []DiffFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var add, del int64
+	exact := true
+	for _, f := range files {
+		if countText(f.Additions) == "?" || countText(f.Deletions) == "?" {
+			exact = false
+			continue
+		}
+		add += int64(f.Additions)
+		del += int64(f.Deletions)
+	}
+	noun := "files"
+	if len(files) == 1 {
+		noun = "file"
+	}
+	if !exact {
+		return fmt.Sprintf("%d %s, +? -?", len(files), noun)
+	}
+	return fmt.Sprintf("%d %s, +%d -%d", len(files), noun, add, del)
 }
 
 func unavailableView(scope string, err error) diffView {

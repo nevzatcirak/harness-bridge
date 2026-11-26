@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -15,6 +16,10 @@ const (
 	defaultMaxLine  = 1 << 20  // 1 MiB per stdout line
 	defaultMaxTotal = 64 << 20 // 64 MiB per child
 	maxDenialInput  = 256
+	// maxRetryDelayMS bounds an untrusted retry_delay_ms so the receive clock
+	// arithmetic cannot overflow; a delay beyond the Claude RUN_MAX cap is
+	// irrelevant to a run anyway.
+	maxRetryDelayMS = int64(24 * time.Hour / time.Millisecond)
 )
 
 var (
@@ -70,6 +75,29 @@ type ResultInfo struct {
 	Denials        []Denial
 }
 
+// APIRetry is one system/api_retry event (ADR-017 A2.7). The field set is
+// documented upstream (code.claude.com/docs/en/headless) and UNVERIFIED on the
+// pinned 2.1.325 binary. Every field is lenient: a malformed or unknown shape
+// leaves the zero value and never fails the run (D32 Q6).
+type APIRetry struct {
+	Attempt    int64
+	HasAttempt bool
+	MaxRetries int64
+	HasMax     bool
+	// RetryDelayMS is the documented delay before the next attempt.
+	RetryDelayMS int64
+	// ErrorStatus is the HTTP status when the event carries a valid integer;
+	// ErrorStatusNull records an explicit null (a connection-level signal).
+	ErrorStatus     *int
+	ErrorStatusNull bool
+	// Error is the documented enum string (open in practice).
+	Error string
+	// NoResponse is true when the no_response object is present (network).
+	NoResponse            bool
+	NoResponseWaitedMS    int64
+	NoResponseRetryWaitMS int64
+}
+
 // ToolResult is one tool_result content block of a user event, bounded; the
 // history store redacts it again on write.
 type ToolResult struct {
@@ -84,6 +112,7 @@ type Event struct {
 	Undecodable              bool
 	Init                     *InitInfo
 	Result                   *ResultInfo
+	Retry                    *APIRetry
 	Blocks                   []Block
 	ToolResults              []ToolResult
 }
@@ -216,6 +245,8 @@ func DecodeLine(b []byte) Event {
 			r.Denials = append(r.Denials, Denial{ToolName: boundedASCII(d.ToolName, 128), ToolUseID: boundedASCII(d.ToolUseID, 128), InputSummary: summarize(d.Input)})
 		}
 		e.Result = r
+	case e.Type == "system" && e.Subtype == "api_retry":
+		e.Retry = decodeAPIRetry(m)
 	case e.Type == "assistant":
 		e.Blocks = decodeBlocks(m["message"])
 	case e.Type == "user":
@@ -226,6 +257,7 @@ func DecodeLine(b []byte) Event {
 
 type contentItem struct {
 	Type      string          `json:"type"`
+	ID        string          `json:"id"`
 	Text      string          `json:"text"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
@@ -253,7 +285,7 @@ func decodeBlocks(msg json.RawMessage) []Block {
 		case "text":
 			out = append(out, Block{Type: "text", Text: boundedASCII(c.Text, maxBlockText)})
 		case "tool_use":
-			out = append(out, Block{Type: "tool_use", Name: boundedASCII(c.Name, 128), Input: compactBounded(c.Input, maxBlockInput)})
+			out = append(out, Block{Type: "tool_use", ID: boundedASCII(c.ID, 128), Name: boundedASCII(c.Name, 128), Input: compactBounded(c.Input, maxBlockInput)})
 		}
 	}
 	return out
@@ -281,6 +313,54 @@ func decodeToolResults(msg json.RawMessage) []ToolResult {
 		out = append(out, ToolResult{ToolUseID: boundedASCII(c.ToolUseID, 128), Content: boundedASCII(text, maxBlockText)})
 	}
 	return out
+}
+
+// decodeAPIRetry reads the system/api_retry fields leniently. The event type is
+// known even when a field is malformed; the liveness block then reports the
+// field as unknown/absent instead of failing the run (D32 Q6).
+func decodeAPIRetry(m map[string]json.RawMessage) *APIRetry {
+	r := &APIRetry{}
+	if raw := m["attempt"]; raw != nil {
+		var n int64
+		if json.Unmarshal(raw, &n) == nil && n >= 0 {
+			r.Attempt, r.HasAttempt = n, true
+		}
+	}
+	if raw := m["max_retries"]; raw != nil {
+		var n int64
+		if json.Unmarshal(raw, &n) == nil && n >= 0 {
+			r.MaxRetries, r.HasMax = n, true
+		}
+	}
+	if raw := m["retry_delay_ms"]; raw != nil {
+		var n int64
+		if json.Unmarshal(raw, &n) == nil && n >= 0 && n <= maxRetryDelayMS {
+			r.RetryDelayMS = n
+		}
+	}
+	if raw := m["error_status"]; raw != nil {
+		if string(bytes.TrimSpace(raw)) == "null" {
+			r.ErrorStatusNull = true
+		} else {
+			var n int
+			if json.Unmarshal(raw, &n) == nil {
+				v := n
+				r.ErrorStatus = &v
+			}
+		}
+	}
+	r.Error = rawString(m, "error")
+	if raw := m["no_response"]; raw != nil && string(bytes.TrimSpace(raw)) != "null" {
+		r.NoResponse = true
+		var nr struct {
+			WaitedMS    int64 `json:"waited_ms"`
+			RetryWaitMS int64 `json:"retry_wait_ms"`
+		}
+		if json.Unmarshal(raw, &nr) == nil {
+			r.NoResponseWaitedMS, r.NoResponseRetryWaitMS = nr.WaitedMS, nr.RetryWaitMS
+		}
+	}
+	return r
 }
 
 // compactBounded compacts a JSON value and bounds it, without redacting (the

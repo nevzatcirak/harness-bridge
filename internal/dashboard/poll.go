@@ -71,6 +71,10 @@ type apiExec struct {
 	Updated string `json:"updated"`
 	Ended   string `json:"ended"`
 	Current bool   `json:"current"`
+	// Report and Permission are the liveness report and the pending-permission row of the CURRENT execution, as the
+	// same parts the page renders; the script rebuilds those two blocks from them without deciding any label.
+	Report     *reportView `json:"report,omitempty"`
+	Permission *permView   `json:"permission,omitempty"`
 }
 
 type apiList struct {
@@ -85,6 +89,7 @@ type apiList struct {
 
 type apiDetail struct {
 	Kind       string     `json:"kind"`
+	Sig        string     `json:"sig"`
 	Session    apiSession `json:"session"`
 	Pending    bool       `json:"claude_code_pending,omitempty"`
 	Truncated  string     `json:"truncated,omitempty"`
@@ -135,19 +140,94 @@ func disambiguatePaths(rows []sessionRow) {
 	}
 }
 
-// execRows applies the detail cap and normalization once, for the HTML and the JSON.
+// execRows applies the detail cap and normalization once, for the HTML and the JSON. The liveness report and the
+// pending-permission row are built for the current execution only (A1.4 item 2).
 func execRows(execs []Execution) (out []execRow, truncated string) {
 	if len(execs) > maxDetailRows {
 		truncated = fmt.Sprintf("Showing the first %d of %d executions.", maxDetailRows, len(execs))
 		execs = execs[:maxDetailRows]
 	}
 	for _, e := range execs {
-		out = append(out, execRow{
-			ID: truncRunes(e.ID, 128), State: normExecutionState(e.State), Current: e.Current,
+		state := normExecutionState(e.State)
+		c := stateChip(state)
+		row := execRow{
+			ID: truncRunes(e.ID, 128), State: state, Current: e.Current,
 			Started: fmtTime(e.Started), Updated: fmtTime(e.Updated), Ended: fmtTimePtr(e.Ended),
-		})
+			StateLabel: c.Label, StateClass: chipClass(c.Tone), StartedISO: isoTime(e.Started), Live: cellFor(e),
+			startedAt: e.Started, endedAt: e.Ended,
+		}
+		if e.Current {
+			row.Report = buildReport(e.Liveness)
+			row.Perm = permissionRow(e.Permission)
+		}
+		out = append(out, row)
 	}
 	return out, truncated
+}
+
+// clockRows sets the fields of the HTML timeline that depend on the clock: the relative start, the duration of an
+// ended execution, and the running time of one that has not ended. They never reach the JSON.
+func clockRows(rows []execRow, now time.Time) {
+	for i := range rows {
+		r := &rows[i]
+		r.StartedRel = relTime(now, r.startedAt)
+		switch {
+		case r.startedAt.IsZero():
+			r.Duration = "-"
+		case r.endedAt != nil:
+			r.Duration = durationText(r.endedAt.Sub(r.startedAt))
+		case terminalState(r.State):
+			r.Duration = "-"
+		default:
+			r.Duration = "Running for " + durationText(now.Sub(r.startedAt))
+		}
+		if r.Report != nil {
+			stampReport(r.Report, now)
+		}
+		if r.Perm != nil {
+			for j := range r.Perm.Parts {
+				stampPart(&r.Perm.Parts[j], now)
+			}
+		}
+	}
+}
+
+// stampReport sets the relative text of every time part of a report (HTML only).
+func stampReport(v *reportView, now time.Time) {
+	for i := range v.Rows {
+		for j := range v.Rows[i].Parts {
+			stampPart(&v.Rows[i].Parts[j], now)
+		}
+	}
+}
+
+func stampPart(p *part, now time.Time) {
+	if p.Kind == "time" {
+		p.Rel = relTimeISO(now, p.ISO)
+	}
+}
+
+// execSignature identifies the shape of the timeline: which executions exist, their states, which is current and
+// which blocks it carries. The script reloads the page when the polled model's signature differs from the one the
+// page was rendered with, and updates the report and the permission row in place otherwise.
+func execSignature(rows []execRow) string {
+	var b strings.Builder
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(r.ID + ":" + r.State)
+		if r.Current {
+			b.WriteString(":c")
+		}
+		if r.Report != nil {
+			b.WriteString("r")
+		}
+		if r.Perm != nil {
+			b.WriteString("p")
+		}
+	}
+	return b.String()
 }
 
 func (d *dash) buildList(ctx context.Context) ([]byte, error) {
@@ -183,8 +263,10 @@ func (d *dash) buildDetail(ctx context.Context, harness, id string) ([]byte, err
 	execs, trunc := execRows(det.Executions)
 	m.Truncated = trunc
 	for _, e := range execs {
-		m.Executions = append(m.Executions, apiExec{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.Current})
+		m.Executions = append(m.Executions, apiExec{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.Current,
+			Report: e.Report, Permission: e.Perm})
 	}
+	m.Sig = execSignature(execs)
 	return json.Marshal(m)
 }
 
