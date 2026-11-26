@@ -400,7 +400,7 @@ func TestV3CatalogStates(t *testing.T) {
 func TestV3HealthRows(t *testing.T) {
 	body := s3Pages(t)["health-remote"]
 	flat := regexp.MustCompile(`\s+`).ReplaceAllString(textOf(between(t, body, `<dl class="kv">`, `</dl>`)), " ")
-	for _, want := range []string{"Instancebridge-a", "Versionv0.1.0", "Build0123456789ab…", "Connector token expires2026-11-21 18:40:05Z", "LifecycleOn", "Permission relayOn", "Claude CodeOff",
+	for _, want := range []string{"Instancebridge-a", "Versionv0.1.0", "Build0123456789abcdef0123456789abcdef01234567", "Connector token expires2026-11-21 18:40:05Z", "LifecycleOn", "Permission relayOn", "Claude CodeOff",
 		"OpenCode reachabilityReachable, last session-list read 12 s ago, 2026-11-21 17:47:53Z", "Claude Code reachabilityNot read", "Audit feedOff"} {
 		if !strings.Contains(strings.ReplaceAll(flat, " ", ""), strings.ReplaceAll(want, " ", "")) {
 			t.Errorf("the health list lacks %q:\n%s", want, flat)

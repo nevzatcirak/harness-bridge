@@ -211,9 +211,9 @@
     });
   }
 
-  window.cirakDash = {
+  window.cirakDash = Object.freeze({
     app: app, byId: byId, el: el, clear: clear, show: show, rel: rel, chipClass: chipClass,
     archived: archived, query: query, allowed: allowed, filterRows: filterRows, writeUrl: writeUrl, poll: startPoll,
     renderLive: renderLive
-  };
+  });
 })();

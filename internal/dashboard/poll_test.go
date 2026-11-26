@@ -275,7 +275,7 @@ func TestStateHeadHasHeadersAndNoBody(t *testing.T) {
 
 func TestNewRoutesAreGetAndHeadOnly(t *testing.T) {
 	want := map[string]bool{"/": false, "/session/": false, "/api/state": false, "/api/state/session/": false, "/audit": false, "/api/audit": false, "/dashboard.css": false, "/dashboard.js": false,
-		"/dashboard-list.js": false, "/dashboard-detail.js": false, "/dashboard-audit.js": false,
+		"/dashboard-list.js": false, "/dashboard-detail.js": false, "/dashboard-audit.js": false, "/theme.js": false,
 		"/executions": false, "/catalog": false, "/health": false, "/api/state/executions": false, "/api/state/catalog": false, "/api/state/health": false}
 	for _, r := range Routes(NullSource{}) {
 		if _, ok := want[r.Path]; !ok {
@@ -312,13 +312,16 @@ func TestPollingScriptIsSafeAndUsesTheDocumentedIntervals(t *testing.T) {
 		return string(b)
 	}
 	var all strings.Builder
-	for _, name := range scriptFiles {
+	for _, name := range allScripts {
 		js := read(name)
 		all.WriteString(js)
-		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "importScripts", "localStorage", "sessionStorage", "document.cookie", "http://", "https://", "'POST'", "'PUT'", "'PATCH'", "'DELETE'", `"POST"`, "srcdoc", "javascript:"} {
+		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "importScripts", "sessionStorage", "document.cookie", "http://", "https://", "'POST'", "'PUT'", "'PATCH'", "'DELETE'", `"POST"`, "srcdoc", "javascript:"} {
 			if strings.Contains(js, banned) {
 				t.Errorf("%s contains %q", name, banned)
 			}
+		}
+		for _, f := range localStorageUse(name, js) {
+			t.Error(f)
 		}
 		if strings.Contains(js, "setInterval") || strings.Contains(js, "hiddenMs") {
 			t.Errorf("%s: the scripts must use self-rescheduling timers only and must not poll while hidden (A1.7)", name)
@@ -374,7 +377,7 @@ func TestPagesCarryThePollingHooks(t *testing.T) {
 	for _, c := range []struct {
 		name, body string
 		want       []string
-	}{{"list", list, []string{"/dashboard.js", "/dashboard-list.js"}}, {"detail", detail, []string{"/dashboard.js", "/dashboard-detail.js"}}, {"turn", turn, []string{"/dashboard.js"}}} {
+	}{{"list", list, []string{"/theme.js", "/dashboard.js", "/dashboard-list.js"}}, {"detail", detail, []string{"/theme.js", "/dashboard.js", "/dashboard-detail.js"}}, {"turn", turn, []string{"/theme.js", "/dashboard.js"}}} {
 		if got := scriptSrcs(c.body); strings.Join(got, " ") != strings.Join(c.want, " ") || len(foreignScripts(c.body)) != 0 {
 			t.Errorf("the %s page loads %v, want %v", c.name, got, c.want)
 		}

@@ -322,13 +322,10 @@ func newDash(src Source, opts Options) *dash {
 		models: newFlightCache[modelResult](opts.Now, modelTTL, modelMax)}
 }
 
-// unavailablePage answers a data source that failed: HTTP 503 with Retry-After,
-// for the list and the detail alike (review #223 P3-1: one semantics). The page
-// states it; the error text is never shown.
 // Scripts returns the script files of this page, in load order (ADR-023 A1.6, D34): the core on every page, then
 // only the script of the page kind. The sessions page polls and filters; the session page polls; the audit page
 // filters its rows (only when there is a filter and rows to filter). The executions, catalog, health and turn pages
-// need the core alone.
+// need the core alone. theme.js is not in this list: it is blocking in the head of every page (the template).
 func (p page) Scripts() []string {
 	out := []string{"/" + scriptCore}
 	switch {
@@ -342,7 +339,12 @@ func (p page) Scripts() []string {
 	return out
 }
 
-func unavailablePage(w http.ResponseWriter, p page) {
+// unavailablePage answers a data source that failed: HTTP 503 with Retry-After,
+// for the list and the detail alike (review #223 P3-1: one semantics). The page
+// states it; the error text is never shown. The top bar stays as on every page: the label is process
+// configuration and the token badge is memory only (#576 P3-4).
+func (d *dash) unavailablePage(ctx context.Context, w http.ResponseWriter, p page) {
+	d.decorate(ctx, &p)
 	w.Header().Set("Retry-After", "5")
 	renderPage(w, http.StatusServiceUnavailable, p)
 }
@@ -366,7 +368,7 @@ func (d *dash) indexHandler() http.Handler {
 		if err != nil {
 			p.State = &stateBlock{Class: "state state--error", Heading: "Data source unavailable",
 				Text: "The Bridge could not read its sessions just now. Nothing was changed. Try again in a few seconds.", LinkHref: p.RefreshHref, LinkText: "Try again"}
-			unavailablePage(w, p)
+			d.unavailablePage(ctx, w, p)
 			return
 		}
 		p.Rows, p.Truncate = listRows(rows)

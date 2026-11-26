@@ -122,7 +122,7 @@ func TestV2S1CSPAndNoInlineOnEveryPage(t *testing.T) {
 			case strings.HasPrefix(a.name, "on"):
 				t.Errorf("%s: an on* event-handler attribute: %s", name, a.name)
 			case a.name == "href" || a.name == "src" || a.name == "action" || a.name == "formaction":
-				v := strings.ToLower(strings.TrimSpace(a.value))
+				v := urlScheme(a.value) // entities decoded, tab/CR/LF removed, as a browser reads it (#585 P3-1)
 				if strings.HasPrefix(v, "javascript:") || strings.HasPrefix(v, "data:") || strings.HasPrefix(v, "//") || strings.HasPrefix(v, "http:") || strings.HasPrefix(v, "https:") {
 					t.Errorf("%s: %s=%q points outside the dashboard or runs script", name, a.name, a.value)
 				}
@@ -141,7 +141,7 @@ func TestV2S1CSPAndNoInlineOnEveryPage(t *testing.T) {
 		}
 	}
 	h := v2Handler(&fakeSource{rows: v2Rows()})
-	for _, target := range []string{"/", "/audit", "/dashboard.css", "/dashboard.js", "/dashboard-list.js", "/dashboard-detail.js", "/dashboard-audit.js", "/api/state", "/nope", "/session/opencode/x"} {
+	for _, target := range []string{"/", "/audit", "/dashboard.css", "/dashboard.js", "/dashboard-list.js", "/dashboard-detail.js", "/dashboard-audit.js", "/theme.js", "/api/state", "/nope", "/session/opencode/x"} {
 		_, _, hdr := v2Get(t, h, target)
 		if got := hdr.Get("Content-Security-Policy"); got != contentSecurityPolicy {
 			t.Errorf("%s: CSP = %q", target, got)
@@ -331,11 +331,11 @@ func TestV2S1NoScriptRenderHasNoDeadControl(t *testing.T) {
 		if strings.Contains(body, "<form") {
 			t.Errorf("%s: a form on a read-only page", name)
 		}
-		// The one button is the copy button of the detail page (JS-1): it is hidden until the script runs, so it is
-		// never a dead control without script.
+		// The only buttons are the copy button of the detail page (JS-1) and the theme toggle of every top bar (JS-2): each is
+		// hidden until its script runs, so neither is ever a dead control without script (A1.10 item 9).
 		for _, b := range regexp.MustCompile(`<button[^>]*>`).FindAllString(body, -1) {
-			if !strings.Contains(b, ` id="copy"`) || !regexp.MustCompile(`\shidden(\s|>)`).MatchString(b) {
-				t.Errorf("%s: a button that is not the hidden copy button: %s", name, b)
+			if (!strings.Contains(b, ` id="copy"`) && !strings.Contains(b, ` id="theme"`)) || !regexp.MustCompile(`\shidden(\s|>)`).MatchString(b) {
+				t.Errorf("%s: a button that is not the hidden copy button or the hidden theme toggle: %s", name, b)
 			}
 		}
 	}

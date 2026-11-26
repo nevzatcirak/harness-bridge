@@ -11,20 +11,27 @@ import (
 	"time"
 )
 
-//go:embed assets/dashboard.css assets/dashboard.js assets/dashboard-list.js assets/dashboard-detail.js assets/dashboard-audit.js
+//go:embed assets/dashboard.css assets/dashboard.js assets/dashboard-list.js assets/dashboard-detail.js assets/dashboard-audit.js assets/theme.js
 var assets embed.FS
 
 // The script files (ADR-023 A1.6, D34): a shared core that every page loads and one script per page kind, loaded
-// after it. Each file is capped at 16 KiB and the sum of all of them at 32 KiB (the tests pin both).
+// after it. Each of them is capped at 16 KiB and the sum of the four at 32 KiB (the tests pin both). The theme script
+// (JS-2, slice S3b) is a fifth file with its own cap of 1 KiB: it is blocking in the head of every page, and the
+// toggle it drives is in every top bar.
 const (
 	scriptCore   = "dashboard.js"
 	scriptList   = "dashboard-list.js"
 	scriptDetail = "dashboard-detail.js"
 	scriptAudit  = "dashboard-audit.js"
+	scriptTheme  = "theme.js"
 )
 
-// scriptFiles lists every embedded script, in the order a page loads them.
+// scriptFiles lists the four dashboard*.js scripts, in the order a page loads them at the end of its body.
 var scriptFiles = []string{scriptCore, scriptList, scriptDetail, scriptAudit}
+
+// allScripts is every script the server serves: the four above, then theme.js. Every route, every cap and every
+// scan of the scripts runs over this one table.
+var allScripts = append(append([]string{}, scriptFiles...), scriptTheme)
 
 // contentSecurityPolicy is the ADR-023 section 3 policy, verbatim.
 const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
@@ -92,7 +99,7 @@ func routes(src Source, opts Options) []Route {
 		{Path: "/api/audit", Methods: getHead, Handler: d.auditJSONHandler()},
 		{Path: "/dashboard.css", Methods: getHead, Handler: assetHandler("assets/dashboard.css", "text/css; charset=utf-8")},
 	}
-	for _, name := range scriptFiles {
+	for _, name := range allScripts {
 		table = append(table, Route{Path: "/" + name, Methods: getHead, Handler: assetHandler("assets/"+name, "text/javascript; charset=utf-8")})
 	}
 	return table

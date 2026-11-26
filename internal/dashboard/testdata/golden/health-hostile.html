@@ -6,6 +6,7 @@
 <title>About and health - Cirak</title>
 <meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
 <link rel="stylesheet" href="/dashboard.css">
+<script src="/theme.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
@@ -21,6 +22,7 @@
 <span class="spacer"></span>
 <span class="label" id="instance">bridge a</span>
 <span class="chip" title="Connector token expiry 2026-11-21 18:48:05Z">Token expires in 1 h 00 min</span>
+<button class="btn" type="button" id="theme" title="Switch between the dark and the light theme" hidden>Theme</button>
 <span class="label">Read-only</span>
 </div></header>
 <main id="content" tabindex="-1" class="wrap">
@@ -38,7 +40,7 @@
 <dl class="kv">
 <dt>Instance</dt><dd>bridge a</dd>
 <dt>Version</dt><dd>&lt;script&gt;alert(1)&lt;/script&gt;&#34;&gt;&lt;img src=x onerror=alert(2)&gt;</dd>
-<dt>Build</dt><dd>&lt;script&gt;aler…</dd>
+<dt>Build</dt><dd><code>&lt;script&gt;alert(1)&lt;/script&gt;&#34;&gt;&lt;img src=x onerror=alert(2)&gt;</code></dd>
 <dt>Connector token expires</dt><dd><time datetime="2026-11-21T18:48:05Z">2026-11-21 18:48:05Z</time></dd>
 <dt>&lt;script&gt;alert(1)&lt;/script&gt;&#34;&gt;&lt;img src=x on…</dt><dd><span class="chip chip--ok">On</span></dd>
 <dt>Other harness reachability</dt><dd><span class="chip chip--warn">Unknown</span>, last session-list read <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time>, 2026-11-21 17:48:05Z</dd>
