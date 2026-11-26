@@ -309,3 +309,40 @@ func TestS4RunMaxCapsToolLong(t *testing.T) {
 	c.finish(Exit{Code: 0})
 	_ = h.wait(x.ID)
 }
+
+// ADR-017 A2.7: tool_progress (and any unrelated system event) is not progress.
+// A wedged tool that only emits heartbeats must still reach A1's NO_PROGRESS
+// after no_progress_s, and last_native_progress_at must stay at the last real
+// event (the assistant message).
+func TestS4ClaudeToolProgressIsNotProgress(t *testing.T) {
+	clk := &s4Clock{t: time.UnixMilli(1_700_000_000_000).UTC()}
+	h := newS4Harness(t, clk, nil)
+	x := h.mustSend(1, "do the thing", "key-s4-heartbeat-01")
+	c := h.next(1)
+	c.emit(h.initLine(1))
+	c.emit(s4ToolUse(1, "toolu_hb", "Bash"))
+	got := s4Until(t, h, x.ID, "tool object", func(x execution.Execution) bool {
+		return x.Liveness != nil && x.Liveness.Tool != nil && x.Liveness.LastNativeProgressAt != nil
+	})
+	baseline := *got.Liveness.LastNativeProgressAt
+
+	heartbeat := js(map[string]any{"type": "system", "subtype": "tool_progress", "session_id": uuidN(1)})
+	for _, at := range []time.Duration{60 * time.Second, 59 * time.Second} {
+		clk.Advance(at)
+		c.emit(heartbeat)
+	}
+	clk.Advance(2 * time.Second) // 121 s after the last real progress
+
+	got = s4Until(t, h, x.ID, "NO_PROGRESS despite the heartbeats", func(x execution.Execution) bool {
+		return x.Liveness != nil && x.Liveness.StallSuspected && x.Liveness.StallReason == "NO_PROGRESS"
+	})
+	if got.Liveness.LastNativeProgressAt == nil || !got.Liveness.LastNativeProgressAt.Equal(baseline) {
+		t.Fatalf("the heartbeats moved last_native_progress_at: %v -> %v", baseline, got.Liveness.LastNativeProgressAt)
+	}
+	if got.Liveness.Tool == nil || got.Liveness.Explanation != "" {
+		t.Fatalf("tool/explanation at 121 s: %+v", got.Liveness)
+	}
+	if held, _ := h.ex.SessionGuard(h.sessions[0].ID); !held {
+		t.Fatal("the guard was released by liveness")
+	}
+}
