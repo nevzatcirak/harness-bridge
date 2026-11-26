@@ -141,7 +141,7 @@ func TestDoctorExitCodes(t *testing.T) {
 	if code := h.run("--config", f.cfg); code != 2 || len(h.dialled) != 0 {
 		t.Fatalf("exit %d, dialled %v", code, h.dialled)
 	}
-	for _, args := range [][]string{{"--nope"}, {"stray"}, {"--from-unit", "a", "--env-file", "/b"}} {
+	for _, args := range [][]string{{"--nope"}, {"stray"}} { // the exclusivity of the two sources is TestSourceFlagsAreExclusiveWithAValidUnitAndAValidFile
 		h := newDH(t)
 		if code := h.run(args...); code != 2 || !strings.Contains(h.err.String(), "usage") && !strings.Contains(h.err.String(), "exclusive") {
 			t.Errorf("%v: exit %d: %q", args, code, h.err.String())

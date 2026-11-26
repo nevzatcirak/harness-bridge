@@ -96,7 +96,7 @@ func TestImportWritesTheUnitSettingsAsAConfigFileAndShowsNoValue(t *testing.T) {
 	ef := c.unit(t,
 		[]string{"BRIDGE_LISTEN=127.0.0.1:9191", "BRIDGE_READ_ONLY=1", "CIRAK_ALLOWED_ROOTS=" + c.f.ws, "CIRAK_ALLOWED_SESSIONS=ses_a,ses_b", "CIRAK_CLAUDE_MAX_TURNS=7"},
 		"CIRAK_TOKEN_FILE="+c.f.token, "CIRAK_TOKEN_EXPIRES=2099-01-01T00:00:00Z", "CIRAK_WRITER_LOCK_DIR="+c.f.locks,
-		"OPENCODE_URL=http://user:"+urlCanary+"@127.0.0.1:4096", "SOME_OTHER=1")
+		"OPENCODE_URL=http://127.0.0.1:4096", "UNRELATED_URL=http://user:"+urlCanary+"@evil.example/?token="+urlCanary, "SOME_OTHER=1")
 	code := c.run("import", "--from-unit", "cirak", "--out", out)
 	all := c.all()
 	if code != 1 { // the legacy BRIDGE_* names of the unit warn once each
@@ -119,13 +119,14 @@ func TestImportWritesTheUnitSettingsAsAConfigFileAndShowsNoValue(t *testing.T) {
 		}
 	}
 	// value-free in every output: the listen address, the session IDs and the URL's credential never appear
-	for _, bad := range []string{urlCanary, "9191", "ses_a", "ses_b", c.f.token} {
+	for _, bad := range []string{urlCanary, "9191", "ses_a", "ses_b", c.f.token, "evil.example"} {
 		if strings.Contains(all, bad) {
 			t.Errorf("a value reached the output: %q", bad)
 		}
 	}
-	if !strings.Contains(readF(t, out), urlCanary) {
-		t.Log("(the URL is a setting of the file, as written by the operator's own unit)")
+	// a variable the daemon does not read is never copied, whatever it holds
+	if strings.Contains(readF(t, out), urlCanary) || strings.Contains(readF(t, out), "evil.example") {
+		t.Error("a value of an unrelated variable was written into the config")
 	}
 	if !strings.Contains(all, "SOME_OTHER") && strings.Contains(all, "unknown environment name SOME_OTHER") {
 		t.Error("a name without either prefix was reported as unknown")
@@ -303,7 +304,6 @@ func TestImportOutRules(t *testing.T) {
 	c.unit(t, nil, "CIRAK_LISTEN=127.0.0.1:9191")
 	for name, args := range map[string][]string{
 		"no source":      {"import", "--out", out},
-		"both sources":   {"import", "--from-unit", "u", "--env-file", "/x", "--out", out},
 		"no out":         {"import", "--from-unit", "cirak"},
 		"relative out":   {"import", "--from-unit", "cirak", "--out", "config.json"},
 		"unclean out":    {"import", "--from-unit", "cirak", "--out", out + "/../out/config.json"},
@@ -457,6 +457,124 @@ func TestSameEffectiveSettingsRefusesAFileThatSaysSomethingElse(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		} else if strings.Contains(err.Error(), "9191") || strings.Contains(err.Error(), "9292") {
 			t.Errorf("%s: the error echoes a value: %v", name, err)
+		}
+	}
+}
+
+// P3-1 of #562/#566: the exclusivity of --from-unit and --env-file is tested with a VALID unit and a VALID file, so
+// that exit 2 can only come from the exclusivity check (with the check gone the import would succeed).
+func TestImportRefusesBothSourcesWithAValidUnitAndAValidFile(t *testing.T) {
+	c := newCH(t)
+	out := c.mkOut(t)
+	c.unit(t, nil, "CIRAK_LISTEN=127.0.0.1:9191")
+	ef := filepath.Join(c.f.dir, "valid.env")
+	writeFile(t, ef, "CIRAK_LISTEN=127.0.0.1:9292\n", 0o600)
+	if code := c.run("import", "--from-unit", "cirak", "--out", out); code != 0 {
+		t.Fatalf("the fixture unit is not valid on its own: exit %d\n%s", code, c.all())
+	}
+	if err := os.Remove(out); err != nil {
+		t.Fatal(err)
+	}
+	c.out.Reset()
+	c.err.Reset()
+	code := c.run("import", "--from-unit", "cirak", "--env-file", ef, "--out", out)
+	if code != 2 || !strings.Contains(c.all(), "exactly one of --from-unit and --env-file is required") {
+		t.Fatalf("exit %d, want 2 from the exclusivity check:\n%s", code, c.all())
+	}
+	if exists(out) || c.stage != "" {
+		t.Error("something was written or staged")
+	}
+	if strings.Contains(c.all(), "environment source") {
+		t.Error("a source was read before the exclusivity was checked")
+	}
+}
+
+// P2-1 of #562/#566: a URL that carries a credential (userinfo, a query, a fragment) is never persisted. The import
+// refuses it as the daemon does (opencode.New and the remote origin rule both refuse userinfo, a query and a
+// fragment), with a value-free message that names only the key, and writes nothing: no file, no staging directory,
+// no backup, and an existing --out is left exactly as it was.
+func TestImportRefusesAURLThatCarriesACredential(t *testing.T) {
+	bases := []struct{ env, key, clean string }{
+		{"OPENCODE_URL", "harness.opencode.url", "http://127.0.0.1:4096"},
+		{"CIRAK_PUBLIC_ORIGIN", "server.public_origin", "https://bridge.example"},
+	}
+	suffixes := map[string]func(clean string) string{
+		"userinfo":            func(u string) string { return strings.Replace(u, "://", "://user:"+urlCanary+"@", 1) },
+		"user only":           func(u string) string { return strings.Replace(u, "://", "://"+urlCanary+"@", 1) },
+		"query":               func(u string) string { return u + "/?token=" + urlCanary },
+		"query on the origin": func(u string) string { return u + "?token=" + urlCanary },
+		"empty query":         func(u string) string { return u + "/?" },
+		"fragment":            func(u string) string { return u + "/#" + urlCanary },
+		"unparsable":          func(u string) string { return "http://127.0.0.1:" + urlCanary }, // an invalid port: the URL parser refuses it
+		"userinfo and query":  func(u string) string { return strings.Replace(u, "://", "://u:"+urlCanary+"@", 1) + "/?k=" + urlCanary },
+	}
+	for _, b := range bases {
+		for name, mk := range suffixes {
+			for _, source := range []string{"env-file", "unit"} {
+				t.Run(b.env+"/"+strings.ReplaceAll(name, " ", "_")+"/"+source, func(t *testing.T) {
+					c := newCH(t)
+					out := c.mkOut(t)
+					old := `{"server":{"listen":"127.0.0.1:7000"}}` + "\n"
+					writeFile(t, out, old, 0o600)
+					line := b.env + "=" + mk(b.clean)
+					var code int
+					if source == "unit" {
+						c.unit(t, []string{line, "CIRAK_LISTEN=127.0.0.1:9191"}, "CIRAK_READ_ONLY=0")
+						code = c.run("import", "--from-unit", "cirak", "--out", out, "--force")
+					} else {
+						ef := filepath.Join(c.f.dir, "x.env")
+						writeFile(t, ef, line+"\nCIRAK_LISTEN=127.0.0.1:9191\n", 0o600)
+						code = c.run("import", "--env-file", ef, "--out", out, "--force")
+					}
+					all := c.all()
+					if code != 2 {
+						t.Fatalf("exit %d, want 2:\n%s", code, all)
+					}
+					if strings.Contains(all, urlCanary) || strings.Contains(all, "user:") || strings.Contains(all, "token=") {
+						t.Errorf("the credential reached the output:\n%s", all)
+					}
+					if !strings.Contains(all, b.env) || !strings.Contains(all, b.key) || !strings.Contains(all, "result: refused; nothing was written (exit 2)") {
+						t.Errorf("the refusal does not name the key or say nothing was written:\n%s", all)
+					}
+					if readF(t, out) != old {
+						t.Error("an existing --out was changed")
+					}
+					if backups, _ := filepath.Glob(out + ".bak-*"); len(backups) != 0 {
+						t.Errorf("a backup was made: %v", backups)
+					}
+					entries, _ := os.ReadDir(filepath.Dir(out))
+					if len(entries) != 1 || c.stage != "" {
+						t.Errorf("something was written or staged beside the old config: %v (stage %q)", entries, c.stage)
+					}
+				})
+			}
+		}
+	}
+}
+
+// A refused URL leaves no file at all when --out is new, and the staged path is not used either.
+func TestImportRefusesAURLThatCarriesACredentialBeforeStaging(t *testing.T) {
+	c := newCH(t)
+	ef := filepath.Join(c.f.dir, "x.env")
+	writeFile(t, ef, "OPENCODE_URL=http://u:"+urlCanary+"@127.0.0.1:4096\n", 0o600)
+	out := filepath.Join(c.f.dir, "no-such-root", "etc", "cirak", "config.json") // not writable: the staged path
+	if code := c.run("import", "--env-file", ef, "--out", out); code != 2 || c.stage != "" || exists(out) || strings.Contains(c.all(), urlCanary) {
+		t.Fatalf("exit %d, staged %q:\n%s", code, c.stage, c.all())
+	}
+}
+
+// Plain URLs, with and without a trailing slash, are still imported and equal the source's effective value.
+func TestImportKeepsAPlainURL(t *testing.T) {
+	for _, u := range []string{"http://127.0.0.1:4096", "http://127.0.0.1:4096/"} {
+		c := newCH(t)
+		out := c.mkOut(t)
+		ef := filepath.Join(c.f.dir, "x.env")
+		writeFile(t, ef, "OPENCODE_URL="+u+"\nCIRAK_PUBLIC_ORIGIN=https://bridge.example\n", 0o600)
+		if code := c.run("import", "--env-file", ef, "--out", out); code == 2 {
+			t.Fatalf("%s: exit %d\n%s", u, code, c.all())
+		}
+		if got := parseOut(t, out).EnvForm("harness.opencode.url"); got != u {
+			t.Errorf("harness.opencode.url = %q, want %q", got, u)
 		}
 	}
 }

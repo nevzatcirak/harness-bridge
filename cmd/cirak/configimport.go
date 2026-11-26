@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,21 @@ func importConfig(rep *report, o importOptions, d doctorDeps) {
 		rep.warn("%s is set in the source: it names the file a start reads, it is not a setting and is not imported", config.EnvConfig)
 	}
 
+	// A URL setting that carries a credential (userinfo, a query, a fragment) is never persisted: ADR-027 section
+	// 1.4 refuses to write a secret into the config file, and a URL is where an inline secret hides. Every such key
+	// is named (never its value) and the import stops before anything is written, staged or backed up.
+	credentialURLs := false
+	for _, k := range config.Keys {
+		if ev := env0(k.Env); k.URL && ev != "" && urlCarriesCredential(ev) {
+			rep.refuse("%s (%s) carries a credential or a query in its URL: userinfo, a query and a fragment are never written to a config file; "+
+				"remove them from the source (a password goes in a private file, see harness.opencode.password_file)", k.Env, k.Path)
+			credentialURLs = true
+		}
+	}
+	if credentialURLs {
+		return
+	}
+
 	tree := map[string]any{}
 	var imported []string
 	for _, k := range config.Keys {
@@ -189,6 +205,17 @@ func importConfig(rep *report, o importOptions, d doctorDeps) {
 	fmt.Fprintf(rep.out, "  cirak config check %s --config %s\n", srcArg, shq(o.out))
 	fmt.Fprintf(rep.out, "  cirak doctor --config %s %s\n", shq(o.out), srcArg)
 	fmt.Fprintf(rep.out, "  then add Environment=CIRAK_CONFIG=%s to the unit and remove the legacy lines only when the comparison above shows no difference (ADR-027 section 5 steps 3 to 5)\n", shq(o.out))
+}
+
+// urlCarriesCredential reports whether a URL-valued setting holds userinfo, a query (even an empty one) or a
+// fragment, or is not a URL the standard parser accepts: the same components the daemon refuses for the OpenCode
+// base URL (opencode.New) and for the public origin (security.NewRemote). It never returns or logs the value.
+func urlCarriesCredential(v string) bool {
+	u, err := url.Parse(v)
+	if err != nil {
+		return true // not a plain URL: it could hide anything, and the daemon would refuse it too
+	}
+	return u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(v, "?#")
 }
 
 // inlineSecretNote prints the command that makes the private file for a secret the unit holds inline. The value
@@ -339,8 +366,14 @@ func compareWithConfig(rep *report, f serveFlags, src *envSource, d doctorDeps) 
 		}
 		fmt.Fprintf(rep.out, "  %-36s source=%-30s file=%-30s %s\n", k.Path, compareValue(k, ev), compareValue(k, file.EnvForm(k.Path)), status)
 	}
-	if env0(config.EnvInlineToken) != "" && !file.Has("token.file") && !file.Has("token.credential") {
-		fmt.Fprintf(rep.out, "  %-36s source=%-30s file=%-30s %s\n", "token", "inline", "unset", "ONLY IN THE SOURCE")
+	// An inline token in the source is never migrated: a config file has no inline secret. Whatever the file says
+	// about its own token, the source's token is not in it, so the comparison can never "agree" (#566 P3-2).
+	if env0(config.EnvInlineToken) != "" {
+		fileToken := "unset"
+		if file.Has("token.file") || file.Has("token.credential") {
+			fileToken = "set"
+		}
+		fmt.Fprintf(rep.out, "  %-36s source=%-30s file=%-30s %s\n", "token", "inline", fileToken, "NOT MIGRATED")
 		onlySource++
 	}
 	switch {

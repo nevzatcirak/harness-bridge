@@ -59,9 +59,45 @@ func TestConfigCheckSourceErrorsAreErrorsNotGuesses(t *testing.T) {
 			}
 		})
 	}
-	c := newCH(t)
-	if code := c.run("check", "--from-unit", "u", "--env-file", "/x"); code != 2 {
-		t.Errorf("--from-unit with --env-file: exit %d", code)
+}
+
+// P3-1 of #562/#566: --from-unit and --env-file are exclusive. The test uses a VALID unit and a VALID file, each
+// accepted on its own, so exit 2 can only come from the exclusivity check and not from a source that fails to read.
+func TestSourceFlagsAreExclusiveWithAValidUnitAndAValidFile(t *testing.T) {
+	for _, cmd := range []string{"config check", "doctor"} {
+		newCase := func(t *testing.T) (*ch, string, func(args ...string) int) {
+			c := newCH(t)
+			c.f.write(t, cleanConfig)
+			c.unit(t, []string{"CIRAK_CONFIG=" + c.f.cfg}, "CIRAK_LISTEN=127.0.0.1:9191")
+			ef := filepath.Join(c.f.dir, "valid.env")
+			writeFile(t, ef, "CIRAK_CONFIG="+c.f.cfg+"\nCIRAK_LISTEN=127.0.0.1:9292\n", 0o600)
+			run := func(args ...string) int {
+				if cmd == "doctor" {
+					return c.dh.run(args...)
+				}
+				return c.run(append([]string{"check"}, args...)...)
+			}
+			return c, ef, run
+		}
+		t.Run(cmd, func(t *testing.T) {
+			c, ef, run := newCase(t)
+			if code := run("--from-unit", "cirak"); code == 2 {
+				t.Fatalf("the unit is not valid on its own:\n%s", c.all())
+			}
+			c2, ef2, run2 := newCase(t)
+			if code := run2("--env-file", ef2); code == 2 {
+				t.Fatalf("the file is not valid on its own:\n%s", c2.all())
+			}
+			c3, ef3, run3 := newCase(t)
+			code := run3("--from-unit", "cirak", "--env-file", ef3)
+			if code != 2 || !strings.Contains(c3.all(), "--from-unit and --env-file are exclusive") {
+				t.Fatalf("exit %d, want 2 from the exclusivity check:\n%s", code, c3.all())
+			}
+			if strings.Contains(c3.all(), "environment source") || strings.Contains(c3.all(), "effective settings") {
+				t.Error("a source was read before the exclusivity was checked")
+			}
+			_ = ef
+		})
 	}
 }
 
@@ -278,8 +314,27 @@ func TestDoctorCompareCountsAnInlineTokenTheFileDoesNotCarry(t *testing.T) {
 	ef := c.envFor(t, "CIRAK_TOKEN="+tokCanary, "CIRAK_ALLOWED_SESSIONS=ses_abc")
 	code := c.dh.run("--config", c.f.cfg, "--env-file", ef)
 	out := c.all()
-	if code == 0 || !regexpMatch(out, `token\s+source=inline\s+file=unset\s+ONLY IN THE SOURCE`) || strings.Contains(out, tokCanary) {
+	if code == 0 || !regexpMatch(out, `token\s+source=inline\s+file=unset\s+NOT MIGRATED`) || strings.Contains(out, tokCanary) {
 		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
+// P3-2 of #566: an inline token in the source is never "agreed" with a file that has a token file: the source's
+// token is not migrated, whatever the file says. The line says so and never claims the legacy lines may go.
+func TestDoctorCompareDoesNotAgreeWhenTheSourceHoldsAnInlineToken(t *testing.T) {
+	c := newCH(t)
+	c.f.write(t, cleanConfig)                                                     // the file names a token file
+	ef := c.envFor(t, append(c.matchingLines()[1:], "CIRAK_TOKEN="+tokCanary)...) // the inline token, and no token file in the source
+	c.dh.run("--config", c.f.cfg, "--env-file", ef)
+	out := c.all()
+	if strings.Contains(out, "agree on every setting") || strings.Contains(out, "the legacy lines may go") {
+		t.Errorf("an inline source token was reported as agreeing:\n%s", out)
+	}
+	if !regexpMatch(out, `token\s+source=inline\s+file=set\s+NOT MIGRATED`) || !strings.Contains(out, "do NOT remove the legacy lines") {
+		t.Errorf("the compare does not report the inline token as not migrated:\n%s", out)
+	}
+	if strings.Contains(out, tokCanary) {
+		t.Error("the inline token reached the output")
 	}
 }
 
