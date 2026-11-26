@@ -210,6 +210,7 @@ type wizard struct {
 	svcKind     string // "", systemd, systemd-dropin, launchd-agent, launchd-daemon
 	svcFiles    []svcFile
 	svcStage    string // a staging directory made only for the service files
+	stagedFlow  bool   // the service files are staged beside the config files (the staged config flow)
 	logDir      string // the LaunchAgent log directory init creates
 }
 
@@ -877,6 +878,22 @@ func mkdirPrivate(dir string) error {
 	return checkTargetDir(dir)
 }
 
+// removeStagingDir removes a staging directory this run made: it is flat (files only), so every entry is removed
+// one by one with os.Remove and then the directory itself. A directory that cannot be emptied is left as it is.
+func removeStagingDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			return
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+	_ = os.Remove(dir)
+}
+
 // stage handles an invoking uid that is not the service uid: the files are written to a private staging
 // directory the invoking user owns, and the exact install commands are printed. init never applies chown.
 func (w *wizard) stage(cfg, lc []byte) error {
@@ -907,6 +924,14 @@ func (w *wizard) stage(cfg, lc []byte) error {
 		_ = os.Remove(dir)
 		return usagef("the staging directory path contains a newline, a carriage return or a NUL (check TMPDIR): refused before anything was staged")
 	}
+	// a staging directory that holds the token never outlives a failed run: it is ours, private and just made
+	staged := false
+	defer func() {
+		if !staged {
+			removeStagingDir(dir)
+			w.stagedToken = ""
+		}
+	}()
 	type item struct {
 		name, dst string
 		data      []byte
@@ -941,6 +966,7 @@ func (w *wizard) stage(cfg, lc []byte) error {
 	if err := w.placeServiceFiles(dir); err != nil {
 		return err
 	}
+	staged = true
 	w.say("Then remove the staging directory (it holds the token): rm -r %s", shq(dir))
 	w.connector()
 	w.say("Then: cirak config check --config %s", shq(w.cfgPath))

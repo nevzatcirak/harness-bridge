@@ -288,7 +288,10 @@ code has no exec call): the reload and start commands are printed, quoted, for t
     `token.credential`: the packaged unit supplies the token file.
   - **Claude adapter** (`--claude-home path`): `NoNewPrivileges=yes` is **omitted** (the adapter child runs under
     `sudo -u hbclaude`, and sudo is setuid), the drop-in sets `NoNewPrivileges=no`, and the chosen form is
-    `ProtectHome=off` with `ReadWritePaths=<claude home>`; the unit says which it chose.
+    `ProtectHome=off` with `ReadWritePaths=<claude home>`; the unit says which it chose. The path must be absolute and
+    canonical, not `/` and not a top-level system directory (`/etc`, `/usr`, `/var`, `/bin`, `/sbin`, `/lib*`, `/boot`,
+    `/proc`, `/sys`, `/dev`, `/run`, `/root`), with no `..` and no leading `-`, `+`, `!`, `@` or `:`; otherwise `init`
+    refuses with exit 2 before anything is written, staged or printed.
 - **macOS (launchd):** a `LaunchAgent` for you by default (`~/Library/LaunchAgents/dev.cirak.agent.plist`, no root,
   logs under `~/Library/Logs/cirak`), or with `--launch-daemon --service-user` a `LaunchDaemon`
   (`/Library/LaunchDaemons/dev.cirak.daemon.plist`, root-owned, so staged unless you can write it). `KeepAlive`,

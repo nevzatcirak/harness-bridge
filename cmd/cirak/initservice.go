@@ -32,6 +32,11 @@ func (w *wizard) planService() error {
 	if !unitSafe.MatchString(w.cfgPath) || !unitSafe.MatchString(w.tokenPath) {
 		return usagef("--config and --token-file must use only letters, digits and . _ / + @ : , = - to be written into a service file")
 	}
+	if o.claudeHome != "" {
+		if err := validateClaudeHome(o.claudeHome); err != nil {
+			return usagef("%v", err)
+		}
+	}
 	switch w.d.goos {
 	case "linux":
 		return w.planSystemd()
@@ -39,6 +44,37 @@ func (w *wizard) planService() error {
 		return w.planLaunchd()
 	}
 	return usagef("--install-service is supported on linux (systemd) and darwin (launchd), not %s", w.d.goos)
+}
+
+// systemClaudeHomes are the top-level directories that are never a Claude Code adapter HOME: ReadWritePaths= on one
+// of them would make part of the system writable again.
+var systemClaudeHomes = map[string]bool{
+	"/etc": true, "/usr": true, "/var": true, "/bin": true, "/sbin": true, "/lib": true, "/lib32": true, "/lib64": true,
+	"/libx32": true, "/boot": true, "/proc": true, "/sys": true, "/dev": true, "/run": true, "/root": true,
+}
+
+// validateClaudeHome checks --claude-home before anything is written, staged or printed. The value becomes a
+// ReadWritePaths= entry of a sandboxed unit with ProtectHome=off, so a careless value (for example "/") would switch
+// the sandbox off, and systemd gives a leading "-", "+", "!" or "@" in that field a meaning of its own. It must be
+// an absolute, canonical path that is not "/" and not a top-level system directory.
+func validateClaudeHome(p string) error {
+	switch p[0] {
+	case '-', '+', '!', '@', ':':
+		return fmt.Errorf("--claude-home must be an absolute path: %q starts with %q, which systemd reads as a prefix of its own", p, p[:1])
+	}
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("--claude-home must be an absolute path (got %q)", p)
+	}
+	if strings.Contains(p, "..") && filepath.Clean(p) != p {
+		return fmt.Errorf("--claude-home must not contain .. components (got %q)", p)
+	}
+	if filepath.Clean(p) != p {
+		return fmt.Errorf("--claude-home must be a clean path (no trailing slash, //, or . component): use %q", filepath.Clean(p))
+	}
+	if p == "/" || systemClaudeHomes[p] {
+		return fmt.Errorf("--claude-home %s is a system directory: ReadWritePaths= on it would make the system writable; name the adapter's own home", p)
+	}
+	return nil
 }
 
 func (w *wizard) planSystemd() error {
@@ -60,7 +96,7 @@ func (w *wizard) planSystemd() error {
 		w.svcFiles = []svcFile{{stageName: dropInName, dst: filepath.Join(systemUnitDir, unitName+".d", dropInName), data: data, mkdirDst: true, owner: "root", group: "root"}}
 		w.say("  the packaged unit %s exists: init writes the drop-in only, never a second %s that would shadow it.", packagedUnitPath, unitName)
 		if _, err := os.Lstat(filepath.Join(systemUnitDir, unitName)); err == nil {
-			w.say("  warning: %s exists and already shadows the packaged unit; init does not touch it.", filepath.Join(systemUnitDir, unitName))
+			w.say("  warning: %s exists and already shadows the packaged unit; init does not touch it, and this drop-in applies to it.", filepath.Join(systemUnitDir, unitName))
 		}
 	} else {
 		data, err := renderFullUnit(uo)
@@ -120,6 +156,13 @@ func (w *wizard) planLaunchd() error {
 // refuseExistingServiceFiles: a service file that exists is replaced only with --force, in every flow, so a
 // printed install command can never overwrite a root-owned file the operator did not mean to replace.
 func (w *wizard) refuseExistingServiceFiles() error {
+	// the printed install commands run as root: a symlink anywhere in the existing part of a target path is refused
+	// here, in the pre-flight, before any config or token command is printed and before anything is staged
+	for _, f := range w.svcFiles {
+		if err := noSymlinkInExistingPrefix(f.dst); err != nil {
+			return fmt.Errorf("%w; no service file was written or staged", err)
+		}
+	}
 	for _, f := range w.svcFiles {
 		if _, err := os.Lstat(f.dst); err == nil && !w.o.force {
 			return usagef("%s already exists; --force replaces it (a backup is made)", f.dst)
@@ -143,12 +186,9 @@ func (w *wizard) tokenSourceKind() string {
 // directory the invoker can write is written there; anything else is staged in a directory of its own. With a
 // stageDir (the staged config flow) every service file is staged beside the config files.
 func (w *wizard) placeServiceFiles(stageDir string) error {
+	w.stagedFlow = stageDir != ""
+	// the symlink refusal for every target ran in the pre-flight (refuseExistingServiceFiles), before anything was printed
 	var printed []string
-	for _, f := range w.svcFiles {
-		if err := noSymlinkInExistingPrefix(f.dst); err != nil {
-			return fmt.Errorf("%w; no service file was written or staged", err)
-		}
-	}
 	if w.svcKind == "launchd-agent" && w.logDir != "" {
 		if err := mkdirPrivate(w.logDir); err != nil {
 			return err
@@ -225,7 +265,11 @@ func (w *wizard) writeServiceFile(f svcFile, dir string) error {
 func (w *wizard) serviceHints() {
 	switch w.svcKind {
 	case "systemd", "systemd-dropin":
-		w.say("Service file placed: %s. Next (printed, never run by init):", shq(w.svcFiles[0].dst))
+		verb := "placed"
+		if w.svcStage != "" || w.stagedFlow {
+			verb = "staged (not yet installed)"
+		}
+		w.say("Service file %s: %s. Next (printed, never run by init):", verb, shq(w.svcFiles[0].dst))
 		w.say("  systemctl daemon-reload")
 		w.say("  systemctl restart cirak   (after the binary is at %s)", defaultUnitBinary)
 	case "launchd-agent":
