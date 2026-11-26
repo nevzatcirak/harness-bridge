@@ -103,3 +103,43 @@ func TestDetailCarriesLivenessAndPermissionOfEachExecution(t *testing.T) {
 		t.Errorf("the older execution: %+v", old)
 	}
 }
+
+// #592 P3-1: the dashboard copies of the execution record's UnavailableSince and of the liveness RetryMax share no
+// pointer with the Manager, on the session row and the detail's execution alike. Mutating the source values after
+// the call must not change what the page already holds.
+func TestRowAndDetailCopyUnavailableSinceAndRetryMax(t *testing.T) {
+	at := time.Date(2026, 11, 21, 17, 40, 0, 0, time.UTC)
+	unavailable := at.Add(-3 * time.Minute)
+	retryMax := int64(5)
+	attempt := int64(4)
+	v := dashView{bySession: map[string][]execution.Execution{"opencode:ses_a": {{
+		ID: "exec_1", State: "running", Started: at, Updated: at,
+		UnavailableSince: &unavailable,
+		Liveness:         &execution.Liveness{NativeStatus: "retry", RetryAttempt: &attempt, RetryMax: &retryMax, ObservedAt: at},
+	}}}}
+	row := v.row("opencode", "ses_a", "opencode:ses_a")
+	det := detail(v, dashRow("exec_1"), "opencode:ses_a")
+	if row.UnavailableSince == nil || !row.UnavailableSince.Equal(unavailable) || row.UnavailableSince == &unavailable {
+		t.Errorf("the session row does not copy unavailable_since: %+v", row.UnavailableSince)
+	}
+	if len(det.Executions) != 1 || det.Executions[0].UnavailableSince == nil || !det.Executions[0].UnavailableSince.Equal(unavailable) ||
+		det.Executions[0].UnavailableSince == &unavailable {
+		t.Errorf("the detail does not copy unavailable_since: %+v", det.Executions)
+	}
+	if row.Liveness == nil || row.Liveness.RetryMax == nil || *row.Liveness.RetryMax != 5 || row.Liveness.RetryMax == &retryMax {
+		t.Errorf("the session row does not copy retry_max: %+v", row.Liveness)
+	}
+	if det.Executions[0].Liveness == nil || det.Executions[0].Liveness.RetryMax == nil || *det.Executions[0].Liveness.RetryMax != 5 ||
+		det.Executions[0].Liveness.RetryMax == &retryMax {
+		t.Errorf("the detail does not copy retry_max: %+v", det.Executions[0].Liveness)
+	}
+	// mutate the source values: the copies must not move
+	unavailable = at.Add(time.Hour)
+	retryMax = 99
+	if !row.UnavailableSince.Equal(at.Add(-3*time.Minute)) || !det.Executions[0].UnavailableSince.Equal(at.Add(-3*time.Minute)) {
+		t.Error("the dashboard copy aliases the Manager's unavailable_since")
+	}
+	if *row.Liveness.RetryMax != 5 || *det.Executions[0].Liveness.RetryMax != 5 {
+		t.Error("the dashboard copy aliases the Manager's retry_max")
+	}
+}

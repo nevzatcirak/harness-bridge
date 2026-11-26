@@ -229,7 +229,7 @@ func livenessBadges(l *Liveness, unavailableSince *time.Time) (badges []liveness
 			}
 		}
 	}
-	if l.Tool != nil {
+	if l.Tool != nil && toolMayBeRunning(l) {
 		b := livenessBadge{Label: "Tool running", Tone: "info"}
 		if l.Explanation == "TOOL_RUNNING_LONG" {
 			b.Title = l.Explanation
@@ -251,6 +251,13 @@ func livenessBadges(l *Liveness, unavailableSince *time.Time) (badges []liveness
 		}
 	}
 	return badges, details
+}
+
+// toolMayBeRunning is the display-side stale-tool gate (#592 P3-2): the Manager exports Tool only for a busy
+// execution or a wedged retry (ADR-017 A2 items 6 and 9), and the page refuses the pair it must not draw even if a
+// future or buggy Source supplies it. StallReason NO_PROGRESS is the Manager's wedged-retry marker.
+func toolMayBeRunning(l *Liveness) bool {
+	return l.NativeStatus == "busy" || (l.NativeStatus == "retry" && l.StallReason == "NO_PROGRESS")
 }
 
 func nativeChip(status string) chip {

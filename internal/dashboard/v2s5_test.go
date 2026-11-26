@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 // cellOf returns the Liveness cell of the current execution of a detail page.
@@ -189,5 +191,140 @@ func TestV2S5UnknownWordsAreNotEchoedInTheJSON(t *testing.T) {
 		if strings.Contains(body, bad) {
 			t.Errorf("the detail JSON echoes %q: %s", bad, body)
 		}
+	}
+}
+
+// #592 P2-1: the poll-JSON liveness.tool.name is bounded on every model that carries it. The bound is 64 runes plus
+// the ellipsis truncRunes appends; a multibyte name must be cut by runes, not bytes, and a markup name must stay a
+// plain string (the JSON encoder escapes it and the page's renderer uses textContent only).
+func TestV2S5PollJSONToolNameIsBounded(t *testing.T) {
+	long := strings.Repeat("é", 200) // 200 runes, 400 bytes
+	markup := `<img src=x onerror=alert(1)>`
+	for _, tc := range []struct {
+		name      string
+		tool      string
+		truncated bool
+	}{
+		{"200-rune multibyte name", long, true},
+		{"markup name", markup, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &Liveness{NativeStatus: "busy", Tool: &LivenessTool{Name: tc.tool, RunningSince: v2Now}, ObservedAt: v2Now}
+			s := s2Session()
+			s.Liveness = l
+			execs := s2Executions(l, nil)
+			h := v2Handler(&fakeSource{rows: []Session{s},
+				details: map[string]SessionDetail{"opencode/ses_demo0001": {Session: s, Executions: execs}}, execs: execs})
+			check := func(model, raw, name string, present bool) {
+				t.Helper()
+				if !present {
+					t.Errorf("%s: the tool name is missing", model)
+					return
+				}
+				if n := utf8.RuneCountInString(name); n > 65 {
+					t.Errorf("%s: tool name is %d runes, bound is 64 + ellipsis (65)", model, n)
+				}
+				if tc.truncated {
+					if got := utf8.RuneCountInString(name); got != 65 || !strings.HasSuffix(name, "…") {
+						t.Errorf("%s: truncated tool name is %q (%d runes), want 64 runes + ellipsis", model, name, got)
+					}
+					if strings.HasPrefix(name, "é") && strings.HasSuffix(name, "é…") {
+						// a byte-based cut would split a multibyte rune into U+FFFD
+						if strings.Contains(name, "\uFFFD") {
+							t.Errorf("%s: truncated on a byte boundary: %q", model, name)
+						}
+					}
+				} else if name != tc.tool {
+					t.Errorf("%s: tool name = %q, want %q", model, name, tc.tool)
+				}
+				if strings.Contains(raw, "<img src=x") {
+					t.Errorf("%s: the JSON carries the markup name unescaped", model)
+				}
+			}
+			present := func(a *apiLiveness) (string, bool) {
+				if a == nil || a.Tool == nil {
+					return "", false
+				}
+				return a.Tool.Name, true
+			}
+
+			_, body, _ := v2Get(t, h, "/api/state")
+			var list apiList
+			if err := json.Unmarshal([]byte(body), &list); err != nil {
+				t.Fatalf("/api/state: %v", err)
+			}
+			var one *apiLiveness
+			for i := range list.Sessions {
+				if list.Sessions[i].Liveness != nil && list.Sessions[i].Liveness.Tool != nil {
+					one = list.Sessions[i].Liveness
+					break
+				}
+			}
+			name, ok := present(one)
+			check("/api/state", body, name, ok)
+
+			_, body, _ = v2Get(t, h, "/api/state/session/opencode/ses_demo0001")
+			var det apiDetail
+			if err := json.Unmarshal([]byte(body), &det); err != nil {
+				t.Fatalf("/api/state/session: %v", err)
+			}
+			one = nil
+			for i := range det.Executions {
+				if det.Executions[i].Liveness != nil && det.Executions[i].Liveness.Tool != nil {
+					one = det.Executions[i].Liveness
+					break
+				}
+			}
+			name, ok = present(one)
+			check("/api/state/session/opencode/ses_demo0001", body, name, ok)
+
+			_, body, _ = v2Get(t, h, "/api/state/executions")
+			var ex apiExecList
+			if err := json.Unmarshal([]byte(body), &ex); err != nil {
+				t.Fatalf("/api/state/executions: %v", err)
+			}
+			one = nil
+			for i := range ex.Executions {
+				if ex.Executions[i].Liveness != nil && ex.Executions[i].Liveness.Tool != nil {
+					one = ex.Executions[i].Liveness
+					break
+				}
+			}
+			name, ok = present(one)
+			check("/api/state/executions", body, name, ok)
+		})
+	}
+}
+
+// #592 P3-2: the display side has its own stale-tool gate, mirroring the Manager's rule (Tool is present only for a
+// busy execution or a wedged retry). A block that pairs an absent status with a Tool part never shows Tool running.
+func TestV2S5ToolBadgeNeedsTheNativeGate(t *testing.T) {
+	tool := &LivenessTool{Name: "bash", RunningSince: v2Now.Add(-12 * time.Minute)}
+	for _, tc := range []struct {
+		name string
+		l    *Liveness
+		want bool
+	}{
+		{"busy", &Liveness{NativeStatus: "busy", Tool: tool}, true},
+		{"wedged retry", &Liveness{NativeStatus: "retry", StallReason: "NO_PROGRESS", Tool: tool}, true},
+		{"absent with a stale part", &Liveness{NativeStatus: "absent", Tool: tool}, false},
+		{"healthy retry", &Liveness{NativeStatus: "retry", DegradationReason: "PROVIDER_RETRYING", Tool: tool}, false},
+		{"unavailable", &Liveness{NativeStatus: "unavailable", Tool: tool}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			badges, details := livenessBadges(tc.l, nil)
+			shown := false
+			for _, b := range badges {
+				if b.Label == "Tool running" {
+					shown = true
+				}
+			}
+			if shown != tc.want {
+				t.Errorf("Tool running shown = %v, want %v (%+v)", shown, tc.want, badges)
+			}
+			if !tc.want && strings.Contains(strings.Join(details, "; "), "bash") {
+				t.Errorf("a gated tool is still named in the detail: %q", details)
+			}
+		})
 	}
 }
