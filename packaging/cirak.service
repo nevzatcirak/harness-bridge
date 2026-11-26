@@ -1,0 +1,23 @@
+[Unit]
+Description=Cirak (MCP bridge for coding-agent sessions)
+After=network-online.target
+
+[Service]
+User=cirak
+Group=cirak
+EnvironmentFile=-/etc/cirak/cirak.env
+LoadCredential=token:/etc/cirak/token
+Environment=CIRAK_TOKEN_FILE=%d/token
+RuntimeDirectory=cirak-admin cirak-dashboard
+RuntimeDirectoryMode=0700
+StateDirectory=cirak cirak/overlay cirak/writer-locks
+StateDirectoryMode=0700
+ExecStart=/usr/bin/cirak
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

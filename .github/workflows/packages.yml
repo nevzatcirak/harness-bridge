@@ -1,0 +1,69 @@
+name: Packages
+
+# ADR-026 section 4.4 and the S4 test plan: build the deb and rpm packages from
+# .goreleaser.yaml and install them in disposable Debian and Fedora containers
+# whose PID 1 is systemd. The containers are the only place systemd runs; the
+# runner's systemd is never touched. Snapshot packages only: no tag, no release,
+# no publication and no secret.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    name: Package install tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      GOCACHE: ${{ github.workspace }}/.gocache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          check-latest: false
+          cache: false
+
+      - name: Verify toolchain
+        run: |
+          go version
+          test "$(go env GOVERSION)" = go1.27.2
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.1
+          install-only: true
+
+      - name: Verify the package tools
+        run: |
+          goreleaser --version
+          docker info
+
+      - name: Package file and maintainer-script checks
+        run: sh tests/packages/scripts-test.sh
+
+      - name: Build and install the deb and rpm packages
+        env:
+          GORELEASER_BIN: goreleaser
+        run: sh tests/packages/run.sh
+
+      - name: Remove the per-job build cache
+        if: ${{ always() }}
+        run: rm -rf "$GOCACHE"
