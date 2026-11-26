@@ -253,7 +253,7 @@ func TestDetailShowsStateGuardCurrentExecutionAndTimeline(t *testing.T) {
 	}
 	h := NewHandler(&fakeSource{details: map[string]SessionDetail{"opencode/ses_aaa": d}}, nil)
 	_, body, _ := fetch(h, "/session/opencode/ses_aaa")
-	for _, want := range []string{"/opt/proj-x", "held (running)", "exec_2 (current)", "exec_1", "completed", "2026-11-12 12:05:11Z", "2026-11-12 11:04:11Z", "Executions"} {
+	for _, want := range []string{"/opt/proj-x", "Held, running", "<code>exec_2</code>", `<span class="label">current</span>`, "exec_1", "Completed", "2026-11-12 11:04:11Z", "1 h 01 min", "Execution timeline"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail lacks %q:\n%s", want, body)
 		}
@@ -346,7 +346,7 @@ func TestRenderingCaps(t *testing.T) {
 		d.Executions = append(d.Executions, Execution{ID: fmt.Sprintf("exec_%04d", i), State: "completed"})
 	}
 	_, body, _ = fetch(NewHandler(&fakeSource{details: map[string]SessionDetail{"opencode/ses_d": d}}, nil), "/session/opencode/ses_d")
-	if n := strings.Count(body, "<tr><td>exec_"); n != maxDetailRows {
+	if n := strings.Count(body, "<td><code>exec_"); n != maxDetailRows {
 		t.Errorf("rendered %d executions, want %d", n, maxDetailRows)
 	}
 	if !strings.Contains(body, fmt.Sprintf("Showing the first %d of %d executions.", maxDetailRows, maxDetailRows+30)) {

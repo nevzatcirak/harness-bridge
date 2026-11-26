@@ -10,7 +10,7 @@ import "html/template"
 //
 // The session detail and the audit page keep their S0 content inside the shell until slices S2 and S3
 // redesign them; the headings, captions and column scopes already follow A1.5.
-var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
+var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"chipClass": chipClass}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -30,13 +30,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <span class="spacer"></span>
 <span class="label">Read-only</span>
 </div></header>
-<main id="content" tabindex="-1" class="wrap"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}"{{end}}{{end}}>
+<main id="content" tabindex="-1" class="wrap"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}" data-sig="{{.Sig}}"{{end}}{{end}}>
 <p class="banner" id="stale" role="status" hidden></p>
 {{if .ListPage}}<section aria-labelledby="h-main" class="cards">
 <h1 id="h-main">Sessions</h1>
 <div class="card">
-<div class="toolbar" role="search">
-<div class="filters" id="filters" hidden>
+<div class="toolbar">
+<div class="filters" id="filters" role="search" aria-label="Filter sessions" hidden>
 <label class="visually-hidden" for="f-q">Search sessions</label>
 <input class="input" id="f-q" type="search" maxlength="64" autocomplete="off" placeholder="Search title, path or ID">
 <label class="visually-hidden" for="f-state">State</label>
@@ -76,29 +76,39 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <div class="card">
 <dl class="kv">
 <dt>Harness</dt><dd><span class="badge">{{.HarnessName}}</span></dd>
+<dt>Session ID</dt><dd><code class="copyable">{{.ID}}</code> <button class="btn" type="button" id="copy" data-copy="{{.ID}}" hidden>Copy ID</button></dd>
 <dt>Title</dt><dd data-f="title">{{.Title}}</dd>
-<dt>Root</dt><dd data-f="root"><code>{{.Root}}</code></dd>
+<dt>Path</dt><dd data-f="root"><code>{{.Root}}</code></dd>
 <dt>Lifecycle root</dt><dd data-f="lifecycle">{{if .LifecycleRoot}}<code>{{.LifecycleRoot}}</code>{{else}}-{{end}}</dd>
-<dt>State</dt><dd data-f="state">{{.State}}</dd>
-<dt>Guard</dt><dd data-f="guard">{{if .Guard.Held}}held ({{.Guard.State}}){{else}}none{{end}}</dd>
-<dt>Current execution</dt><dd data-f="current">{{if .Current}}{{.Current}}{{else}}-{{end}}</dd>
-<dt>Last activity</dt><dd data-f="last">{{.LastActivity}}</dd>
+<dt>State</dt><dd data-f="state"><span class="{{.StateClass}}" title="{{.State}}">{{.StateLabel}}</span></dd>
+<dt>Guard</dt><dd data-f="guard">{{.GuardText}}</dd>
+<dt>Current execution</dt><dd data-f="current">{{if .Current}}<code>{{.Current}}</code>{{else}}None{{end}}</dd>
+<dt>Last activity</dt><dd data-f="last">{{if .LastISO}}<time datetime="{{.LastISO}}" title="{{.LastActivity}}">{{.LastRel}}</time>, {{.LastActivity}}{{else}}-{{end}}</dd>
 </dl>
 {{if $.Pending}}<p class="label">Claude Code: history and diffs unavailable (ADR-021 pending).</p>{{end}}
 </div>
 </section>
-<section class="executions card" aria-labelledby="h-exec">
-<h2 id="h-exec">Executions</h2>
-{{if $.Executions}}<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-exec"><table>
-<caption class="visually-hidden">Executions of this session recorded by this Bridge process</caption>
-<thead><tr><th scope="col">Execution</th><th scope="col">State</th><th scope="col">Started</th><th scope="col">Updated</th><th scope="col">Ended</th></tr></thead>
-<tbody id="exec-rows">
-{{range $.Executions}}<tr><td>{{.ID}}{{if .Current}} (current){{end}}</td><td>{{.State}}</td><td>{{.Started}}</td><td>{{.Updated}}</td><td>{{.Ended}}</td></tr>
-{{end}}</tbody></table></div>{{else}}<p>No executions recorded by this Bridge process.</p>{{end}}
+{{if not $.BackHref}}<section class="card" aria-labelledby="h-tl">
+<h2 id="h-tl">Execution timeline</h2>
+<p class="label">Newest first. The liveness report is advisory: it never changes an execution and the Bridge takes no action.</p>
+{{if $.Executions}}<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-tl"><table class="timeline">
+<caption class="visually-hidden">Executions of this session with the liveness report of the current one</caption>
+<thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+<tbody>
+{{range $.Executions}}<tr>
+<td><span class="{{.StateClass}}" title="{{.State}}">{{.StateLabel}}</span>{{if .Current}} <span class="label">current</span>{{end}}</td>
+<td><code>{{.ID}}</code></td>
+<td>{{if .StartedISO}}<time datetime="{{.StartedISO}}" title="{{.Started}}">{{.StartedRel}}</time>, {{.Started}}{{else}}-{{end}}</td>
+<td class="num">{{.Duration}}</td>
+<td>{{if .Live.ChipLabel}}<span class="{{.Live.ChipClass}}"{{if .Live.ChipTitle}} title="{{.Live.ChipTitle}}"{{end}}>{{.Live.ChipLabel}}</span>{{else}}<span class="label">{{.Live.Text}}</span>{{end}}</td>
+</tr>
+{{with .Report}}<tr class="detail"><td colspan="5"><div id="report">{{template "report" .}}</div></td></tr>
+{{end}}{{with .Perm}}<tr class="perm-row"><td colspan="5" id="perm">{{template "perm" .}}</td></tr>
+{{end}}{{end}}</tbody></table></div>{{else}}<p>No executions recorded by this Bridge process.</p>{{end}}
 {{if $.Truncate}}<p class="label">{{$.Truncate}}</p>{{end}}
-</section>{{end}}
+</section>{{end}}{{end}}
 {{with .Diff}}<section class="changes card" aria-labelledby="h-changes">
-<h2 id="h-changes">Changes</h2>
+<h2 id="h-changes">{{if .Single}}Changes in this turn{{else}}Changes in the working tree{{end}}</h2>
 {{if .Pending}}<p class="label">diff unavailable (ADR-021 pending)</p>{{end}}
 {{with .Working}}{{template "diffview" .}}{{end}}
 {{with .Single}}{{template "diffview" .}}{{end}}
@@ -128,9 +138,18 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <script src="/dashboard.js"></script>
 </body>
 </html>
-{{define "diffview"}}<div class="diff"><p><span class="badge label-{{.LabelClass}}">{{.Label}}</span> {{.Scope}}{{if .Reason}} ({{.Reason}}){{end}}</p>
+{{define "diffview"}}<div class="diff-block"><p class="label"><span class="badge label-{{.LabelClass}}">{{.Label}}</span> {{.Scope}}{{if .Reason}} ({{.Reason}}){{end}}{{if .Totals}}. {{.Totals}}{{end}}</p>
 {{if .Redaction}}<p class="label">{{.Redaction}}</p>{{end}}
-{{range .Files}}<section class="file"><h3>{{.Path}} <span class="status">{{.Status}}</span> +{{.Additions}} -{{.Deletions}}</h3>
-{{if .Note}}<p class="label">{{.Note}}</p>{{end}}{{if .ShowPatch}}<pre>{{.Patch}}</pre>{{end}}</section>
+{{if .Files}}<ul class="files">{{range .Files}}<li>{{.StatusWord}} <code>{{.Path}}</code> <span class="stat-add">+{{.Additions}}</span> <span class="stat-del">-{{.Deletions}}</span></li>
+{{end}}</ul>{{end}}
+{{range $i, $f := .Files}}<details class="file"{{if eq $i 0}} open{{end}}><summary>{{$f.Path}}</summary>
+{{if $f.Note}}<p class="label">{{$f.Note}}</p>{{end}}{{if $f.ShowPatch}}<pre class="diff">{{range $f.Lines}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</pre>{{end}}</details>
 {{end}}{{if .More}}<p class="label">{{.More}}</p>{{end}}</div>{{end}}
+{{define "report"}}{{range .Sentences}}<p class="report">{{.}}</p>
+{{end}}<dl class="kv">
+{{range .Rows}}<dt>{{.Label}}</dt><dd>{{template "parts" .Parts}}</dd>
+{{end}}</dl>
+<p class="label">{{.Note}}</p>{{end}}
+{{define "perm"}}<span class="{{chipClass .Tone}}">{{.Label}}</span> {{template "parts" .Parts}}{{end}}
+{{define "parts"}}{{range .}}{{if eq .Kind "chip"}}<span class="{{chipClass .Tone}}">{{.Text}}</span>{{else if eq .Kind "code"}}<code>{{.Text}}</code>{{else if eq .Kind "time"}}<time datetime="{{.ISO}}" title="{{.Abs}}">{{.Rel}}</time>, {{.Abs}}{{else}}{{.Text}}{{end}}{{end}}{{end}}
 `))

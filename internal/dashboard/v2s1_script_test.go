@@ -75,6 +75,8 @@ type jsResult struct {
 		} `json:"fetches"`
 		ReplaceState []string `json:"replaceState"`
 		Notes        []string `json:"notes"`
+		Reloads      int      `json:"reloads"`
+		Copied       []string `json:"copied"`
 	} `json:"log"`
 	Times []struct {
 		Text     string `json:"text"`

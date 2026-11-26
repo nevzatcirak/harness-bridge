@@ -1308,6 +1308,22 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   clock, so the ETag stays stable): `harness_name`, `state_label`, `state_tone`, `guard_text`, `path_short`,
   `last_activity_iso` (omitted when unknown); the list model also carries `count` and `count_text`.
   The page polls only while the tab is visible and sends one request when it becomes visible again (A1.7).
+- **Session detail (ADR-023 A1, slice S2).** The header card (copyable ID: the button is hidden until the script runs
+  and the clipboard can be written, the ID is selectable text), the **execution timeline** (state chip, execution,
+  start with its absolute time, duration, a liveness cell), and the changes of the working tree (totals, the redaction
+  count, a file list with the status word and `+N -M` counts, one `<details>` per file with the first open, the
+  unified diff as text with the `+`/`-` character kept on every tinted line; Claude Code diffs stay unavailable). Under
+  the **current** execution a detail row carries the **liveness report** (ADR-017): native status, retry attempt and
+  next attempt, last native progress, the stall reason as a chip with its plain-language sentence, the A2 degradation
+  reason, cause hint, running tool and explanation, the thresholds, the observation time, and the fixed note "This is a
+  report, not a verdict; the Bridge takes no action." The page **keys on `stall_reason`, never on `stall_suspected`
+  alone**, and a word it does not know is shown as "Unknown" with a fixed sentence, never as received. A pending native
+  permission is a secondary-tinted row, "Awaiting a human": the count and, only when the Bridge attributes a request to
+  the execution (ADR-024), its tool, kind, pattern count and scope digest; never a pattern, an ID or native text, and
+  with the default incarnation mode off it says it is not attributed and to answer it in OpenCode. The detail JSON model
+  carries, for the current execution only, `report` and `permission` as the same parts the page renders, and a `sig`
+  (the shape of the timeline): the script updates the report and the permission row in place and reloads the page when
+  `sig` changes. The model contains no relative time, so its ETag stays stable.
 - **Status:** the native response shapes behind the diffs are read from upstream source and are
   **UNVERIFIED against a live server**; the live acceptance (R-DASH) is **NOT_EXERCISED**.
 

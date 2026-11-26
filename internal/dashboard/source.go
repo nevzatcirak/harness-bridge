@@ -27,6 +27,65 @@ type Execution struct {
 	Ended   *time.Time
 	// Current marks the newest non-terminal execution of the session.
 	Current bool
+	// Liveness is the ADR-017 report block the Bridge already holds for the execution (A1.8): display data, a
+	// copy, never a verdict. nil when the Bridge holds none.
+	Liveness *Liveness
+	// Permission summarises the pending native permission requests of a waiting execution (ADR-024, A1.8): the
+	// count and, only when the Bridge attributes one to the execution, the fields ADR-024 already shows Chat.
+	// It never carries a pattern or native text. nil when nothing is pending.
+	Permission *PermissionSummary
+}
+
+// Liveness is the ADR-017 (A1 and A2) report-only block of one execution, copied from the Manager's record. Every
+// word is a closed word of that ADR; a word this package does not know is shown as "Unknown", never as received.
+type Liveness struct {
+	// NativeStatus is busy, retry, absent or unavailable.
+	NativeStatus string
+	// RetryAttempt and RetryNextAt accompany a native retry.
+	RetryAttempt *int64
+	RetryNextAt  *time.Time
+	// LastNativeProgressAt is the latest native progress timestamp.
+	LastNativeProgressAt *time.Time
+	// StallSuspected is carried for completeness; the page keys on StallReason, not on this flag (review #459 P2-1).
+	StallSuspected bool
+	StallReason    string
+	// DegradationReason is ADR-017 A2 Variant A: PROVIDER_RETRYING, PROVIDER_RETRY_OVERDUE or PROVIDER_ERROR.
+	DegradationReason string
+	RetryOverdue      bool
+	// CauseHint is one of network, rate_limit, auth, server, unknown; CauseSource is structured, bounded_text or none.
+	CauseHint, CauseSource string
+	// Tool is the oldest live running tool (its name is untrusted display text); Explanation is TOOL_RUNNING_LONG
+	// once that tool has run for ToolLongS seconds or more.
+	Tool        *LivenessTool
+	Explanation string
+	// Thresholds are the operator thresholds actually applied (A2.6), nil for a block built without them.
+	Thresholds *LivenessThresholds
+	// ObservedAt is the Bridge time of the probe that produced the block.
+	ObservedAt time.Time
+}
+
+// LivenessTool is the running-tool object of a liveness block.
+type LivenessTool struct {
+	Name         string
+	RunningSince time.Time
+}
+
+// LivenessThresholds are the A2.6 thresholds in seconds.
+type LivenessThresholds struct {
+	NoProgressS int
+	ToolLongS   int
+}
+
+// PermissionSummary is the pending-permission summary of one execution.
+type PermissionSummary struct {
+	// Count is the number of pending native permission requests the Bridge sees for the session.
+	Count int
+	// Attributed is true only when the Bridge verified that one request belongs to this execution (ADR-024); only
+	// then are Tool, Kind, PatternCount and Digest set. The patterns themselves never reach the dashboard.
+	Attributed   bool
+	Tool, Kind   string
+	PatternCount int
+	Digest       string
 }
 
 // Session is one row the dashboard may show.

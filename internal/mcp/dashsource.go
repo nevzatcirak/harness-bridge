@@ -212,10 +212,65 @@ func (d *dashSource) SessionDetail(ctx context.Context, harness, id string) (das
 func detail(v dashView, r dashboard.Session, qualified string) dashboard.SessionDetail {
 	out := dashboard.SessionDetail{Session: r}
 	for _, e := range v.bySession[qualified] {
-		x := dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.ID == r.CurrentExecution}
+		x := dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.ID == r.CurrentExecution,
+			Liveness: dashLiveness(e.Liveness), Permission: dashPermission(e)}
 		out.Executions = append(out.Executions, x)
 	}
 	return out
+}
+
+// dashLiveness copies the ADR-017 report block into the dashboard's own type. The copy shares no pointer with the
+// Manager's record (T10): every pointer field is copied by value. The block is report-only; nothing here reads or
+// changes a state.
+func dashLiveness(l *execution.Liveness) *dashboard.Liveness {
+	if l == nil {
+		return nil
+	}
+	out := &dashboard.Liveness{
+		NativeStatus: l.NativeStatus, StallSuspected: l.StallSuspected, StallReason: l.StallReason,
+		DegradationReason: l.DegradationReason, RetryOverdue: l.RetryOverdue,
+		CauseHint: l.CauseHint, CauseSource: l.CauseSource, Explanation: l.Explanation, ObservedAt: l.ObservedAt,
+	}
+	if l.RetryAttempt != nil {
+		v := *l.RetryAttempt
+		out.RetryAttempt = &v
+	}
+	if l.RetryNextAt != nil {
+		v := *l.RetryNextAt
+		out.RetryNextAt = &v
+	}
+	if l.LastNativeProgressAt != nil {
+		v := *l.LastNativeProgressAt
+		out.LastNativeProgressAt = &v
+	}
+	if l.Tool != nil {
+		out.Tool = &dashboard.LivenessTool{Name: l.Tool.ToolName, RunningSince: l.Tool.RunningSince}
+	}
+	if l.Thresholds != nil {
+		out.Thresholds = &dashboard.LivenessThresholds{NoProgressS: l.Thresholds.NoProgressS, ToolLongS: l.Thresholds.ToolLongS}
+	}
+	return out
+}
+
+// dashPermission is what ADR-024 already shows Chat about a pending native permission, reduced further: the count
+// and, when the Bridge verified that one request belongs to this execution, its tool, kind, pattern count and
+// scope digest. It never carries the permission ID, the call or message ID, a pattern or any native text.
+func dashPermission(e execution.Execution) *dashboard.PermissionSummary {
+	if e.PendingPermissionCount == nil && e.PendingPermission == nil {
+		return nil
+	}
+	p := &dashboard.PermissionSummary{}
+	if e.PendingPermissionCount != nil {
+		p.Count = *e.PendingPermissionCount
+	}
+	if e.PendingPermission != nil {
+		p.Attributed = true
+		p.Tool, p.Kind, p.PatternCount, p.Digest = e.PendingPermission.Tool, e.PendingPermission.Kind, e.PendingPermission.PatternCount, e.PendingPermission.ScopeDigest
+		if p.Count < 1 {
+			p.Count = 1
+		}
+	}
+	return p
 }
 
 func turnState(s opencode.DiffState) dashboard.TurnState {

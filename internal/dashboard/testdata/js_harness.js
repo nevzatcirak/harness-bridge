@@ -70,7 +70,12 @@ function build(spec, parent) {
 const root = build(scenario.dom, null);
 
 const win = {
-  location: { pathname: scenario.pathname || '/', search: scenario.search || '' },
+  location: { pathname: scenario.pathname || '/', search: scenario.search || '', reload: function () { log.reloads = (log.reloads || 0) + 1; } },
+  listeners: {},
+  addEventListener: function (t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+  fire: function (t, ev) { (this.listeners[t] || []).forEach(function (f) { f(ev || {}); }); },
+  // navigator.clipboard is present only when the scenario asks for it; writes are recorded, and may be refused
+  navigator: scenario.clipboard ? { clipboard: { writeText: function (t) { (log.copied = log.copied || []).push(t); return scenario.clipboard === 'refuse' ? Promise.reject(new Error('denied')) : Promise.resolve(); } } } : {},
   history: { replaceState: function (s, t, u) { log.replaceState.push(u); } },
   matchMedia: function (q) {
     const mq = { matches: !!scenario.narrow, media: q, listeners: [], addEventListener: function (t, f) { this.listeners.push(f); } };
@@ -137,6 +142,9 @@ async function advance(ms) {
   for (const step of scenario.steps || []) {
     if (step.advance) { await advance(step.advance); }
     if (step.hidden !== undefined) { doc.hidden = step.hidden; doc.fire('visibilitychange'); await flush(); }
+    if (step.pagehide) { win.fire('pagehide', {}); await flush(); }
+    if (step.pageshow) { win.fire('pageshow', { persisted: step.pageshow === 'persisted' }); await flush(); }
+    if (step.click) { ids[step.click].fire('click'); await flush(); }
     if (step.hiddenSilent !== undefined) { doc.hidden = step.hiddenSilent; } // the flag changes but no event is delivered yet
     if (step.release) { held.shift()(toResponse(step.release)); await flush(); }
     if (step.respond) { script.push.apply(script, step.respond); }
