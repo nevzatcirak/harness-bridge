@@ -1,9 +1,9 @@
 package execution
 
 // ADR-017 A2 S3: the operator thresholds (A2.6, D32 Q3/Q13). They are read from
-// the environment at startup and are never a per-execution input. ADR-026 S1
-// (PR #507) has not merged, so the names are the BRIDGE_* ones; that slice
-// renames them to CIRAK_* with its legacy window.
+// the effective configuration at startup (the CIRAK_* environment names or the
+// ADR-027 liveness.* file keys) and are never a per-execution input. There is no
+// legacy twin: only the CIRAK_* names are read.
 
 import (
 	"fmt"
@@ -33,25 +33,26 @@ type LivenessConfig struct {
 	ToolLongS   int
 }
 
-// ParseLivenessEnv reads BRIDGE_LIVENESS_NO_PROGRESS_S and
-// BRIDGE_LIVENESS_TOOL_LONG_S. An absent (or empty) variable uses its default;
-// a non-integer, a negative value or an out-of-range value is an error naming
-// the variable, never a silent default. The ADR-027 file keys are not
-// implemented yet (the config package is not on main), and there is no legacy
-// twin.
+// ParseLivenessEnv reads CIRAK_LIVENESS_NO_PROGRESS_S and
+// CIRAK_LIVENESS_TOOL_LONG_S from the effective environment: the ADR-027
+// liveness.no_progress_s/liveness.tool_long_s file keys resolve to the same two
+// names, so the file value, the environment value and their every-key conflict
+// rule are handled by internal/config. An absent (or empty) variable uses its
+// default; a non-integer, a negative value or an out-of-range value is an error
+// naming the variable, never a silent default. There is no legacy twin.
 func ParseLivenessEnv(env func(string) string) (LivenessConfig, error) {
 	cfg := LivenessConfig{NoProgressS: DefaultNoProgressS, ToolLongS: DefaultToolLongS}
-	if v := env("BRIDGE_LIVENESS_NO_PROGRESS_S"); v != "" {
+	if v := env("CIRAK_LIVENESS_NO_PROGRESS_S"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < MinNoProgressS || n > MaxNoProgressS {
-			return LivenessConfig{}, fmt.Errorf("BRIDGE_LIVENESS_NO_PROGRESS_S must be an integer between %d and %d", MinNoProgressS, MaxNoProgressS)
+			return LivenessConfig{}, fmt.Errorf("CIRAK_LIVENESS_NO_PROGRESS_S must be an integer between %d and %d", MinNoProgressS, MaxNoProgressS)
 		}
 		cfg.NoProgressS = n
 	}
-	if v := env("BRIDGE_LIVENESS_TOOL_LONG_S"); v != "" {
+	if v := env("CIRAK_LIVENESS_TOOL_LONG_S"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < MinToolLongS || n > MaxToolLongS {
-			return LivenessConfig{}, fmt.Errorf("BRIDGE_LIVENESS_TOOL_LONG_S must be an integer between %d and %d", MinToolLongS, MaxToolLongS)
+			return LivenessConfig{}, fmt.Errorf("CIRAK_LIVENESS_TOOL_LONG_S must be an integer between %d and %d", MinToolLongS, MaxToolLongS)
 		}
 		cfg.ToolLongS = n
 	}

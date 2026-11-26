@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // ADR-020 (b) test plan groups 9 (admin socket) and 11 (audit line).

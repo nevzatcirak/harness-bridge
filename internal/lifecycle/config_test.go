@@ -219,10 +219,10 @@ func TestRootOverlap(t *testing.T) {
 }
 
 func TestOverlapWithAllowedRootsIsNotChecked(t *testing.T) {
-	// ADR-022 3.1: overlap with BRIDGE_ALLOWED_ROOTS is allowed; this package does
+	// ADR-022 3.1: overlap with CIRAK_ALLOWED_ROOTS is allowed; this package does
 	// not read that variable at all.
 	dir := mkdir(t, canonicalTemp(t), "r")
-	t.Setenv("BRIDGE_ALLOWED_ROOTS", dir)
+	t.Setenv("CIRAK_ALLOWED_ROOTS", dir)
 	if _, err := realValidator().parse(rootsJSON(t, root(dir, "create"))); err != nil {
 		t.Fatalf("refused a root equal to an allowed root: %v", err)
 	}

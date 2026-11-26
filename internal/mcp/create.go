@@ -14,10 +14,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-022 slice S4: the create_session tool (sections 3.3, 4.1, 4.2, 5.1), against a fake
@@ -25,7 +25,7 @@ import (
 //
 // It is a mutation of the native server, not of an execution: it takes no session guard (a new
 // session has none) and no manager reservation, runs only in a writer-role process
-// (BRIDGE_READ_ONLY returns FORBIDDEN), keeps a memory-only registry for idempotency and the
+// (CIRAK_READ_ONLY returns FORBIDDEN), keeps a memory-only registry for idempotency and the
 // hourly counter, and sends exactly one POST per accepted request, never retried. It is NOT
 // classified by mutating(): that classification writes the AUDIT-01 prompt/interrupt lines. Its
 // own audit line (event=session_create, ADR-022 4.3) is slice S5 and MUST land before any
@@ -83,7 +83,7 @@ func createNativeBound() time.Duration { return time.Duration(createBound.Load()
 
 // CreateConfig enables create_session. A Server whose Create is nil does not register the tool
 // (ADR-022 3.1: no lifecycle configuration, no lifecycle tools), so a deployed Bridge keeps its
-// tool set; nothing wires it from BRIDGE_LIFECYCLE_CONFIG yet.
+// tool set; nothing wires it from CIRAK_LIFECYCLE_CONFIG yet.
 type CreateConfig struct {
 	cfg  *lifecycle.Config
 	auth *lifecycle.Authorizer
@@ -293,7 +293,7 @@ func authRefusal(err error) error {
 }
 
 // createCall is create_session. Order, with the reason for each step:
-//  1. input validation and BRIDGE_READ_ONLY (no state touched);
+//  1. input validation and CIRAK_READ_ONLY (no state touched);
 //  2. the idempotency lookup: a recorded outcome is returned before any cap, so a replay is
 //     never refused by the cap its own creation just reached;
 //  3. the path (config + live directory, no native call): root, subdirectory, depth, Git top

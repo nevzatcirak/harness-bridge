@@ -17,11 +17,11 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/lifecycle"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/lifecycle"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // ADR-022 slice S4: create_session against a FAKE native. Nothing here is live.
@@ -809,7 +809,7 @@ func TestCreateReadOnlyIsForbiddenBeforeAnyWork(t *testing.T) {
 		}
 	}
 	if len(e.requests()) != before {
-		t.Fatal("a native call under BRIDGE_READ_ONLY")
+		t.Fatal("a native call under CIRAK_READ_ONLY")
 	}
 }
 
@@ -854,7 +854,7 @@ func TestCreateIsNotAMutatingToolOfTheExistingAuditAndWritesNoAuditLine(t *testi
 }
 
 // Through the real MCP transport: the schema rejects every field the ADR forbids, the tool is
-// listed only when configured, and BRIDGE_READ_ONLY returns a typed FORBIDDEN.
+// listed only when configured, and CIRAK_READ_ONLY returns a typed FORBIDDEN.
 func TestCreateOverTheMCPTransport(t *testing.T) {
 	e := newCreateEnv(t, nil)
 	pol, err := security.New([]string{e.rootA}, []string{"ses_none"})
@@ -899,7 +899,7 @@ func TestCreateOverTheMCPTransport(t *testing.T) {
 	if e.count("POST") != posts {
 		t.Errorf("a rejected request reached the native server")
 	}
-	// BRIDGE_READ_ONLY: the tool stays listed and refuses with a typed FORBIDDEN.
+	// CIRAK_READ_ONLY: the tool stays listed and refuses with a typed FORBIDDEN.
 	e.s.ReadOnly = true
 	f := decode[execution.Error](t, invoke(t, client, "create_session", map[string]any{"root": e.rootA, "idempotency_key": "key-mcp-000002"}, true))
 	if f.Code != "FORBIDDEN" {

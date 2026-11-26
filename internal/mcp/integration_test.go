@@ -16,10 +16,11 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
+	"github.com/nevzatcirak/cirak/internal/version"
 )
 
 type nativeFixture struct {
@@ -202,7 +203,7 @@ func TestSDKLocalIntegration(t *testing.T) { testSDKContinuation(t, false) }
 func TestSDKHTTPSIntegration(t *testing.T) { testSDKContinuation(t, true) }
 func testSDKContinuation(t *testing.T, remote bool) {
 	client, f, bridge, _ := integrationMode(t, true, remote)
-	if v := client.InitializeResult(); v.ProtocolVersion != "2025-11-25" || v.ServerInfo.Name != "harness-bridge" {
+	if v := client.InitializeResult(); v.ProtocolVersion != "2025-11-25" || v.ServerInfo.Name != "cirak" || v.ServerInfo.Version != version.Version() {
 		t.Fatal(v)
 	}
 	tools, err := client.ListTools(context.Background(), nil)

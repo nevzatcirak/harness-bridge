@@ -4,7 +4,7 @@ package repository
 
 import (
 	"context"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/security"
 	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"

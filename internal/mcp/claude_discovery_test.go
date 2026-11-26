@@ -11,13 +11,13 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 // #267 P2-1 (task #268): a claudecode: ACL entry must never reach the OpenCode client. The wiring
-// requires every Claude ID in BRIDGE_ALLOWED_SESSIONS, so the discovery loop sees it; without a
+// requires every Claude ID in CIRAK_ALLOWED_SESSIONS, so the discovery loop sees it; without a
 // skip it was sent to Client.Get, refused locally ("invalid native session ID", neither FORBIDDEN
 // nor NOT_FOUND) and the whole listing failed, with the adapter on or off.
 

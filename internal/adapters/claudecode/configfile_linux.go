@@ -42,7 +42,7 @@ func ReadConfigFile(p string, serviceUID uint32, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// LoadSessions reads BRIDGE_CLAUDE_SESSIONS: the path is validated, the file is
+// LoadSessions reads CIRAK_CLAUDE_SESSIONS: the path is validated, the file is
 // opened and checked on its descriptor, then parsed (ParseSessions).
 func LoadSessions(fsys FS, p string, serviceUID uint32, allowedRoots []string) ([]Session, error) {
 	if err := ValidateConfigFile(fsys, p, serviceUID); err != nil {

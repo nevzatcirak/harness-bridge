@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // The fake CLI is this test binary re-executed through a wrapper script. The
@@ -163,7 +163,7 @@ func (i *integ) record() map[string]string {
 // Recorded NDJSON through a real process: the OBSERVED verdicts of the spike hold.
 func TestFakeCLIVerdicts(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-poison-0123456789")
-	t.Setenv("BRIDGE_TOKEN", "bridge-secret-value")
+	t.Setenv("CIRAK_TOKEN", "bridge-secret-value")
 	for _, tc := range []struct {
 		name, scenario, fixture, state, row string
 		code                                string
@@ -196,7 +196,7 @@ func TestFakeCLIVerdicts(t *testing.T) {
 				t.Errorf("cwd = %q, want the session root", rec["cwd"])
 			}
 			for _, kv := range strings.Split(rec["env"], "|") {
-				if strings.Contains(kv, "ANTHROPIC") || strings.Contains(kv, "BRIDGE") || strings.Contains(kv, "poison") {
+				if strings.Contains(kv, "ANTHROPIC") || strings.Contains(kv, "BRIDGE") || strings.Contains(kv, "CIRAK") || strings.Contains(kv, "poison") {
 					t.Errorf("the Bridge environment reached the child: %q", kv)
 				}
 			}

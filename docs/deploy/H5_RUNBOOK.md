@@ -1,5 +1,7 @@
 # H5: promote a frozen main build, H5 regression, R7 lifecycle and the dashboard live acceptance
 
+> **Cirak rename (ADR-026 S1).** This runbook records the live H5 host as deployed: its drop-in and `EnvironmentFile` use the legacy `BRIDGE_*` names, host and unit names (`harness-bridge-private.service`, `/etc/harness-bridge`, `/var/lib/harness-bridge`) and installed binary names stay valid, and a Cirak build reads every `BRIDGE_*` line unchanged with one warning per variable (`docs/adr/ADR-026-cirak-name-and-distribution.md` sections 2.3 and 2.5). The build commands below name the package `./cmd/cirak`.
+
 Status: **the H5 sitting was executed on 2026-11-21** (live result and findings: `docs/evidence/H5_EVIDENCE_2026-11-21.md`,
 `docs/evidence/R7_EVIDENCE_2026-11-21.md`; the live findings F-H5-1 to F-H5-5 are folded into the steps
 below, each marked "live finding"). Original draft: Worker B, 2026-11-20, rewritten for planner task
@@ -23,11 +25,11 @@ file.
 
 | Feature | On the inspected main | Switch and default |
 |---|---|---|
-| ADR-021 Claude Code adapter | code and wiring merged; R6 live acceptance **not passed** (run 5 pending) | `BRIDGE_CLAUDE_COMMAND` unset = off (`cmd/bridge/claude.go:34-47`); a partial set refuses startup |
-| ADR-022 lifecycle S1–S5 + ADR-025 S6/S8, production wiring (D22) | **wired** by `cmd/bridge/lifecycle.go`; inert until configured | `BRIDGE_LIFECYCLE_CONFIG` unset = no lifecycle tool; `BRIDGE_OVERLAY_DIR` adds the archive tools; invalid value refuses startup (`cmd/bridge/lifecycle.go:20-28,64-120`) |
+| ADR-021 Claude Code adapter | code and wiring merged; R6 live acceptance **not passed** (run 5 pending) | `BRIDGE_CLAUDE_COMMAND` unset = off (`cmd/cirak/claude.go:34-47`); a partial set refuses startup |
+| ADR-022 lifecycle S1–S5 + ADR-025 S6/S8, production wiring (D22) | **wired** by `cmd/cirak/lifecycle.go`; inert until configured | `BRIDGE_LIFECYCLE_CONFIG` unset = no lifecycle tool; `BRIDGE_OVERLAY_DIR` adds the archive tools; invalid value refuses startup (`cmd/cirak/lifecycle.go:20-28,64-120`) |
 | ADR-023 dashboard | code; R-DASH not exercised | `BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR`, unset = off (`internal/dashboard/config.go:24-29`) |
-| ADR-024 A1 S7 incarnation evidence | code (merged after #415); **not exercised live** | `BRIDGE_PERMISSION_INCARNATION` unset/`off` = no tracker; `observed` starts it (`cmd/bridge/relay.go:35-44`) |
-| ADR-024 `reply_permission` reject-only | production `PermissionSource` installed | `BRIDGE_PERMISSION_RELAY` unset/`reject_only` = registered (12 tools), `off` = opt-out (11), anything else refuses startup (`cmd/bridge/relay.go:17-28`) |
+| ADR-024 A1 S7 incarnation evidence | code (merged after #415); **not exercised live** | `BRIDGE_PERMISSION_INCARNATION` unset/`off` = no tracker; `observed` starts it (`cmd/cirak/relay.go:35-44`) |
+| ADR-024 `reply_permission` reject-only | production `PermissionSource` installed | `BRIDGE_PERMISSION_RELAY` unset/`reject_only` = registered (12 tools), `off` = opt-out (11), anything else refuses startup (`cmd/cirak/relay.go:17-28`) |
 | ADR-020 (b) admin socket, ADR-019 token lifetime | as H4 | `BRIDGE_ADMIN_SOCKET`, `BRIDGE_TOKEN_MAX_LIFETIME` (see the table) |
 
 Tool surface: 11 base tools; `+1` with `reply_permission` (the `reject_only` default); `+2` with a
@@ -43,36 +45,36 @@ re-checked against the freeze SHA.
 
 | Variable | Rule and default | Source |
 |---|---|---|
-| `OPENCODE_URL` | upstream base URL; default `http://127.0.0.1:4096` | `cmd/bridge/main.go:28-31` |
-| `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` (`_FILE`) | native client credentials; `_FILE` is a private regular file, `_FILE` and the direct value are mutually exclusive | `cmd/bridge/main.go:32-36`; `cmd/bridge/secret.go:13-43` |
-| `BRIDGE_LISTEN` | listener; default `127.0.0.1:8080`; loopback unless remote TLS mode | `cmd/bridge/ingress.go:31-33`; `internal/security/listen.go` |
-| `BRIDGE_READ_ONLY` | `0`/`1`; empty = `0`; the writer needs `0` | `cmd/bridge/ingress.go:24-30` |
-| `BRIDGE_TOKEN`, `BRIDGE_TOKEN_FILE` | exactly one; file: absolute, private regular file (mode `&0077 == 0` unless a systemd credential), 1–16384 bytes | `cmd/bridge/startup.go:11-36`; `cmd/bridge/secret.go:13-43` |
-| `BRIDGE_TOKEN_MAX_LIFETIME` | Go duration, default `24h`, ceiling `720h`; above `24h` the token must be ≥43 characters | `cmd/bridge/ingress.go:35-37`; `internal/security/remote.go:26-33,39-66` |
-| `BRIDGE_TOKEN_EXPIRES` | RFC3339; remote mode only; must lie within `BRIDGE_TOKEN_MAX_LIFETIME` | `cmd/bridge/ingress.go:38-46` |
-| `BRIDGE_PUBLIC_ORIGIN`, `BRIDGE_PRINCIPAL` | remote-mode origin and principal; any remote setting requires TLS | `cmd/bridge/ingress.go:38-50` |
-| `BRIDGE_TLS_CERT`, `BRIDGE_TLS_KEY` | remote mode only; both required, never a plaintext fallback | `cmd/bridge/ingress.go:23,38-41` |
-| `BRIDGE_ALLOWED_ROOTS` | path-list (`:`); the static ACL roots | `cmd/bridge/main.go:40`; `internal/security` |
-| `BRIDGE_ALLOWED_SESSIONS` | comma list of exact session IDs; **static**, read once at startup | `cmd/bridge/main.go:40` |
-| `BRIDGE_WRITER_LOCK_DIR` | the shared writer-lock directory (also used by the Claude adapter) | `cmd/bridge/main.go:51`; `cmd/bridge/claude.go:50` |
-| `BRIDGE_ADMIN_SOCKET` | writer-only admin socket; parent `0700`, service user; ignored under read-only | `cmd/bridge/admin.go:18-31` |
-| `BRIDGE_LIFECYCLE_CONFIG` | absolute path of the lifecycle JSON; unset = no lifecycle tool; invalid = startup error | `cmd/bridge/lifecycle.go:20,64-78`; `internal/lifecycle/config.go:24,141-148` |
-| `BRIDGE_OVERLAY_DIR` | overlay directory; needs `BRIDGE_LIFECYCLE_CONFIG`; absolute, real directory (no symlink in the final component), owned by the service user, mode exactly `0700`; set without lifecycle = startup error | `cmd/bridge/lifecycle.go:21,30,69-101`; `internal/overlay/overlay.go:163-233` |
-| `BRIDGE_PERMISSION_RELAY` | unset/`reject_only` = `reply_permission` registered; `off` = 11 tools; `policy`/other = startup error | `cmd/bridge/relay.go:17-28` |
-| `BRIDGE_PERMISSION_INCARNATION` | unset/`off` = no incarnation source (every request `not_verified`); `observed` = Bridge-observed epoch (S7, not exercised) | `cmd/bridge/relay.go:35-44,50-60` |
+| `OPENCODE_URL` | upstream base URL; default `http://127.0.0.1:4096` | `cmd/cirak/main.go:28-31` |
+| `OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD` (`_FILE`) | native client credentials; `_FILE` is a private regular file, `_FILE` and the direct value are mutually exclusive | `cmd/cirak/main.go:32-36`; `cmd/cirak/secret.go:13-43` |
+| `BRIDGE_LISTEN` | listener; default `127.0.0.1:8080`; loopback unless remote TLS mode | `cmd/cirak/ingress.go:31-33`; `internal/security/listen.go` |
+| `BRIDGE_READ_ONLY` | `0`/`1`; empty = `0`; the writer needs `0` | `cmd/cirak/ingress.go:24-30` |
+| `BRIDGE_TOKEN`, `BRIDGE_TOKEN_FILE` | exactly one; file: absolute, private regular file (mode `&0077 == 0` unless a systemd credential), 1–16384 bytes | `cmd/cirak/startup.go:11-36`; `cmd/cirak/secret.go:13-43` |
+| `BRIDGE_TOKEN_MAX_LIFETIME` | Go duration, default `24h`, ceiling `720h`; above `24h` the token must be ≥43 characters | `cmd/cirak/ingress.go:35-37`; `internal/security/remote.go:26-33,39-66` |
+| `BRIDGE_TOKEN_EXPIRES` | RFC3339; remote mode only; must lie within `BRIDGE_TOKEN_MAX_LIFETIME` | `cmd/cirak/ingress.go:38-46` |
+| `BRIDGE_PUBLIC_ORIGIN`, `BRIDGE_PRINCIPAL` | remote-mode origin and principal; any remote setting requires TLS | `cmd/cirak/ingress.go:38-50` |
+| `BRIDGE_TLS_CERT`, `BRIDGE_TLS_KEY` | remote mode only; both required, never a plaintext fallback | `cmd/cirak/ingress.go:23,38-41` |
+| `BRIDGE_ALLOWED_ROOTS` | path-list (`:`); the static ACL roots | `cmd/cirak/main.go:40`; `internal/security` |
+| `BRIDGE_ALLOWED_SESSIONS` | comma list of exact session IDs; **static**, read once at startup | `cmd/cirak/main.go:40` |
+| `BRIDGE_WRITER_LOCK_DIR` | the shared writer-lock directory (also used by the Claude adapter) | `cmd/cirak/main.go:51`; `cmd/cirak/claude.go:50` |
+| `BRIDGE_ADMIN_SOCKET` | writer-only admin socket; parent `0700`, service user; ignored under read-only | `cmd/cirak/admin.go:18-31` |
+| `BRIDGE_LIFECYCLE_CONFIG` | absolute path of the lifecycle JSON; unset = no lifecycle tool; invalid = startup error | `cmd/cirak/lifecycle.go:20,64-78`; `internal/lifecycle/config.go:24,141-148` |
+| `BRIDGE_OVERLAY_DIR` | overlay directory; needs `BRIDGE_LIFECYCLE_CONFIG`; absolute, real directory (no symlink in the final component), owned by the service user, mode exactly `0700`; set without lifecycle = startup error | `cmd/cirak/lifecycle.go:21,30,69-101`; `internal/overlay/overlay.go:163-233` |
+| `BRIDGE_PERMISSION_RELAY` | unset/`reject_only` = `reply_permission` registered; `off` = 11 tools; `policy`/other = startup error | `cmd/cirak/relay.go:17-28` |
+| `BRIDGE_PERMISSION_INCARNATION` | unset/`off` = no incarnation source (every request `not_verified`); `observed` = Bridge-observed epoch (S7, not exercised) | `cmd/cirak/relay.go:35-44,50-60` |
 | `BRIDGE_DASHBOARD_SOCKET` | unix socket path in a `0700` directory (recommended); never both dashboard variables | `internal/dashboard/config.go:24-29`; `docs/deploy/DASHBOARD.md` |
 | `BRIDGE_DASHBOARD_ADDR` | `host:port`; host exactly `127.0.0.1` or `::1`; loopback only | `internal/dashboard/config.go:31-68` |
-| `BRIDGE_DASHBOARD_REDACT_EXTRA` | JSON array of ≤16 RE2 patterns, each 1–256 bytes; additive to the shipped list; invalid = startup error | `internal/dashboard/redact.go:89-108`; `cmd/bridge/dashboard.go:18-27` |
-| `BRIDGE_CLAUDE_COMMAND` | absolute root-owned wrapper; **unset in H5** (stage 6) | `cmd/bridge/claude.go:16,34-47` |
-| `BRIDGE_CLAUDE_SESSIONS` | allowlist JSON, mode `0600`, absolute | `cmd/bridge/claude.go:17,49-56` |
-| `BRIDGE_CLAUDE_VERSIONS` | exact `claude_code_version` list, comma separated, no default | `cmd/bridge/claude.go:18` |
-| `BRIDGE_CLAUDE_HISTORY_DIR` | private absolute directory of history records | `cmd/bridge/claude.go:19` |
-| `BRIDGE_CLAUDE_HOME` | the Claude service user's HOME (absolute) | `cmd/bridge/claude.go:20` |
-| `BRIDGE_CLAUDE_MODEL` | model name | `cmd/bridge/claude.go:21` |
-| `BRIDGE_CLAUDE_LANG` | optional; default `C.UTF-8` | `cmd/bridge/claude.go:22`; `internal/claudewire/harness.go:28,73` |
-| `BRIDGE_CLAUDE_MAX_TURNS` | optional; 1–1000, default 20 | `cmd/bridge/claude.go:23,52,65-71` |
-| `BRIDGE_CLAUDE_MAX_BUDGET_USD` | optional decimal | `cmd/bridge/claude.go:24` |
-| `BRIDGE_CLAUDE_RUN_MAX` | optional Go duration, 1s–24h, default 15m | `cmd/bridge/claude.go:25`; `internal/adapters/claudecode/runner/executor.go:101-102` |
+| `BRIDGE_DASHBOARD_REDACT_EXTRA` | JSON array of ≤16 RE2 patterns, each 1–256 bytes; additive to the shipped list; invalid = startup error | `internal/dashboard/redact.go:89-108`; `cmd/cirak/dashboard.go:18-27` |
+| `BRIDGE_CLAUDE_COMMAND` | absolute root-owned wrapper; **unset in H5** (stage 6) | `cmd/cirak/claude.go:16,34-47` |
+| `BRIDGE_CLAUDE_SESSIONS` | allowlist JSON, mode `0600`, absolute | `cmd/cirak/claude.go:17,49-56` |
+| `BRIDGE_CLAUDE_VERSIONS` | exact `claude_code_version` list, comma separated, no default | `cmd/cirak/claude.go:18` |
+| `BRIDGE_CLAUDE_HISTORY_DIR` | private absolute directory of history records | `cmd/cirak/claude.go:19` |
+| `BRIDGE_CLAUDE_HOME` | the Claude service user's HOME (absolute) | `cmd/cirak/claude.go:20` |
+| `BRIDGE_CLAUDE_MODEL` | model name | `cmd/cirak/claude.go:21` |
+| `BRIDGE_CLAUDE_LANG` | optional; default `C.UTF-8` | `cmd/cirak/claude.go:22`; `internal/claudewire/harness.go:28,73` |
+| `BRIDGE_CLAUDE_MAX_TURNS` | optional; 1–1000, default 20 | `cmd/cirak/claude.go:23,52,65-71` |
+| `BRIDGE_CLAUDE_MAX_BUDGET_USD` | optional decimal | `cmd/cirak/claude.go:24` |
+| `BRIDGE_CLAUDE_RUN_MAX` | optional Go duration, 1s–24h, default 15m | `cmd/cirak/claude.go:25`; `internal/adapters/claudecode/runner/executor.go:101-102` |
 
 ## Step 0: build (two workers, no host changes)
 
@@ -82,7 +84,7 @@ Freeze SHA: `<FREEZE_SHA>` (Planning Desk). Build exactly as H4 (`docs/evidence/
 ```sh
 git clone https://github.com/nevzatcirak/harness-bridge.git h5-build
 cd h5-build && git checkout <FREEZE_SHA> && git status --porcelain   # must be empty
-CGO_ENABLED=0 go build -trimpath -o out/harness-bridge-h5 ./cmd/bridge
+CGO_ENABLED=0 go build -trimpath -o out/harness-bridge-h5 ./cmd/cirak
 sha256sum out/harness-bridge-h5
 go version -m out/harness-bridge-h5 | grep -E 'vcs\.(revision|modified)'
 ```
@@ -124,7 +126,7 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    Environment=BRIDGE_TOKEN_MAX_LIFETIME=168h
    # Empty on purpose: a later drop-in's Environment= assignment of the same variable wins, so this
    # neutralises a BRIDGE_TOKEN inherited through Environment=. readSecret refuses BOTH forms set and
-   # treats an empty value as unset (cmd/bridge/secret.go:15-23). It does NOT override an
+   # treats an empty value as unset (cmd/cirak/secret.go:15-23). It does NOT override an
    # EnvironmentFile= value (systemd.exec: EnvironmentFile overrides Environment=); check that below.
    Environment=BRIDGE_TOKEN=
    Environment=BRIDGE_TOKEN_FILE=/etc/harness-bridge/h5/token
@@ -136,10 +138,10 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    ```
 
    The H4 drop-in keeps the OpenCode/lock/ACL values; this one swaps the binary and adds the
-   stage-1 settings (token file/expiry and the relay off). `BRIDGE_READ_ONLY` must be `0` or `1` (`cmd/bridge/ingress.go:24-30`); the
+   stage-1 settings (token file/expiry and the relay off). `BRIDGE_READ_ONLY` must be `0` or `1` (`cmd/cirak/ingress.go:24-30`); the
    writer needs `0`. `BRIDGE_PERMISSION_RELAY=off` is D21 Q7 until ADR-024 A1 S7 is exercised live
-   (`cmd/bridge/relay.go:17-28`). The admin socket is writer-only; its parent must be `0700` and
-   owned by the service user (`cmd/bridge/admin.go:18-31`; ADR-020).
+   (`cmd/cirak/relay.go:17-28`). The admin socket is writer-only; its parent must be `0700` and
+   owned by the service user (`cmd/cirak/admin.go:18-31`; ADR-020).
 
 3. **Token rotation inside the sitting (ADR-019).** The live token expires
    **2026-11-23T17:54:48Z**; rotate it now rather than between stages.
@@ -172,7 +174,7 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
      `zzzz-h5.conf` carries its **path** (`BRIDGE_TOKEN_FILE`) and the expiry
      (`BRIDGE_TOKEN_EXPIRES`), never the value, so the drop-in may stay `0644`. `BRIDGE_TOKEN` and
      `BRIDGE_TOKEN_FILE` are **mutually exclusive**, and an empty value counts as unset
-     (`cmd/bridge/secret.go:15-23`).
+     (`cmd/cirak/secret.go:15-23`).
    - The empty `Environment=BRIDGE_TOKEN=` neutralises a `BRIDGE_TOKEN` that reaches the unit through
      `Environment=` (for one variable a later drop-in's assignment wins). It does **not** clear a value
      read from an `EnvironmentFile=`: per `systemd.exec`, settings from those files override those made
@@ -195,7 +197,7 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
      user blocks the token; its mode and the unit's `User=` are **UNVERIFIED** (this runbook does not
      read them).
    - Keep `BRIDGE_TOKEN_MAX_LIFETIME=168h`; the explicit `BRIDGE_TOKEN_EXPIRES` must be RFC3339 and no
-     more than **+7 days** (168h) from the sitting (`cmd/bridge/ingress.go:35-46`;
+     more than **+7 days** (168h) from the sitting (`cmd/cirak/ingress.go:35-46`;
      `internal/security/remote.go:39-66`). The ≥43-character rule applies above 24h; the generated
      value has 64.
    - `set +o history` before typing it; never paste it into chat, a screenshot, the PR or the
@@ -211,9 +213,9 @@ values and both `go version -m` blocks in `H5_EVIDENCE_<date>.md`.
    - MainPID; `ls -l /proc/$P/exe` shows `harness-bridge-h5` **before** hashing;
    - the sha256 of `/usr/local/libexec/harness-bridge-h5` and `NRestarts`;
    - the startup slog lines: token expiry + max lifetime (never token material,
-     `cmd/bridge/startup.go`), and `lifecycle: not configured, no lifecycle tools registered (roots=0)`
-     (`cmd/bridge/lifecycle.go:203`). With `BRIDGE_PERMISSION_RELAY=off` **no** `permission relay:`
-     line is written (`cmd/bridge/main.go:110-117` logs it only for `reject_only`); the 11-tool
+     `cmd/cirak/startup.go`), and `lifecycle: not configured, no lifecycle tools registered (roots=0)`
+     (`cmd/cirak/lifecycle.go:203`). With `BRIDGE_PERMISSION_RELAY=off` **no** `permission relay:`
+     line is written (`cmd/cirak/main.go:110-117` logs it only for `reject_only`); the 11-tool
      precheck in stage 1 is the evidence, not a log line;
    - `journalctl --since -2min` shows no errors;
    - `/run/harness-bridge-admin` is `drwx------` (service user) and the socket `srw-------`;
@@ -282,7 +284,7 @@ Setup:
    removes the unit-sandbox question.
 2. Add `Environment=BRIDGE_DASHBOARD_SOCKET=/run/harness-bridge-dashboard/dash.sock` to the drop-in.
 3. Optional operator redaction: `BRIDGE_DASHBOARD_REDACT_EXTRA` is implemented and wired
-   (`internal/dashboard/redact.go:89-108`; `cmd/bridge/dashboard.go:18-27`); the name is still
+   (`internal/dashboard/redact.go:89-108`; `cmd/cirak/dashboard.go:18-27`); the name is still
    marked provisional in `DASHBOARD.md`/BACKLOG. JSON array of ≤16 RE2 patterns, 1–256 bytes;
    invalid = startup error, never logged. It is a convenience, not a guarantee.
 4. Restart; `ls -ld /run/harness-bridge-dashboard` is `drwx------` (service user) and the socket
@@ -385,9 +387,9 @@ Environment=BRIDGE_OVERLAY_DIR=/var/lib/harness-bridge-h5
 
 Restart (fence first). Expected: startup line
 `lifecycle: registered list_catalog,create_session,archive_session,unarchive_session,close_session (roots=1, overlay=true)`
-(`cmd/bridge/lifecycle.go:205`), **16** tools (11 + 2 + 3 with the relay off), and the archive
+(`cmd/cirak/lifecycle.go:205`), **16** tools (11 + 2 + 3 with the relay off), and the archive
 tools present. If any variable is invalid the Bridge refuses to start: fix it, never start
-"without" (`cmd/bridge/lifecycle.go:64-120`); `BRIDGE_OVERLAY_DIR` without the lifecycle config is a
+"without" (`cmd/cirak/lifecycle.go:64-120`); `BRIDGE_OVERLAY_DIR` without the lifecycle config is a
 startup error (`lifecycle.go:69-73`).
 
 **R7 script** (new Chat conversation, only the H5 connector). The catalog lists only sessions in the
@@ -467,7 +469,7 @@ stays on disk unread — archived sessions become visible and accept prompts aga
 ## Stage 5: permission relay — NOT_RUN in H5
 
 **D21 Q7:** until ADR-024 A1 S7 is accepted and exercised live, the operating setting is
-`BRIDGE_PERMISSION_RELAY=off` (`cmd/bridge/relay.go:17-28`), so `reply_permission` is not registered
+`BRIDGE_PERMISSION_RELAY=off` (`cmd/cirak/relay.go:17-28`), so `reply_permission` is not registered
 and this stage is **NOT_RUN**; it is not a pass. Keep `BRIDGE_PERMISSION_INCARNATION` unset/`off`
 (the S7 tracker is off; `relay.go:35-44,50-60`). The startup log says
 `permission relay: reject_only; no native incarnation source ...` only when the relay is registered;
@@ -483,11 +485,11 @@ Rollback: `BRIDGE_PERMISSION_RELAY=off`, restart; the tool disappears.
 
 ## Stage 6: Claude Code adapter — OFF in H5
 
-**Explicitly disabled in H5.** The code is wired (`cmd/bridge/claude.go`), but ADR-021's live
+**Explicitly disabled in H5.** The code is wired (`cmd/cirak/claude.go`), but ADR-021's live
 acceptance R6 has not passed (run 5 `-items 4,6` is pending, `docs/deploy/CLAUDE_CODE_RUNBOOK.md`
 §7a). Enabling before that acceptance is a STOP. With `BRIDGE_CLAUDE_COMMAND` unset, every other
 `BRIDGE_CLAUDE_*` value must also be unset or the Bridge refuses to start (no partial enablement,
-`cmd/bridge/claude.go:34-47`); a read-only ingress ignores the adapter (`claude.go:85-95`).
+`cmd/cirak/claude.go:34-47`); a read-only ingress ignores the adapter (`claude.go:85-95`).
 
 When it is enabled in a later sitting, the task's intended values are: wrapper
 `/usr/local/libexec/hb-claude-wrapper` (root-owned; it runs the CLI as `hbclaude` with `sudo -n`,
@@ -564,7 +566,7 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
    same 168h and ≥43 characters) or rotate a fresh H4 token as part of the rollback.
    **If you use the file form**, also put **`Environment=BRIDGE_TOKEN=`** (empty) into `zzz-h4.conf`
    beside them: the H4/base unit may still carry a `BRIDGE_TOKEN`, `readSecret` refuses both forms, and
-   an empty value counts as unset (`cmd/bridge/secret.go:15-23`). **If you instead set a fresh direct
+   an empty value counts as unset (`cmd/cirak/secret.go:15-23`). **If you instead set a fresh direct
    `BRIDGE_TOKEN` value** in an earlier drop-in, do **not** add the empty line: the later `zzz-h4.conf`
    assignment would erase it and H4 would refuse to start ("BRIDGE_TOKEN must be at least 32
    characters"). The `EnvironmentFile=` override above applies to H4 too: if a listed file holds
@@ -583,6 +585,6 @@ journal excerpts, and the workspace diff. Skips, blocked steps and unobserved be
 3. **Relay default:** `reject_only` is the registration default (D15 Q3) while the sitting rule is
    "each default OFF"; H5 uses `off` (D21 Q7), 11 tools. Confirm for the freeze SHA.
 4. **`BRIDGE_OVERLAY_DIR` naming:** ADR-025 §9 Q5/Q6 (D18) name it; §4.1 and §10 still call it a
-   proposal; the code reads it (`cmd/bridge/lifecycle.go:30`). Recorded in BACKLOG.
+   proposal; the code reads it (`cmd/cirak/lifecycle.go:30`). Recorded in BACKLOG.
 5. **Claude enablement:** R6 run 5 must pass first; the wrapper/users/host prerequisites are the
    maintainer's.

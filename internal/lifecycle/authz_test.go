@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 func write(t *testing.T, path, content string) {
@@ -356,7 +356,7 @@ func TestDirectoriesOutsideEveryRootAreRefusedEvenUnderAllowedRoots(t *testing.T
 	staticProj := mkdir(t, allowed, "static")
 	repoAt(t, staticProj)
 	a := newAuthorizer(t, cfgFor(root, ModeCreate, ModeArchive))
-	// A static session's directory is under BRIDGE_ALLOWED_ROOTS, not under a
+	// A static session's directory is under CIRAK_ALLOWED_ROOTS, not under a
 	// lifecycle root: the lifecycle authorization does not accept it.
 	p, err := security.New([]string{allowed}, []string{"ses_static"})
 	if err != nil {

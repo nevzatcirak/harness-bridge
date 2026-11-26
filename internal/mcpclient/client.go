@@ -29,7 +29,7 @@ func Connect(ctx context.Context, endpoint, token string) (*sdk.ClientSession, e
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	client := &http.Client{Transport: bearerTransport{token, transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return sdk.NewClient(&sdk.Implementation{Name: "harness-bridge-local-client", Version: "0.2.0"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	return sdk.NewClient(&sdk.Implementation{Name: "cirak-local-client", Version: "0.2.0"}, nil).Connect(ctx, &sdk.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
 }
 func Call[T any](ctx context.Context, client *sdk.ClientSession, name string, args any) (T, error) {
 	var out T

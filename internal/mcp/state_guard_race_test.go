@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/execution"
 )
 
 // G4 (MCP side): concurrent discovery reads while executions are admitted,

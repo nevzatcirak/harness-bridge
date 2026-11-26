@@ -55,6 +55,13 @@ type apiSession struct {
 	Current       string   `json:"current_execution,omitempty"`
 	LastActivity  string   `json:"last_activity"`
 	Href          string   `json:"href,omitempty"`
+	// Display fields of the sessions table (A1.4): the script sets them with textContent and never decides a label.
+	HarnessName string `json:"harness_name"`
+	StateLabel  string `json:"state_label"`
+	StateTone   string `json:"state_tone"`
+	GuardText   string `json:"guard_text"`
+	PathShort   string `json:"path_short"`
+	LastISO     string `json:"last_activity_iso,omitempty"`
 }
 
 type apiExec struct {
@@ -71,6 +78,8 @@ type apiList struct {
 	Connected bool         `json:"connected"`
 	Message   string       `json:"message"`
 	Truncated string       `json:"truncated,omitempty"`
+	Count     int          `json:"count"`
+	CountText string       `json:"count_text"`
 	Sessions  []apiSession `json:"sessions"`
 }
 
@@ -87,7 +96,8 @@ func toAPISession(r sessionRow) apiSession {
 	if g.Held {
 		g.State = r.Guard.State
 	}
-	return apiSession{Harness: r.Harness, ID: r.ID, Title: r.Title, Root: r.Root, LifecycleRoot: r.LifecycleRoot, Archived: r.Archived, State: r.State, Guard: g, Current: r.Current, LastActivity: r.LastActivity, Href: r.Href}
+	return apiSession{Harness: r.Harness, ID: r.ID, Title: r.Title, Root: r.Root, LifecycleRoot: r.LifecycleRoot, Archived: r.Archived, State: r.State, Guard: g, Current: r.Current, LastActivity: r.LastActivity, Href: r.Href,
+		HarnessName: r.HarnessName, StateLabel: r.StateLabel, StateTone: r.StateTone, GuardText: r.GuardText, PathShort: r.PathShort, LastISO: r.LastISO}
 }
 
 // listRows applies the list cap and the row normalization once, for the HTML and
@@ -100,7 +110,29 @@ func listRows(rows []Session) (out []sessionRow, truncated string) {
 	for _, s := range rows {
 		out = append(out, toRow(s))
 	}
+	disambiguatePaths(out)
 	return out, truncated
+}
+
+// disambiguatePaths gives a stable 6-hex suffix to the rows of one list whose shortened paths would render
+// identically although their full paths differ (A1.4 item 1). Rows with the very same full path are the same
+// place and get nothing; a path shown whole is never ambiguous.
+func disambiguatePaths(rows []sessionRow) {
+	full := map[string]map[string]bool{} // shortened form -> the distinct full paths that share it
+	for _, r := range rows {
+		if r.PathShort == r.Root {
+			continue
+		}
+		if full[r.PathShort] == nil {
+			full[r.PathShort] = map[string]bool{}
+		}
+		full[r.PathShort][r.Root] = true
+	}
+	for i := range rows {
+		if len(full[rows[i].PathShort]) > 1 && rows[i].PathShort != rows[i].Root {
+			rows[i].PathShort += " (" + pathSuffix(rows[i].Root) + ")"
+		}
+	}
 }
 
 // execRows applies the detail cap and normalization once, for the HTML and the JSON.
@@ -130,6 +162,7 @@ func (d *dash) buildList(ctx context.Context) ([]byte, error) {
 	}
 	m.Connected = true
 	m.Message = fmt.Sprintf("%d sessions.", len(rows))
+	m.Count, m.CountText = len(rows), sessionsCountText(len(rows))
 	shown, trunc := listRows(rows)
 	m.Truncated = trunc
 	for _, r := range shown {

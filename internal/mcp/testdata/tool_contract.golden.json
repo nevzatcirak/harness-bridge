@@ -1,0 +1,3452 @@
+[
+  {
+    "description": "Archive one session in the Bridge's own overlay: it is hidden from list_catalog (unless include_archived) and the dashboard and refuses send_prompt (FORBIDDEN, session_archived). It makes no native write and never deletes anything. Refused unless the session is idle, has no pending permission and no running child, under a lifecycle root with the archive mode. Reversible with unarchive_session. Capped by archive_per_hour. Unavailable under BRIDGE_READ_ONLY.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "archive_session",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "archived_at": {
+              "type": "string"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "interrupt": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "archived",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Interrupt the Bridge execution that holds the session's guard, wait until it settled, then archive the session in the overlay. A failed or uncertain interrupt leaves the session un-archived. Same cap and audit as archive_session. Unavailable under BRIDGE_READ_ONLY.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "close_session",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "archived_at": {
+              "type": "string"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "interrupt": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "archived",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Create a new OpenCode session in a directory under a configured lifecycle root (the root itself unless max_depth allows a subdirectory). It never creates directories, never accepts a prompt, permission, agent or model, makes exactly one native write per accepted request and never retries it: an unknown outcome is UNKNOWN_OUTCOME and the session must be found through the catalog. Unavailable under BRIDGE_READ_ONLY.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        },
+        "root": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "subdirectory": {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "idempotency_key"
+      ],
+      "type": "object"
+    },
+    "name": "create_session",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "created": {
+              "type": "boolean"
+            },
+            "directory": {
+              "type": "string"
+            },
+            "replay": {
+              "type": "boolean"
+            },
+            "root": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "root",
+            "directory",
+            "title",
+            "created"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Find authorized sessions by repository, workspace or parent; sorted by session ID; limit 1–200, offset 0–1000",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "parent_session_id": {
+          "type": "string"
+        },
+        "repository_id": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "find_sessions",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "next_offset": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "sessions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "type": "string"
+                  },
+                  "guard_reason": {
+                    "type": "string"
+                  },
+                  "harness": {
+                    "type": "string"
+                  },
+                  "harness_instance_id": {
+                    "type": "string"
+                  },
+                  "native_id": {
+                    "type": "string"
+                  },
+                  "native_project_id": {
+                    "type": "string"
+                  },
+                  "native_state": {
+                    "type": "string"
+                  },
+                  "native_state_inferred_from_absence": {
+                    "type": "boolean"
+                  },
+                  "native_unfinished_message": {
+                    "type": "boolean"
+                  },
+                  "native_workspace_id": {
+                    "type": "string"
+                  },
+                  "parent_session_id": {
+                    "type": "string"
+                  },
+                  "pending_permission_count": {
+                    "type": [
+                      "null",
+                      "integer"
+                    ]
+                  },
+                  "repository": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "common_directory": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "repository_id",
+                      "common_directory"
+                    ],
+                    "type": [
+                      "null",
+                      "object"
+                    ]
+                  },
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "branch": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "type": "string"
+                      },
+                      "git_directory": {
+                        "type": "string"
+                      },
+                      "head": {
+                        "type": "string"
+                      },
+                      "linked_worktree": {
+                        "type": "boolean"
+                      },
+                      "repository_id": {
+                        "type": "string"
+                      },
+                      "root": {
+                        "type": "string"
+                      },
+                      "workspace_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "workspace_id",
+                      "repository_id",
+                      "root",
+                      "git_directory"
+                    ],
+                    "type": [
+                      "null",
+                      "object"
+                    ]
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "native_id",
+                  "harness",
+                  "directory",
+                  "title",
+                  "state"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "sessions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Read correlated execution results and verification evidence; prefer this over copying whole session transcripts",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_execution_result",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "additionalProperties": false,
+              "properties": {
+                "child_unconfirmed": {
+                  "type": "boolean"
+                },
+                "cost_usd_reported": {
+                  "type": "number"
+                },
+                "ended_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "error": {
+                  "type": "string"
+                },
+                "execution_id": {
+                  "type": "string"
+                },
+                "exit": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "class": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "class"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "guard_released_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "liveness": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cause_hint": {
+                      "type": "string"
+                    },
+                    "cause_source": {
+                      "type": "string"
+                    },
+                    "degradation_reason": {
+                      "type": "string"
+                    },
+                    "degraded": {
+                      "type": "boolean"
+                    },
+                    "explanation": {
+                      "type": "string"
+                    },
+                    "last_native_progress_at": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "native_status": {
+                      "type": "string"
+                    },
+                    "observed_at": {
+                      "type": "string"
+                    },
+                    "retry_attempt": {
+                      "type": [
+                        "null",
+                        "integer"
+                      ]
+                    },
+                    "retry_next_at": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "retry_overdue": {
+                      "type": "boolean"
+                    },
+                    "stall_reason": {
+                      "type": "string"
+                    },
+                    "stall_suspected": {
+                      "type": "boolean"
+                    },
+                    "thresholds": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "no_progress_s": {
+                          "type": "integer"
+                        },
+                        "tool_long_s": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "no_progress_s",
+                        "tool_long_s"
+                      ],
+                      "type": [
+                        "null",
+                        "object"
+                      ]
+                    },
+                    "tool": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "running_since": {
+                          "type": "string"
+                        },
+                        "tool_name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "tool_name",
+                        "running_since"
+                      ],
+                      "type": [
+                        "null",
+                        "object"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "native_status",
+                    "stall_suspected",
+                    "observed_at"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "local_failure": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "recorded_at": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "recorded_at"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "monitor_ended_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "pending_permission": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attribution": {
+                      "type": "string"
+                    },
+                    "call_id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "pattern_count": {
+                      "type": "integer"
+                    },
+                    "permission_id": {
+                      "type": "string"
+                    },
+                    "scope_digest": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "permission_id",
+                    "call_id",
+                    "message_id",
+                    "tool",
+                    "kind",
+                    "pattern_count",
+                    "scope_digest",
+                    "attribution"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "pending_permission_count": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "permission_denials": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "input": {
+                        "type": "string"
+                      },
+                      "tool_name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "tool_name"
+                    ],
+                    "type": "object"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "permission_rejection": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "basis": {
+                      "type": "string"
+                    },
+                    "observed_at": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    },
+                    "tool_call_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "observed_at",
+                    "tool",
+                    "tool_call_id",
+                    "basis"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "reconciled_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "retry_attempt_since": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "started_at": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "unavailable_since": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "unresolved": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "last_checked_at": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "since": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "execution_id",
+                "session_id",
+                "message_id",
+                "state",
+                "started_at",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "messages": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "info": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "error": true,
+                      "finish": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "parentID": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "root": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "cwd",
+                          "root"
+                        ],
+                        "type": "object"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "summary": true,
+                      "time": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "completed": {
+                            "type": "integer"
+                          },
+                          "created": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "created"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "role",
+                      "sessionID",
+                      "time"
+                    ],
+                    "type": "object"
+                  },
+                  "parts": {
+                    "items": true,
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  }
+                },
+                "required": [
+                  "info",
+                  "parts"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "execution",
+            "messages"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "get_execution_status",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_execution_status",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child_unconfirmed": {
+              "type": "boolean"
+            },
+            "cost_usd_reported": {
+              "type": "number"
+            },
+            "ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "error": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "exit": {
+              "additionalProperties": false,
+              "properties": {
+                "class": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "class"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "guard_released_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "liveness": {
+              "additionalProperties": false,
+              "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
+                "explanation": {
+                  "type": "string"
+                },
+                "last_native_progress_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "native_status": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "retry_attempt": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "retry_next_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
+                },
+                "stall_reason": {
+                  "type": "string"
+                },
+                "stall_suspected": {
+                  "type": "boolean"
+                },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                }
+              },
+              "required": [
+                "native_status",
+                "stall_suspected",
+                "observed_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "local_failure": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "recorded_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "recorded_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "message_id": {
+              "type": "string"
+            },
+            "monitor_ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "pending_permission": {
+              "additionalProperties": false,
+              "properties": {
+                "attribution": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "pattern_count": {
+                  "type": "integer"
+                },
+                "permission_id": {
+                  "type": "string"
+                },
+                "scope_digest": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "permission_id",
+                "call_id",
+                "message_id",
+                "tool",
+                "kind",
+                "pattern_count",
+                "scope_digest",
+                "attribution"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "pending_permission_count": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "permission_denials": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "type": "string"
+                  },
+                  "tool_name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool_name"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "permission_rejection": {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "tool_call_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "observed_at",
+                "tool",
+                "tool_call_id",
+                "basis"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "unresolved": {
+              "additionalProperties": false,
+              "properties": {
+                "last_checked_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "since"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution_id",
+            "session_id",
+            "message_id",
+            "state",
+            "started_at",
+            "updated_at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Inspect native agents and API declarations for an authorized session. Prefer native subagents for large exploration/review when permitted; no Claude Chat spawning API is assumed.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_harness_capabilities",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bridge_session_creation": {
+              "type": "boolean"
+            },
+            "child_session_inspection": {
+              "type": "boolean"
+            },
+            "claudecode": {
+              "additionalProperties": false,
+              "properties": {
+                "active_terminal_control": {
+                  "type": "boolean"
+                },
+                "capabilities": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "harness": {
+                  "type": "string"
+                },
+                "history_source": {
+                  "type": "string"
+                },
+                "interrupt": {
+                  "type": "string"
+                },
+                "native_lock": {
+                  "type": "boolean"
+                },
+                "permission_relay": {
+                  "type": "boolean"
+                },
+                "read_only_tools": {
+                  "type": "boolean"
+                },
+                "resume_exact_id": {
+                  "type": "boolean"
+                },
+                "session_creation": {
+                  "type": "boolean"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "harness",
+                "capabilities",
+                "resume_exact_id",
+                "native_lock",
+                "history_source",
+                "permission_relay",
+                "interrupt",
+                "active_terminal_control",
+                "session_creation",
+                "read_only_tools"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "guidance": {
+              "type": "string"
+            },
+            "harness_instance_id": {
+              "type": "string"
+            },
+            "native_delegation": {
+              "type": "string"
+            },
+            "native_session_creation": {
+              "type": "boolean"
+            },
+            "primary_agents": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "subagents": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "harness_instance_id",
+            "primary_agents",
+            "subagents",
+            "native_delegation",
+            "child_session_inspection",
+            "native_session_creation",
+            "bridge_session_creation",
+            "evidence",
+            "guidance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Inspect a visible repository identity; identity never grants access",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_repository",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "common_directory": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "repository_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository_id",
+            "common_directory"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Inspect an explicit authorized session and its repository/workspace context",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "get_session",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "guard_reason": {
+              "type": "string"
+            },
+            "harness": {
+              "type": "string"
+            },
+            "harness_instance_id": {
+              "type": "string"
+            },
+            "native_id": {
+              "type": "string"
+            },
+            "native_project_id": {
+              "type": "string"
+            },
+            "native_state": {
+              "type": "string"
+            },
+            "native_state_inferred_from_absence": {
+              "type": "boolean"
+            },
+            "native_unfinished_message": {
+              "type": "boolean"
+            },
+            "native_workspace_id": {
+              "type": "string"
+            },
+            "parent_session_id": {
+              "type": "string"
+            },
+            "pending_permission_count": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "repository": {
+              "additionalProperties": false,
+              "properties": {
+                "common_directory": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "repository_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "repository_id",
+                "common_directory"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "workspace": {
+              "additionalProperties": false,
+              "properties": {
+                "branch": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "git_directory": {
+                  "type": "string"
+                },
+                "head": {
+                  "type": "string"
+                },
+                "linked_worktree": {
+                  "type": "boolean"
+                },
+                "repository_id": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspace_id",
+                "repository_id",
+                "root",
+                "git_directory"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            }
+          },
+          "required": [
+            "session_id",
+            "native_id",
+            "harness",
+            "directory",
+            "title",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "interrupt_execution",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "type": "object"
+    },
+    "name": "interrupt_execution",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child_unconfirmed": {
+              "type": "boolean"
+            },
+            "cost_usd_reported": {
+              "type": "number"
+            },
+            "ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "error": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "exit": {
+              "additionalProperties": false,
+              "properties": {
+                "class": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "class"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "guard_released_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "liveness": {
+              "additionalProperties": false,
+              "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
+                "explanation": {
+                  "type": "string"
+                },
+                "last_native_progress_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "native_status": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "retry_attempt": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "retry_next_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
+                },
+                "stall_reason": {
+                  "type": "string"
+                },
+                "stall_suspected": {
+                  "type": "boolean"
+                },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                }
+              },
+              "required": [
+                "native_status",
+                "stall_suspected",
+                "observed_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "local_failure": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "recorded_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "recorded_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "message_id": {
+              "type": "string"
+            },
+            "monitor_ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "pending_permission": {
+              "additionalProperties": false,
+              "properties": {
+                "attribution": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "pattern_count": {
+                  "type": "integer"
+                },
+                "permission_id": {
+                  "type": "string"
+                },
+                "scope_digest": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "permission_id",
+                "call_id",
+                "message_id",
+                "tool",
+                "kind",
+                "pattern_count",
+                "scope_digest",
+                "attribution"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "pending_permission_count": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "permission_denials": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "type": "string"
+                  },
+                  "tool_name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool_name"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "permission_rejection": {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "tool_call_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "observed_at",
+                "tool",
+                "tool_call_id",
+                "basis"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "unresolved": {
+              "additionalProperties": false,
+              "properties": {
+                "last_checked_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "since"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution_id",
+            "session_id",
+            "message_id",
+            "state",
+            "started_at",
+            "updated_at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Read-only catalog of the sessions the ACL authorizes, with an instance-qualified session_ref, optional exact-match filters (root, state, updated_since, created_by_bridge, harness_name), sorted by session ID; limit 1-200, offset 0-1000. Aggregates describe the returned page only. Overlay-archived sessions are hidden unless include_archived is true. Claude Code sessions are omitted until their adapter is wired.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "created_by_bridge": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "harness_name": {
+          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+          "type": "string"
+        },
+        "include_archived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "root": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "idle",
+            "running",
+            "waiting_for_permission",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "updated_since": {
+          "maxLength": 40,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_catalog",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "aggregates": {
+              "additionalProperties": false,
+              "properties": {
+                "by_root": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
+                },
+                "by_state": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer"
+                },
+                "window": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "returned": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "offset",
+                    "limit",
+                    "returned"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "scope",
+                "window",
+                "total",
+                "by_state",
+                "by_root"
+              ],
+              "type": "object"
+            },
+            "harnesses": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "next_offset": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "sessions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "archived": {
+                    "type": "boolean"
+                  },
+                  "created_by_bridge": {
+                    "type": "boolean"
+                  },
+                  "directory": {
+                    "type": "string"
+                  },
+                  "harness_name": {
+                    "type": "string"
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "session_ref": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "harness": {
+                        "type": "string"
+                      },
+                      "session_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "harness",
+                      "session_id"
+                    ],
+                    "type": "object"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "updated_at": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_ref",
+                  "harness_name",
+                  "directory",
+                  "title",
+                  "state",
+                  "created_by_bridge",
+                  "archived"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "harnesses",
+            "sessions",
+            "aggregates"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "List repositories visible through authorized existing sessions (maximum 1000 ACL entries)",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_repositories",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "repositories": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "common_directory": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "common_directory"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "repositories"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "List candidate sessions from the static ACL; select by repository/workspace, parent and task relevance before reading history",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_sessions",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sessions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "type": "string"
+                  },
+                  "guard_reason": {
+                    "type": "string"
+                  },
+                  "harness": {
+                    "type": "string"
+                  },
+                  "harness_instance_id": {
+                    "type": "string"
+                  },
+                  "native_id": {
+                    "type": "string"
+                  },
+                  "native_project_id": {
+                    "type": "string"
+                  },
+                  "native_state": {
+                    "type": "string"
+                  },
+                  "native_state_inferred_from_absence": {
+                    "type": "boolean"
+                  },
+                  "native_unfinished_message": {
+                    "type": "boolean"
+                  },
+                  "native_workspace_id": {
+                    "type": "string"
+                  },
+                  "parent_session_id": {
+                    "type": "string"
+                  },
+                  "pending_permission_count": {
+                    "type": [
+                      "null",
+                      "integer"
+                    ]
+                  },
+                  "repository": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "common_directory": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "repository_id",
+                      "common_directory"
+                    ],
+                    "type": [
+                      "null",
+                      "object"
+                    ]
+                  },
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "branch": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "type": "string"
+                      },
+                      "git_directory": {
+                        "type": "string"
+                      },
+                      "head": {
+                        "type": "string"
+                      },
+                      "linked_worktree": {
+                        "type": "boolean"
+                      },
+                      "repository_id": {
+                        "type": "string"
+                      },
+                      "root": {
+                        "type": "string"
+                      },
+                      "workspace_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "workspace_id",
+                      "repository_id",
+                      "root",
+                      "git_directory"
+                    ],
+                    "type": [
+                      "null",
+                      "object"
+                    ]
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "native_id",
+                  "harness",
+                  "directory",
+                  "title",
+                  "state"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            }
+          },
+          "required": [
+            "sessions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Prefer limit 20–50 (maximum 200). Inspect timestamps: pages preserve native order, not a guaranteed latest window. Pass opaque next_cursor as before for older continuation on installed OpenCode. Fetch more only as needed; omit pagination for legacy output.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "read_session_history",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "first_recorded_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "history_complete": {
+              "type": [
+                "null",
+                "boolean"
+              ]
+            },
+            "history_truncated": {
+              "type": [
+                "null",
+                "boolean"
+              ]
+            },
+            "messages": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "info": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "error": true,
+                      "finish": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "parentID": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "root": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "cwd",
+                          "root"
+                        ],
+                        "type": "object"
+                      },
+                      "role": {
+                        "type": "string"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "summary": true,
+                      "time": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "completed": {
+                            "type": "integer"
+                          },
+                          "created": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "created"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "role",
+                      "sessionID",
+                      "time"
+                    ],
+                    "type": "object"
+                  },
+                  "parts": {
+                    "items": true,
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  }
+                },
+                "required": [
+                  "info",
+                  "parts"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "next_cursor": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "messages"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Answer one pending native permission request of an explicit waiting execution with reject. The decision is made by the Chat model, or by a human only if claude.ai's per-call approval is configured for this tool: the server cannot verify which (decided_by=chat_client, human_verified=false). reject only in this mode (allow_once is refused, never always); sends no message; makes one native write after an audit record and never retries it: an unknown outcome is UNKNOWN_OUTCOME with an attempt_id, and one explicit superseding reject may quote it in supersedes. Configure per-call approval for this tool. Unavailable under BRIDGE_READ_ONLY.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "reject",
+            "allow_once"
+          ],
+          "type": "string"
+        },
+        "execution_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "permission_id": {
+          "pattern": "^per[A-Za-z0-9_-]{1,125}$",
+          "type": "string"
+        },
+        "supersedes": {
+          "pattern": "^[A-Za-z0-9_-]{22}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "permission_id",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "name": "reply_permission",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "decided_by": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "human_verified": {
+              "type": "boolean"
+            },
+            "outcome": {
+              "type": "string"
+            },
+            "permission_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution_id",
+            "permission_id",
+            "decision",
+            "outcome",
+            "attempt_id",
+            "attempt",
+            "decided_by",
+            "human_verified"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Submit once to the explicitly selected existing session ID; discovery does not grant write access",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        },
+        "prompt": {
+          "maxLength": 32768,
+          "minLength": 1,
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "prompt",
+        "idempotency_key"
+      ],
+      "type": "object"
+    },
+    "name": "send_prompt",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child_unconfirmed": {
+              "type": "boolean"
+            },
+            "cost_usd_reported": {
+              "type": "number"
+            },
+            "ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "error": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "exit": {
+              "additionalProperties": false,
+              "properties": {
+                "class": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "class"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "guard_released_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "liveness": {
+              "additionalProperties": false,
+              "properties": {
+                "cause_hint": {
+                  "type": "string"
+                },
+                "cause_source": {
+                  "type": "string"
+                },
+                "degradation_reason": {
+                  "type": "string"
+                },
+                "degraded": {
+                  "type": "boolean"
+                },
+                "explanation": {
+                  "type": "string"
+                },
+                "last_native_progress_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "native_status": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "retry_attempt": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "retry_next_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "retry_overdue": {
+                  "type": "boolean"
+                },
+                "stall_reason": {
+                  "type": "string"
+                },
+                "stall_suspected": {
+                  "type": "boolean"
+                },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
+                "tool": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "running_since": {
+                      "type": "string"
+                    },
+                    "tool_name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tool_name",
+                    "running_since"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                }
+              },
+              "required": [
+                "native_status",
+                "stall_suspected",
+                "observed_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "local_failure": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "recorded_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "recorded_at"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "message_id": {
+              "type": "string"
+            },
+            "monitor_ended_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "pending_permission": {
+              "additionalProperties": false,
+              "properties": {
+                "attribution": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "pattern_count": {
+                  "type": "integer"
+                },
+                "permission_id": {
+                  "type": "string"
+                },
+                "scope_digest": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "permission_id",
+                "call_id",
+                "message_id",
+                "tool",
+                "kind",
+                "pattern_count",
+                "scope_digest",
+                "attribution"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "pending_permission_count": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            },
+            "permission_denials": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "type": "string"
+                  },
+                  "tool_name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool_name"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "permission_rejection": {
+              "additionalProperties": false,
+              "properties": {
+                "basis": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "tool_call_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "observed_at",
+                "tool",
+                "tool_call_id",
+                "basis"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "reconciled_at": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "retry_attempt_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
+            },
+            "unresolved": {
+              "additionalProperties": false,
+              "properties": {
+                "last_checked_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "since"
+              ],
+              "type": [
+                "null",
+                "object"
+              ]
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution_id",
+            "session_id",
+            "message_id",
+            "state",
+            "started_at",
+            "updated_at"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Restore the visibility of an overlay-archived session (it restores nothing else). Same preconditions, cap and audit as archive_session. Unavailable under BRIDGE_READ_ONLY.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^opencode:ses[A-Za-z0-9_-]+$"
+            },
+            {
+              "pattern": "^claudecode:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ],
+          "maxLength": 265,
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "unarchive_session",
+    "outputSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "archived_at": {
+              "type": "string"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "interrupt": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id",
+            "archived",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "type": "integer"
+            },
+            "attempt_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "execution_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  }
+]

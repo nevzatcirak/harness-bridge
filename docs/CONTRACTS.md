@@ -1,5 +1,7 @@
 # MCP contracts: proposed v0.1 and implemented H2 subset
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 Common rules: tool input objects have `additionalProperties:false`; all IDs are strings; session_id must use `opencode:<native-id>` in final production interface; maximum prompt length 32 KiB; page size max 100; structured tool errors must contain `{code,message,retryable,execution_id?}`; authenticated principal is taken from validated transport identity, never tool arguments.
 
 ## Input JSON Schema
@@ -140,14 +142,14 @@ and oversized POST 413. The principal is configured with its immutable ACL,
 never supplied by request headers. This is fixed-header auth, not OAuth.
 
 Token lifetime (ADR-019 option (2), accepted 2026-11-06):
-- `BRIDGE_TOKEN_EXPIRES` (RFC3339) must be in the future and at most
-  `BRIDGE_TOKEN_MAX_LIFETIME` from startup.
-- `BRIDGE_TOKEN_MAX_LIFETIME` is a Go duration (for example `24h`, `168h`).
+- `CIRAK_TOKEN_EXPIRES` (RFC3339) must be in the future and at most
+  `CIRAK_TOKEN_MAX_LIFETIME` from startup.
+- `CIRAK_TOKEN_MAX_LIFETIME` is a Go duration (for example `24h`, `168h`).
   Unset or empty means `24h`, the previous fixed cap, with unchanged behavior
   and error text. The compiled-in ceiling is `720h`.
 - A value that is unparsable, `<= 0` or above `720h` fails startup in every mode,
   including local mode.
-- `BRIDGE_TOKEN` must be at least 32 characters up to `24h`, and at least 43
+- `CIRAK_TOKEN` must be at least 32 characters up to `24h`, and at least 43
   characters (about 256 bits as base64url) above `24h`.
 - Remote mode logs one startup line, `remote token lifetime`, with the
   principal, `token_expires` and `token_max_lifetime`. It never logs the token or
@@ -157,18 +159,113 @@ Token lifetime (ADR-019 option (2), accepted 2026-11-06):
   Bridge restart.
 - Startup error order (fixed 2026-11-08, #102 nit 1): the token and the ingress
   are checked before any other secret is read or a native client is built. The
-  first error reported is, in this order: `BRIDGE_TOKEN` / `BRIDGE_TOKEN_FILE`
+  first error reported is, in this order: `CIRAK_TOKEN` / `CIRAK_TOKEN_FILE`
   access; a token shorter than 32 characters, a missing token included
-  (`BRIDGE_TOKEN must be at least 32 characters`, as before ADR-019); the
-  ingress settings (`BRIDGE_READ_ONLY`, `BRIDGE_TOKEN_MAX_LIFETIME`, remote
+  (`CIRAK_TOKEN must be at least 32 characters`, as before ADR-019); the
+  ingress settings (`CIRAK_READ_ONLY`, `CIRAK_TOKEN_MAX_LIFETIME`, remote
   mode); the 43-character rule above `24h`; then `OPENCODE_SERVER_PASSWORD`
   and the remaining settings.
 - The expiry bound is inclusive and read against one clock sample: an expiry
-  exactly `BRIDGE_TOKEN_MAX_LIFETIME` after startup is accepted, a later one is
+  exactly `CIRAK_TOKEN_MAX_LIFETIME` after startup is accepted, a later one is
   rejected, and an expiry at or before startup is rejected.
 
+Remote-mode trigger and the local deadline (ADR-027 S1, amends the ADR-019 trigger sentence only):
+- Remote mode is chosen by a public origin (`CIRAK_PUBLIC_ORIGIN`), a principal
+  (`CIRAK_PRINCIPAL`) or a TLS certificate or key (`CIRAK_TLS_CERT`, `CIRAK_TLS_KEY`),
+  each alone, and then needs all of the checks above. `CIRAK_TOKEN_EXPIRES` alone no longer
+  implies remote mode. A certificate or key alone, or a partial pair, is still refused.
+- `CIRAK_TOKEN_EXPIRES` alone stays local: it must be RFC3339 (otherwise startup
+  fails), it is a rotation deadline that is recorded and never enforced (local mode has
+  no runtime expiry, ADR-019), and an already passed value logs one warning
+  (`CIRAK_TOKEN_EXPIRES has passed ...`) that contains no value. It is not bounded by
+  `CIRAK_TOKEN_MAX_LIFETIME`; that bound applies to remote mode.
+- The network boundary does not move: a non-loopback listen address without remote mode is
+  still a startup refusal, with or without `CIRAK_TOKEN_EXPIRES`.
 
-Optional `BRIDGE_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
+## Configuration file (ADR-027 S1)
+
+`cirak` reads one optional JSON file (`internal/config`, standard library only). With no file the
+daemon reads the environment exactly as before; every start logs `config: using <path>` or
+`config: no config file (environment only)`, never a value.
+- **Precedence, per setting:** flag (`--config`, `--listen`, `--read-only`, `--token-file`), then the
+  environment (`CIRAK_*`, plus the legacy names of the ADR-026 window), then the file, then the default.
+- **Location:** `--config`, else `CIRAK_CONFIG` (it must exist), else the first existing of
+  `/etc/cirak/config.json` and `$XDG_CONFIG_HOME/cirak/config.json` (`~/.config/cirak/config.json`).
+  A file in the current directory is never read.
+- **Strict file:** at most 1 MiB, one JSON object, no unknown key, no duplicate key, no `null`, every
+  value of its key's type, paths absolute and clean. `token.value` and `harness.opencode.password` do
+  not exist: a secret is only a file (`token.file`, `harness.opencode.password_file`, read by the
+  unchanged `readSecret` rule) or a systemd credential name (`token.credential`,
+  `harness.opencode.password_credential`, resolved only under `$CREDENTIALS_DIRECTORY`). The file, the
+  credential and an inline `CIRAK_TOKEN` are mutually exclusive.
+- **The file itself:** absolute canonical path, no symlink in any component, a regular file owned by the
+  process user, mode exactly `0600`, parent directory not group or world writable; refused otherwise.
+- **Every key except `harness.claude.lang` refuses a differing environment/file pair** at startup,
+  naming the key and the variable, never a value; an equal pair is accepted with one warning. A file `""`
+  or `[]` is an explicit unset, so a differing environment value is a refusal too. Lists replace, never
+  merge. `harness.claude.lang` is display-only and keeps environment-wins.
+- **ACL IDs** are the bare native IDs (`ses_...`, `claudecode:<uuid>`); an `opencode:` prefix is refused.
+- **`cirak config check [--config path] [flags] [--print-effective]`:** static, no network, no listener,
+  nothing written; it runs the daemon's own validators on the effective configuration. Exit `0` clean,
+  `1` warnings or unverified items (for example a token that exists only in a unit's `EnvironmentFile=`
+  or as a systemd credential, which a check outside the unit cannot see), `2` refused. Output names keys
+  and files, never a value; a secret is `set` or `unset`. In `--print-effective` a URL-valued key
+  (`harness.opencode.url`, `server.public_origin`) is shown as scheme and host only, userinfo as `***@`, a path,
+  query or fragment not shown, and a value that is not a plain URL not echoed; any value with a control or
+  unprintable character is shown quoted, so it cannot forge a line.
+- Not in the config slice: `doctor`, `config import`, `--from-unit`, `--env-file`, `--as`, the service
+  unit (ADR-027 S3 and S4).
+
+### `cirak init` (ADR-027 S2)
+
+`cirak init [--yes] [--listen addr] [--root path]... [--session id]... [--lifecycle-root path]...
+[--opencode-url url] [--service-user name] [--config path] [--token-file path] [--expires RFC3339] [--force]`
+sets up **local mode** and installs nothing: no service unit or plist, no `doctor`, no remote or TLS path
+(`--remote`, `--tls-cert`, `--tls-key`, `--install-service` are refused with a usage error).
+- **Interactive** needs a terminal; **`--yes`** never prompts and needs `--root`, `--session` and `--token-file`.
+- **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
+  as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
+  goes only to a `0600` `opencode-password` file that the config references, never to the config, argv or a log.
+  An unreachable server is reported, not fatal. `--opencode-url` is validated first with the daemon's own base-URL
+  rule (loopback http or https; no credentials, path, query or fragment): a bad one is a usage error before
+  anything is probed, printed, written or staged, and it is shown only in the redacted form (`http://***@host`).
+- **Roots** (workspace and lifecycle) must be canonical, owned by root or the service user, readable and
+  traversable by the service user (mode bits; an ACL is not evaluated, and the optional
+  `sudo -u <user> test -r/-x` probe runs only after the operator agrees, never with `--yes`) and have a readable
+  `.git`. A failing root stops init **before anything is written** and prints the exact fix
+  (`chown root:<group> <root> && chmod 0710 <root> && setfacl -m u:<user>:rwx <root>`). **init never applies
+  chown, chmod or setfacl; it only prints them.** Every printed command is for the operator to run as root and
+  is printed without a confirmation prompt (ADR-027 section 2 item 2 asks for one; that wording is the
+  maintainer's to amend). Every path, user and group in a printed command is single-quoted for a POSIX shell, and a
+  root, config, token, lifecycle or password path with a newline, carriage return or NUL is refused up front
+  (usage error, nothing written or staged).
+- **Token:** generated (64 base64url characters from `crypto/rand`) only when `--token-file` names a **new**
+  file, created `0600` with `O_EXCL|O_NOFOLLOW`; an existing file is validated (the `readSecret` rule, at least
+  43 characters) and referenced, never regenerated or shown. The deadline is `+7 days` (`--expires` must stay
+  within `168h`) and `limits.token_max_lifetime: "168h"` is written with it; local mode records the deadline and
+  enforces no expiry. The token is shown **once in the whole run, only on a terminal**: standard input and
+  standard output must both be terminals (so `init | tee log` and `init > log` never put it in a file), and never
+  with `--yes`, never in the config, a log or an error; otherwise its file path is printed.
+- **Ownership:** run as the service user (or, with no `--service-user`, as yourself). When the invoking uid is
+  not the service uid, init writes **nothing at the targets**: it stages the files in a private `0700`
+  directory and prints the `install -d` / `install -o <user> -g <group> -m 0600 <src> <dst>` commands. A service
+  user's system directory, and its writer lock directory (`0700`, owned by it), must already exist (otherwise
+  `install -d` is printed and init stops before writing). In the staged flow a symlink anywhere in the existing
+  part of a target path is refused before any command is printed, and the connector text names the staged token.
+- **Existing files:** an existing config or lifecycle file needs `--force`; a `.bak-<UTC stamp>` copy (`0600`) is
+  made and the new bytes replace the file through a fresh `O_EXCL` temporary file and a rename; a symlinked
+  target is refused. A failing step removes the files this run created and restores a file it had replaced (the
+  backup stays).
+- The written config is checked with the S1 `config check`, run with an empty environment (it checks the file
+  init wrote, not the shell's variables), and must come out **clean** (any warning or refusal makes init fail;
+  **A failed check keeps the files init wrote**, reported above it, so fix the cause and run init again with
+  `--force`, or run `config check` yourself); init then prints the connector values (URL, `Authorization: Bearer`) and the next
+  steps.
+- The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
+  surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
+
+
+Optional `CIRAK_READ_ONLY=1` preserves the seven tools but returns FORBIDDEN for
 send_prompt and interrupt_execution before native mutation. Default/0 preserves
 existing write behavior; invalid values fail startup. It is required for the
 separate staged private listener while the local Bridge remains a possible
@@ -339,7 +436,7 @@ guard, never triggers Abort, a resubmission or a new idempotency key, and
 | `liveness.tool` | ADR-017 A2 S2: `{tool_name, running_since}` of the oldest live running tool of the newest correlated assistant. Present only for a `busy` execution or a wedged `retry` with a live running part; absent for a stale part (an `absent` status, or a later completed/error part for the same call). `tool_name` is untrusted display data, at most 64 bytes of `[A-Za-z0-9._-]` or `other`; `running_since` is the native `state.time.start` (OpenCode) or the Bridge receive time of the `tool_use` (Claude), never after `observed_at` |
 | `liveness.explanation` | `TOOL_RUNNING_LONG` only: the `tool` object has run at or after `tool_long_s` (default 600 s) on a `busy` execution or a wedged retry. It is an explanation, not a `stall_reason`: it never sets `stall_suspected`, never suppresses A1's `NO_PROGRESS`, and is suppressed with the stall reason by a pending permission |
 | `liveness.progress_source` | ADR-017 A2 S4: `native` (OpenCode) or `bridge` (Claude receive clock) |
-| `liveness.thresholds` | ADR-017 A2 S3: `{no_progress_s, tool_long_s}`, the operator configuration actually applied. `no_progress_s` is 30–900 s (default 120); `tool_long_s` is 60–3600 s (default 600) and is capped at the Claude `RUN_MAX` when that adapter is on (D32 Q12). The values come from `BRIDGE_LIVENESS_NO_PROGRESS_S` / `BRIDGE_LIVENESS_TOOL_LONG_S` (ADR-026 S1 renames them to `CIRAK_*`); an absent variable uses the default and a non-integer, negative or out-of-range value is a startup error naming the variable. Not a per-execution input |
+| `liveness.thresholds` | ADR-017 A2 S3: `{no_progress_s, tool_long_s}`, the operator configuration actually applied. `no_progress_s` is 30–900 s (default 120); `tool_long_s` is 60–3600 s (default 600) and is capped at the Claude `RUN_MAX` when that adapter is on (D32 Q12). The values come from `CIRAK_LIVENESS_NO_PROGRESS_S` / `CIRAK_LIVENESS_TOOL_LONG_S` or the ADR-027 `liveness.no_progress_s` / `liveness.tool_long_s` file keys (the same effective value under the every-key env/file rule; there is no legacy twin). An absent value uses the default and a non-integer, negative or out-of-range value is a startup error naming the variable; `config check` refuses it too. Not a per-execution input |
 | `liveness.observed_at` | Bridge time of the probe that produced the object |
 
 ADR-017 A2 also adds `retry_attempt_since` to the execution record (not inside the
@@ -360,6 +457,9 @@ with a running tool or not; `degradation_reason` accompanies it. The bounded
 fallback lowercases at most 4 KiB of the retry message and maps only the closed
 pattern set (429/rate limit, 5xx/overloaded, DNS/TLS/connection, 401/403,
 timeout); a text matching no pattern stays `unknown` with `cause_source: none`.
+Pattern groups resolve in the order `rate_limit` > `auth` > `server` > `network`
+(the first matching group wins); a textual `timeout` maps to `network`, while a
+structured HTTP 408 still maps to `server` (A2.5).
 It is report-only and adds no native read or write. The accepted A2 amendment
 adds `HARNESS_UNREACHABLE` as the only new `stall_suspected`-true `stall_reason`;
 S3 emits it only after the fixed 120 s native-read failure window, with
@@ -463,7 +563,7 @@ tool names and their schemas are unchanged, there is no TCP or HTTP listener for
 it, and the remote connector cannot reach it. The Chat principal can never
 release a guard.
 
-**Admin socket.** Set `BRIDGE_ADMIN_SOCKET` to an absolute path. The writer
+**Admin socket.** Set `CIRAK_ADMIN_SOCKET` to an absolute path. The writer
 opens it after it acquires writer ownership (ADR-010); read-only ingress never
 opens it (the variable is ignored, with one log line). Startup fails unless the
 parent directory is owned by the service user with mode exactly `0700`. A stale
@@ -500,11 +600,11 @@ server is full; either way nothing is read from it and no release is attempted.
 **CLI** (same binary, runs as a client and needs none of the server's secrets):
 
 ```
-sudo -u <service user> env BRIDGE_ADMIN_SOCKET=<path> \
+sudo -u <service user> env CIRAK_ADMIN_SOCKET=<path> \
   bridge admin release-guard --session opencode:ses_<id>|claudecode:<uuid> --execution <execution_id> --ticket <ticket> [--allow-missing-user-message]
 ```
 
-`--socket <path>` overrides `BRIDGE_ADMIN_SOCKET`. `--ticket` is required and
+`--socket <path>` overrides `CIRAK_ADMIN_SOCKET`. `--ticket` is required and
 must match `[A-Za-z0-9._-]{1,64}`. The command prints the JSON response and
 exits `0` when released, `1` when refused or the socket is unreachable, `2` on
 a usage error (also for a bad ticket, checked before connecting).
@@ -619,7 +719,7 @@ needs a restart. Live acceptance (ADR-020 §4) is not yet recorded.
 ## ADR-021 Claude Code harness contract (served only when enabled; default off)
 
 Accepted ADR-021 (D12/D14), wired by the wiring slice **behind one explicit operator
-configuration**. With no `BRIDGE_CLAUDE_COMMAND` (the default) nothing here is served: a
+configuration**. With no `CIRAK_CLAUDE_COMMAND` (the default) nothing here is served: a
 `claudecode:` session ID is refused `INVALID_INPUT` "not enabled" for every tool, the 11-tool set,
 every OpenCode response and every OpenCode audit line are byte-identical to a build without the
 adapter, and `bridge admin release-guard` refuses `claudecode:` IDs. With it, the Bridge builds the
@@ -627,13 +727,13 @@ adapter at startup or refuses to start (no partial enablement; see "Enabling" be
 ingress never enables it. Tool names, input fields and output fields of the eleven base tools (twelve with `reply_permission` under the
 default `reject_only` relay) do not change.
 
-**Enabling.** `BRIDGE_CLAUDE_COMMAND` (absolute path of the root-owned wrapper) turns the adapter on and
-then requires `BRIDGE_CLAUDE_SESSIONS` (allowlist file, mode 0600), `BRIDGE_CLAUDE_VERSIONS` (exact
-`claude_code_version` list, no default), `BRIDGE_CLAUDE_HISTORY_DIR`, `BRIDGE_CLAUDE_HOME` (the Claude
-service user's HOME for the child), `BRIDGE_CLAUDE_MODEL` and the existing `BRIDGE_WRITER_LOCK_DIR`;
-optional: `BRIDGE_CLAUDE_LANG`, `BRIDGE_CLAUDE_MAX_TURNS` (1..1000, default 20),
-`BRIDGE_CLAUDE_MAX_BUDGET_USD`, `BRIDGE_CLAUDE_RUN_MAX` (1s..24h, default 15m). Every `claudecode:` session
-must be in the allowlist file **and** in `BRIDGE_ALLOWED_SESSIONS`. Any other `BRIDGE_CLAUDE_*` value without
+**Enabling.** `CIRAK_CLAUDE_COMMAND` (absolute path of the root-owned wrapper) turns the adapter on and
+then requires `CIRAK_CLAUDE_SESSIONS` (allowlist file, mode 0600), `CIRAK_CLAUDE_VERSIONS` (exact
+`claude_code_version` list, no default), `CIRAK_CLAUDE_HISTORY_DIR`, `CIRAK_CLAUDE_HOME` (the Claude
+service user's HOME for the child), `CIRAK_CLAUDE_MODEL` and the existing `CIRAK_WRITER_LOCK_DIR`;
+optional: `CIRAK_CLAUDE_LANG`, `CIRAK_CLAUDE_MAX_TURNS` (1..1000, default 20),
+`CIRAK_CLAUDE_MAX_BUDGET_USD`, `CIRAK_CLAUDE_RUN_MAX` (1s..24h, default 15m). Every `claudecode:` session
+must be in the allowlist file **and** in `CIRAK_ALLOWED_SESSIONS`. Any other `CIRAK_CLAUDE_*` value without
 the command, or an unusable value with it, stops the start with an error. The writer lock of a
 `claudecode:` session is taken once, by the adapter; the OpenCode writer takes only the other IDs.
 
@@ -733,13 +833,13 @@ title, state, updated_at?, created_by_bridge, archived}], next_offset?, aggregat
 - Errors, never a short page: `INVALID_INPUT` for a bad filter (before any native read);
   `UPSTREAM_TIMEOUT` (retryable) when the deadline passes; the native error code when a native
   read of a listed session fails; `INTERNAL` when the archive overlay cannot answer.
-- Read-only: no native write, not audited as a mutation, available under `BRIDGE_READ_ONLY`.
-  Overlay-archived sessions (the persisted overlay of ADR-025, opened from `BRIDGE_OVERLAY_DIR` when it
+- Read-only: no native write, not audited as a mutation, available under `CIRAK_READ_ONLY`.
+  Overlay-archived sessions (the persisted overlay of ADR-025, opened from `CIRAK_OVERLAY_DIR` when it
   is set; otherwise none) are hidden unless `include_archived` is true. Every row carries `archived`
   (`false` for a session that is not archived; before the H5 live sitting the field was omitted when
   false, so a client could not tell "not archived" from "not supported").
-- The tool is registered only when the server has a catalog configuration, which `cmd/bridge` builds when
-  `BRIDGE_LIFECYCLE_CONFIG` is set and valid (D22, `cmd/bridge/lifecycle.go`); unset, a deployed Bridge
+- The tool is registered only when the server has a catalog configuration, which `cmd/cirak` builds when
+  `CIRAK_LIFECYCLE_CONFIG` is set and valid (D22, `cmd/cirak/lifecycle.go`); unset, a deployed Bridge
   lists the same tools as before. It stays registered on a read-only ingress (it never writes).
 
 ### ADR-022 S4: `create_session` (against a fake native; registered only when configured)
@@ -754,7 +854,7 @@ input schema has no other property: a `prompt`, `permission`, `agent`, `model`, 
 flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
 
 - **Authority** is the lifecycle configuration plus the live directory (ADR-022 3.2), not the
-  ACL: a created session is NOT in `BRIDGE_ALLOWED_SESSIONS` and the existing tools do not act on
+  ACL: a created session is NOT in `CIRAK_ALLOWED_SESSIONS` and the existing tools do not act on
   it (ADR-022 3.2 O1/O2/O3 is undecided; until S9 the operator adds the ID to the ACL).
 - `root` must equal a configured root path exactly (no trailing slash, no alias). `subdirectory`
   is relative and clean, without `..`, empty, `.` or control components, must already exist
@@ -774,7 +874,7 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   Bridge refuse to start with `lifecycle roots: lifecycle root "<path>" cannot be opened by the service
   user ...`, never "start without it" (D22).
 - **Order and errors** (every refusal up to the count makes no native call): input shape
-  `INVALID_INPUT`; `BRIDGE_READ_ONLY` `FORBIDDEN`; a recorded outcome for the same key is returned
+  `INVALID_INPUT`; `CIRAK_READ_ONLY` `FORBIDDEN`; a recorded outcome for the same key is returned
   before any cap, the same key with another input `IDEMPOTENCY_CONFLICT`; root not configured or
   deeper than `max_depth` or not authorized `FORBIDDEN`, a Git top level missing or above the root
   `FORBIDDEN` (`non_git`), a `gitdir:`/`commondir` leaving the root `FORBIDDEN` (`not_in_root`), a
@@ -795,7 +895,7 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   ADR-022 3.3), the registry holds at most 10,000 records, and creates are serialized so the caps
   hold under concurrency.
 - **Audit (ADR-022 S5).** Every call writes exactly one AUDIT-01 line `event=session_create`
-  (message `session create`) on every return path (input refusal, `BRIDGE_READ_ONLY`, a replay, a
+  (message `session create`) on every return path (input refusal, `CIRAK_READ_ONLY`, a replay, a
   conflict, every path refusal, the caps, a count timeout, `UPSTREAM_FAILURE`, `UNKNOWN_OUTCOME`,
   success, a panic, and a call the SDK rejects against the input schema, which the AUDIT-01b
   middleware writes). It is written by the deferred step of `call`, before the result is
@@ -815,13 +915,13 @@ flag and slice S9, D16 Q7; only `opencode` exists until ADR-021 is wired).
   wait timed out; a recorded success has `outcome=replay`); `principal`. Never logged: title, subdirectory text, prompt,
   the raw key, the root path or any native response text. The dashboard ring keeps the event and
   these keys. The archive and close lines are in the S6 entry below.
-- The tool is registered only when the server has a create configuration, which `cmd/bridge` builds when
-  `BRIDGE_LIFECYCLE_CONFIG` is set and valid and the ingress is **not** read-only (D22,
-  `cmd/bridge/lifecycle.go`). With the variable unset a deployed Bridge gains no lifecycle tool and keeps its
-  base tools (eleven with `BRIDGE_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay,
-  `cmd/bridge/relay.go:12-32`); see "Registration and production wiring" for the full count.
+- The tool is registered only when the server has a create configuration, which `cmd/cirak` builds when
+  `CIRAK_LIFECYCLE_CONFIG` is set and valid and the ingress is **not** read-only (D22,
+  `cmd/cirak/lifecycle.go`). With the variable unset a deployed Bridge gains no lifecycle tool and keeps its
+  base tools (eleven with `CIRAK_PERMISSION_RELAY=off`, twelve with the default `reject_only` relay,
+  `cmd/cirak/relay.go:12-32`); see "Registration and production wiring" for the full count.
 
-### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured, wired by `cmd/bridge` from `BRIDGE_OVERLAY_DIR`, D22)
+### ADR-022 S6 and ADR-025: `archive_session`, `unarchive_session`, `close_session` (against a fake native; registered only when configured, wired by `cmd/cirak` from `CIRAK_OVERLAY_DIR`, D22)
 
 `archive_session {session_id}`, `unarchive_session {session_id}` and `close_session {session_id}` ->
 `{session_id, archived, changed, archived_at?, interrupt?}`. `session_id` is `opencode:<id>` (the input
@@ -834,16 +934,16 @@ call is refused and the overlay is unchanged).
 - **Registration.** The three tools exist only when the server has an archive configuration
   (`Server.Archive`, which needs a validated lifecycle configuration and an overlay store that holds
   the write role). Without it none is registered (the handler itself refuses `INVALID_INPUT` "unknown tool"
-  when the configuration is absent). `cmd/bridge` builds it when `BRIDGE_LIFECYCLE_CONFIG` is set and valid
-  **and** `BRIDGE_OVERLAY_DIR` names a valid overlay directory (ADR-025 Q5/Q6, D22): the directory is
+  when the configuration is absent). `cmd/cirak` builds it when `CIRAK_LIFECYCLE_CONFIG` is set and valid
+  **and** `CIRAK_OVERLAY_DIR` names a valid overlay directory (ADR-025 Q5/Q6, D22): the directory is
   absolute, a real directory (no symlink in the final component), owned by the service user, mode `0700`; an
   invalid directory or an invalid overlay file is a startup error for the writer (D18 Q3). Not registered on a
   read-only ingress (the overlay is then opened as a reader for `list_catalog` and the dashboard only), and not
   registered by a second writer that did not get the overlay write lock (ADR-025 4.3); that second writer still
   refuses `send_prompt` to an archived session, from a snapshot a poller refreshes every 250 ms on top of the
   overlay's own once-a-second stat poll (about 1.25 s after the lock holder's archive; an unreadable file keeps the
-  last good snapshot, ADR-025 4.4). `BRIDGE_OVERLAY_DIR`
-  set without `BRIDGE_LIFECYCLE_CONFIG` is a startup error.
+  last good snapshot, ADR-025 4.4). `CIRAK_OVERLAY_DIR`
+  set without `CIRAK_LIFECYCLE_CONFIG` is a startup error.
 - **The overlay is a label store, never an authority** (ADR-025 5). It lives in the Bridge's own
   `overlay.json` (strict JSON, checksum, at most 1000 entries and 512 KiB, D18 Q10): an archived
   session is hidden from `list_catalog` unless `include_archived` is true (D16 Q5) and from the dashboard
@@ -857,7 +957,7 @@ call is refused and the overlay is unchanged).
   no native write; for `close_session`, only the refusals **before its interrupt step** make none, because
   the interrupt, which can send the native abort POST, runs before the reservation: a refusal at the interrupt
   step or after it may already follow that abort):
-  `BRIDGE_READ_ONLY` `FORBIDDEN`; not an `opencode:ses_...` session ID `INVALID_INPUT` (a `claudecode:` ID too:
+  `CIRAK_READ_ONLY` `FORBIDDEN`; not an `opencode:ses_...` session ID `INVALID_INPUT` (a `claudecode:` ID too:
   "claudecode sessions are not enabled on this Bridge"); outside the static ACL the
   existing refusals; lifecycle authorization with the `archive` mode: a missing directory `NOT_FOUND`, a
   bad input `INVALID_INPUT`, any other refusal `FORBIDDEN`, an unfinished directory check
@@ -910,20 +1010,20 @@ call is refused and the overlay is unchanged).
 
 ### Registration and production wiring of the five lifecycle tools
 
-| Tool | Registered when (`internal/mcp/server.go`) | Built by `cmd/bridge` (D22, `cmd/bridge/lifecycle.go`) |
+| Tool | Registered when (`internal/mcp/server.go`) | Built by `cmd/cirak` (D22, `cmd/cirak/lifecycle.go`) |
 |---|---|---|
-| `list_catalog` | `Server.Catalog != nil && Server.Catalog.Roots != nil` (`:330`) | `BRIDGE_LIFECYCLE_CONFIG` set and valid; also on a read-only ingress |
+| `list_catalog` | `Server.Catalog != nil && Server.Catalog.Roots != nil` (`:330`) | `CIRAK_LIFECYCLE_CONFIG` set and valid; also on a read-only ingress |
 | `create_session` | `Server.Create != nil` (`:335`) | the same, and the ingress is not read-only |
-| `archive_session`, `unarchive_session`, `close_session` | `Server.Archive != nil` (`:340`) | the same, plus a valid `BRIDGE_OVERLAY_DIR`, not read-only, and this process holds the overlay write lock |
+| `archive_session`, `unarchive_session`, `close_session` | `Server.Archive != nil` (`:340`) | the same, plus a valid `CIRAK_OVERLAY_DIR`, not read-only, and this process holds the overlay write lock |
 
 The lifecycle surface is enabled by default (D22): no extra switch. `lifecycle.FromEnv` and
-`BRIDGE_OVERLAY_DIR` are read at startup; unset, lifecycle is inert; an invalid value refuses to start.
+`CIRAK_OVERLAY_DIR` are read at startup; unset, lifecycle is inert; an invalid value refuses to start.
 The startup log names the registered lifecycle tools and the root count (no path). **Tool counts** (the base
-is eleven; `reply_permission` is the twelfth under the default `reject_only` relay, `cmd/bridge/relay.go:12-32`):
+is eleven; `reply_permission` is the twelfth under the default `reject_only` relay, `cmd/cirak/relay.go:12-32`):
 
-| Configuration | `BRIDGE_PERMISSION_RELAY` default | `=off` |
+| Configuration | `CIRAK_PERMISSION_RELAY` default | `=off` |
 |---|---|---|
-| no `BRIDGE_LIFECYCLE_CONFIG` | 12 | 11 |
+| no `CIRAK_LIFECYCLE_CONFIG` | 12 | 11 |
 | config, no overlay | 14 (`list_catalog`, `create_session`) | 13 |
 | config and overlay (writer with the lock) | 17 | 16 |
 | config, read-only ingress (with or without overlay) | 13 (`list_catalog` only) | 12 |
@@ -949,7 +1049,7 @@ per-call approval is configured: the server cannot verify which, and says so in 
   `supersede_allow_once_not_offered`, `resolved_elsewhere_or_dropped`, `audit_unavailable`,
   `native_rejected_id`. `reason` never replaces `code`; no error carries native text.
 - **Order of checks** (ADR-024 4.2; every refusal before the attempt record makes no native write):
-  `BRIDGE_READ_ONLY` `FORBIDDEN` (the tool is in `mutating()`; nothing is read natively);
+  `CIRAK_READ_ONLY` `FORBIDDEN` (the tool is in `mutating()`; nothing is read natively);
   `allow_once` `FORBIDDEN`/`allow_once_disabled` (reject_only: configuration and input only, zero
   native calls, before the execution is even looked up); a Claude Code execution `INVALID_INPUT`;
   the execution exists and its session is authorized (the ACL read of `GET /session/:id` is the only
@@ -989,7 +1089,7 @@ per-call approval is configured: the server cannot verify which, and says so in 
   human_verified=false`. The `phase=result` and `phase=refused` lines are slice S5; the generic
   AUDIT-01 writer writes no line for this tool.
 - **Registration (superseded by S5, below):** in S3 the tool was registered only when the server had
-  a `PermissionRelay` configuration and nothing in `cmd/bridge` set it. S5 sets it by default.
+  a `PermissionRelay` configuration and nothing in `cmd/cirak` set it. S5 sets it by default.
 - **ADR-024 S1 changes in this slice:** `get_session` reports a measured `pending_permission_count`
   of `0` while the state is `waiting_for_permission` (it stays absent when the permission read failed
   or the state is not waiting); a `resolved_externally` tombstone of an execution no longer hides its
@@ -998,9 +1098,9 @@ per-call approval is configured: the server cannot verify which, and says so in 
 
 ### ADR-024 S5: `reply_permission` audit lines, production replier, default registration
 
-- **Registration (D15 Q3).** `cmd/bridge` registers `reply_permission` in `reject_only` by default: a
+- **Registration (D15 Q3).** `cmd/cirak` registers `reply_permission` in `reject_only` by default: a
   deployed Bridge now lists **twelve** tools (eleven plus this one; thirteen with `create_session`).
-  `BRIDGE_PERMISSION_RELAY` is the switch: unset or `reject_only` registers it, `off` keeps the
+  `CIRAK_PERMISSION_RELAY` is the switch: unset or `reject_only` registers it, `off` keeps the
   eleven-tool surface, `policy` and any other value refuse startup (policy mode, ADR-024 S2/S4, is
   not started: D15 Q1). The name and its values are a maintainer proposal (ADR-024 section 5 names
   the variable and the three values).
@@ -1056,8 +1156,8 @@ per-call approval is configured: the server cannot verify which, and says so in 
 
 ### ADR-024 S6: production `PermissionSource`, `pending_permission`, runbook
 
-`cmd/bridge` now installs the production `PermissionSource` together with the replier and the attempt
-writer when `BRIDGE_PERMISSION_RELAY` is unset or `reject_only` (mode `off` installs nothing).
+`cmd/cirak` now installs the production `PermissionSource` together with the replier and the attempt
+writer when `CIRAK_PERMISSION_RELAY` is unset or `reject_only` (mode `off` installs nothing).
 `allow_once` stays unregistered and refused (`FORBIDDEN`/`allow_once_disabled`, zero native calls):
 the decision is D12 exception (b), the policy mode is D15 Q1 (off).
 
@@ -1073,8 +1173,8 @@ the decision is D12 exception (b), the policy mode is D15 Q1 (off).
   session. No value comes from a native payload or from model text.
 - **Native incarnation evidence (ADR-024 A1 S7, D21): off by default.** The observer verifies a request
   only when the scope carries an epoch, and `docs/P2_PERM_CORE_02_OBSERVATION.md` forbids fabricating
-  one. `BRIDGE_PERMISSION_INCARNATION` (`off`, the default and when unset; `observed`; anything else is a
-  startup error) decides. With `off`, or with `BRIDGE_PERMISSION_RELAY=off`, there is no source: on a
+  one. `CIRAK_PERMISSION_INCARNATION` (`off`, the default and when unset; `observed`; anything else is a
+  startup error) decides. With `off`, or with `CIRAK_PERMISSION_RELAY=off`, there is no source: on a
   deployed Bridge every request stays `unattributed`, `pending_permission` is count-only
   (`pending_permission_count`) and `reply_permission` refuses with `FORBIDDEN`/`not_verified`, with no
   native write and no attempt line. With `observed` (and `reject_only`) the Bridge subscribes once to
@@ -1092,7 +1192,7 @@ the decision is D12 exception (b), the policy mode is D15 Q1 (off).
   event latency (milliseconds) and a silent drop (up to about 25 s) between a native replacement and the
   Bridge noticing it. The seam is unchanged: `execution.NativeIncarnation`
   (`PermissionSourceConfig.Incarnation` and `Manager.SetIncarnation`, installed together by
-  `cmd/bridge`); an unarmed source returns `("", nil)`. Not run against a live OpenCode (UNVERIFIED).
+  `cmd/cirak`); an unarmed source returns `("", nil)`. Not run against a live OpenCode (UNVERIFIED).
 - **`pending_permission`** (on `get_execution_status` and `get_execution_result`, only while the state
   is `waiting_for_permission`, only for the one request verified for **this** execution):
   `{permission_id, call_id, message_id, tool, kind, pattern_count, scope_digest, attribution:
@@ -1100,7 +1200,7 @@ the decision is D12 exception (b), the policy mode is D15 Q1 (off).
   entry outside it is not exposed. `pending_permission_count` (an integer, on `get_session` and the
   two execution tools) counts this session's pending requests, attributed or not.
 - **Error codes of `reply_permission`** (the closed set; `reason` is the enum of S3): `INVALID_INPUT`
-  (input, `nothing_to_supersede`, `supersedes_mismatch`), `FORBIDDEN` (`BRIDGE_READ_ONLY`,
+  (input, `nothing_to_supersede`, `supersedes_mismatch`), `FORBIDDEN` (`CIRAK_READ_ONLY`,
   `allow_once_disabled`, `not_verified`, `supersede_limit`, `supersede_allow_once_not_offered`,
   `unrecognized_kind`), `NOT_FOUND` (`resolved_elsewhere_or_dropped`), `SESSION_BUSY`
   (`attempt_in_flight`), `IDEMPOTENCY_CONFLICT` (`already_replied`, another decision),
@@ -1118,19 +1218,19 @@ the decision is D12 exception (b), the policy mode is D15 Q1 (off).
 ### ADR-023 dashboard (read-only; disabled by default)
 
 The Bridge can serve a local, read-only dashboard (ADR-023). It is **off** unless exactly one of
-`BRIDGE_DASHBOARD_SOCKET` or `BRIDGE_DASHBOARD_ADDR` is set (setting both is a startup error). It has no
+`CIRAK_DASHBOARD_SOCKET` or `CIRAK_DASHBOARD_ADDR` is set (setting both is a startup error). It has no
 write route, no SSE and no mutating call; every route answers only `GET` and `HEAD`. Operator setup and the
 SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
 
 | Variable | Meaning |
 |---|---|
-| `BRIDGE_DASHBOARD_SOCKET` | Path of a unix socket in a `0700` directory owned by the service user (the recommended transport, D17 Q1). |
-| `BRIDGE_DASHBOARD_ADDR` | `host:port` where host is exactly `127.0.0.1` or `::1`; any other address is a startup error. Requests need a `Host` of `localhost`, `127.0.0.1` or `[::1]`. |
-| `BRIDGE_DASHBOARD_REDACT_EXTRA` | **Slice-5a proposal name** (the ADR names none): a JSON array of at most 16 RE2 patterns of 1 to 256 bytes, additive to the shipped redaction list (always on). An invalid value is a startup error and is never logged. |
+| `CIRAK_DASHBOARD_SOCKET` | Path of a unix socket in a `0700` directory owned by the service user (the recommended transport, D17 Q1). |
+| `CIRAK_DASHBOARD_ADDR` | `host:port` where host is exactly `127.0.0.1` or `::1`; any other address is a startup error. Requests need a `Host` of `localhost`, `127.0.0.1` or `[::1]`. |
+| `CIRAK_DASHBOARD_REDACT_EXTRA` | **Slice-5a proposal name** (the ADR names none): a JSON array of at most 16 RE2 patterns of 1 to 256 bytes, additive to the shipped redaction list (always on). An invalid value is a startup error and is never logged. |
 
 - **Routes:** `/` (session list), `/session/<harness>/<id>` (detail, executions, diffs),
   `/session/<harness>/<id>/turn/<message>` (one turn's diff), `/api/state` and
-  `/api/state/session/<harness>/<id>` (the JSON view models the page polls: 5 s list, 2 s detail),
+  `/api/state/session/<harness>/<id>` (the JSON view models the page polls while it is visible: 5 s list, 2 s detail),
   `/audit` and `/api/audit` (the 1000-entry audit ring), `/dashboard.css`, `/dashboard.js`.
 - **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
   whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
@@ -1143,10 +1243,10 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   `lifecycle_root`, the lifecycle root that contains the session directory, **as a label only**: the
   rule is that of `list_catalog` (ADR-022 6.1), so a session under a lifecycle root that the ACL does
   not list is **not** shown (reading it would need the O2 flag, D16 Q7). The production Bridge wires the
-  lifecycle configuration from `BRIDGE_LIFECYCLE_CONFIG` (D22), so the label appears when it is set.
+  lifecycle configuration from `CIRAK_LIFECYCLE_CONFIG` (D22), so the label appears when it is set.
 - **Archived (D17 Q7):** sessions the archive overlay reports archived are hidden by default; the query
   `archived=1` (exactly that value, on any data route) shows them with an `archived` marker. The
-  overlay is the persisted overlay of ADR-025 when `BRIDGE_OVERLAY_DIR` is set (D22), otherwise empty. An
+  overlay is the persisted overlay of ADR-025 when `CIRAK_OVERLAY_DIR` is set (D22), otherwise empty. An
   overlay that cannot answer fails the call (503), as `list_catalog` does: a session is never listed or
   hidden by a guess.
 - **Redaction:** diff paths and patches and the audit ring values are redacted with the shipped list
@@ -1154,7 +1254,11 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   patterns. A convenience, not a guarantee.
 - **JSON model fields** (`/api/state*`): `harness`, `id`, `title`, `root` (the session directory),
   `lifecycle_root` (omitted when none), `archived` (omitted unless true), `state`, `guard`,
-  `current_execution`, `last_activity`, `href`.
+  `current_execution`, `last_activity`, `href`. Additive display fields (ADR-023 A1, slice S1; every one is
+  text the page shows, computed by the server so the script decides no label, and none depends on the
+  clock, so the ETag stays stable): `harness_name`, `state_label`, `state_tone`, `guard_text`, `path_short`,
+  `last_activity_iso` (omitted when unknown); the list model also carries `count` and `count_text`.
+  The page polls only while the tab is visible and sends one request when it becomes visible again (A1.7).
 - **Status:** the native response shapes behind the diffs are read from upstream source and are
   **UNVERIFIED against a live server**; the live acceptance (R-DASH) is **NOT_EXERCISED**.
 
@@ -1163,7 +1267,7 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
 Read-only discovery and inspection tools (`list_sessions`, `find_sessions`,
 `list_repositories`, `get_repository`, `get_session`, `get_harness_capabilities`)
 can make OpenCode load (bootstrap) the instance of any ACL'd session directory,
-also on a `BRIDGE_READ_ONLY=1` Bridge. Every ACL lookup (`GET /session/:id`) is
+also on a `CIRAK_READ_ONLY=1` Bridge. Every ACL lookup (`GET /session/:id`) is
 routed to the session's own directory, also for a workspace-bound session: OpenCode
 keeps every `GET /session…` request on the local control plane and forwards only
 other session calls (prompt, abort) and `/session/status`/`/permission` with
@@ -1179,7 +1283,7 @@ scripts disabled, and **imports and executes the plugins** found there
 `config/plugin.ts:18-29`, `plugin/loader.ts:135-140`, `plugin/index.ts:114-124`,
 `:181-253`). Details are in docs/ROADMAP.md, "F-2 verification note".
 
-Therefore `BRIDGE_ALLOWED_SESSIONS` and `BRIDGE_ALLOWED_ROOTS` must contain only
+Therefore `CIRAK_ALLOWED_SESSIONS` and `CIRAK_ALLOWED_ROOTS` must contain only
 sessions in workspaces whose `.opencode` content, along the whole path up to the
 worktree root, the operator trusts. Listing sessions is not side-effect free in
 OpenCode even though the Bridge itself executes nothing. A workspace-bound session

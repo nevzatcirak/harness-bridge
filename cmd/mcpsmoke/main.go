@@ -15,11 +15,11 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/opencode"
-	"github.com/nevzatcirak/harness-bridge/internal/execution"
-	"github.com/nevzatcirak/harness-bridge/internal/mcp"
-	"github.com/nevzatcirak/harness-bridge/internal/mcpclient"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/adapters/opencode"
+	"github.com/nevzatcirak/cirak/internal/execution"
+	"github.com/nevzatcirak/cirak/internal/mcp"
+	"github.com/nevzatcirak/cirak/internal/mcpclient"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 func main() {
@@ -108,7 +108,7 @@ func run() error {
 	}
 	marker := "H2-" + hex.EncodeToString(nonce[:])
 	endpoint := os.Getenv("H2_MCP_URL")
-	token := os.Getenv("BRIDGE_TOKEN")
+	token := smokeToken(os.Getenv)
 	if endpoint == "" {
 		// Default: an ephemeral loopback bridge; never an OpenCode server.
 		m := execution.New(c)
@@ -330,4 +330,12 @@ func run() error {
 	}
 	fmt.Printf("PASS: same existing native session; earlier history retained; both turns present; directory unchanged; final history: %d messages\n", len(after))
 	return nil
+}
+
+// smokeToken reads CIRAK_TOKEN first and falls back to the legacy BRIDGE_TOKEN (ADR-026 Q18, D29).
+func smokeToken(getenv func(string) string) string {
+	if v := getenv("CIRAK_TOKEN"); v != "" {
+		return v
+	}
+	return getenv("BRIDGE_TOKEN")
 }

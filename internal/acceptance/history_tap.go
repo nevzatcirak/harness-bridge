@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nevzatcirak/harness-bridge/internal/adapters/claudecode"
+	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
 )
 
 // HistoryTap is the history check of ADR-021 §8.3 ("the decoy content appears nowhere in the stream, the
@@ -25,7 +25,7 @@ import (
 // The directory is opened by the store once, without following a symlink, and must already be absolute,
 // owned by the process, mode exactly 0700 with a safe ancestor chain (claudecode.ValidateHistoryDir);
 // every later operation is relative to that descriptor, so nothing is read or written outside it and a
-// path swapped in afterwards is never followed. Use a throwaway directory, never BRIDGE_CLAUDE_HISTORY_DIR.
+// path swapped in afterwards is never followed. Use a throwaway directory, never CIRAK_CLAUDE_HISTORY_DIR.
 //
 // Honesty: this history is derived from the same stream the verdict already scans, after redaction and
 // truncation; it is not an independent observation of the CLI's transcript (which ADR-021 §5 declares

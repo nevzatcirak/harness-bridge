@@ -1,0 +1,131 @@
+# GoReleaser configuration of the Cirak release (ADR-026 section 3.1, slice S2).
+#
+# The recipe is the H4/H5 plain one: CGO_ENABLED=0, -trimpath, -buildvcs=true and -buildid= (the only linker
+# flag; GoReleaser's own default flag list is replaced, and the release workflow proves it by comparing the
+# linux/arm64 binary with `go build` of the same commit byte for byte). The release is created as a DRAFT:
+# the maintainer reviews and publishes it by hand (section 3.2). The repository is the one the checkout came
+# from, so the file needs no change when the maintainer renames it.
+version: 2
+
+project_name: cirak
+
+builds:
+  - id: cirak
+    main: ./cmd/cirak
+    binary: cirak
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -buildvcs=true
+    ldflags:
+      - -buildid=
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Archive names carry no version, so that .../releases/latest/download/<name> resolves for install.sh; the tag
+# is in the download path.
+archives:
+  - id: cirak
+    formats:
+      - tar.gz
+    name_template: "cirak_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  extra_files:
+    - glob: ./install.sh
+
+sboms:
+  - id: archive
+    artifacts: archive
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "spdx-json=$document"
+    documents:
+      - "${artifact}.spdx.json"
+
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--bundle=${signature}"
+      - "${artifact}"
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^Merge "
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Chores
+      regexp: '^.*?chore(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: Other
+      order: 999
+
+release:
+  draft: true
+  prerelease: auto
+  extra_files:
+    - glob: ./install.sh
+  header: |
+    ## Cirak {{ .Tag }}
+
+    **Harness Bridge is now Cirak.** The environment prefix is `CIRAK_*`; the legacy `BRIDGE_*` names are still read for one minor release, with one warning per variable at startup (a `CIRAK_X` and a `BRIDGE_X` with different values refuse to start). See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.5 for the migration note of an existing host.
+
+    Built with **go1.27.2** (the same source with another toolchain gives another binary). Tested with OpenCode 1.19.4 (the version pinned by ADR-017); Claude Code 2.1.325 where the Claude Code adapter applies (it is off by default and experimental). Supported: linux/amd64 and linux/arm64; the darwin builds are experimental, core features only; there is no Windows build.
+  footer: |
+    ## Verification
+
+    Download the archive for your platform, `checksums.txt` and `checksums.txt.sigstore.json`, then:
+
+    ```sh
+    # 1. sha256
+    sha256sum --ignore-missing -c checksums.txt
+
+    # 2. the Sigstore signature of checksums.txt (the identity is this release workflow at this tag)
+    cosign verify-blob \
+      --bundle checksums.txt.sigstore.json \
+      --certificate-identity "https://github.com/nevzatcirak/cirak/.github/workflows/release.yml@refs/tags/{{ .Tag }}" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      checksums.txt
+
+    # 3. the build provenance of an archive (needs the GitHub CLI)
+    gh attestation verify cirak_linux_amd64.tar.gz -R nevzatcirak/cirak
+    ```
+
+    `install.sh` performs steps 1 and 2 itself (step 2 when `cosign` is on the PATH). An independent rebuild with the plain recipe (no GoReleaser, another runner image) checks the sha256 of every binary before this draft is published.

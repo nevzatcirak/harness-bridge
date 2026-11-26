@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevzatcirak/harness-bridge/internal/dashboard"
+	"github.com/nevzatcirak/cirak/internal/dashboard"
 )
 
 const (

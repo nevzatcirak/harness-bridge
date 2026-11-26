@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nevzatcirak/harness-bridge/internal/bounded"
-	"github.com/nevzatcirak/harness-bridge/internal/security"
+	"github.com/nevzatcirak/cirak/internal/bounded"
+	"github.com/nevzatcirak/cirak/internal/security"
 )
 
 type Repository struct {

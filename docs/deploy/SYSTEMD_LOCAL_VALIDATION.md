@@ -1,5 +1,7 @@
 # H3 local systemd/OpenCode validation — 2026-10-24 UTC
 
+> **Names (Cirak, ADR-026 S1).** The product is now called Cirak: the daemon is `cmd/cirak`, the binary `cirak`, and every environment variable is `CIRAK_*` (this text uses the new names). The legacy `BRIDGE_*` names are still read until v0.2.0, with one warning per variable that never prints a value; a `CIRAK_X` and a `BRIDGE_X` set to different values refuse to start, naming both variables; an empty value counts as unset on both sides. See `docs/adr/ADR-026-cirak-name-and-distribution.md` section 2.3. Host names, paths and unit names (`harness-bridge-*`, `/etc/harness-bridge`, `/opt/harness-bridge-test`) are unchanged.
+
 Result: actual local MCP integration and real two-turn test-agent continuation
 PASS. This is not ordinary Claude Chat E2E or a public HTTPS deployment.
 Implementation commit: `2c97334` (`fix(security): validate systemd credential ACLs without relaxing file privacy`).
@@ -156,11 +158,11 @@ go test -race ./...
 git diff --check
 ```
 
-Final full test and race runs: cmd/bridge, adapters/opencode, execution, mcp and
+Final full test and race runs: cmd/cirak, adapters/opencode, execution, mcp and
 security all `ok (cached)`; cmd/mcpsmoke, cmd/smoke and mcpclient had no test files.
 Formatting/build/vet/diff check silent. An initial build found an unused import
 during implementation; it was fixed before successful checks and installation.
-An earlier uncached credential-source test/race run passed cmd/bridge in
+An earlier uncached credential-source test/race run passed cmd/cirak in
 0.013s/1.038s. A separate actual systemd fixture test passed as described above.
 
 `go test ./internal/execution -count=1 -v` exited 0 (0.071s):
