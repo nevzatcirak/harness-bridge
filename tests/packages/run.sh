@@ -25,6 +25,9 @@ sandbox=$(mktemp -d "${TMPDIR:-/tmp}/cirak-pkg-test.XXXXXX")
 name_deb="cirak-pkg-deb-$$"
 name_rpm="cirak-pkg-rpm-$$"
 cleanup() {
+    if [ -f "$sandbox/env.orig" ]; then
+        cp "$sandbox/env.orig" packaging/cirak.env.example
+    fi
     docker rm -f "$name_deb" "$name_rpm" >/dev/null 2>&1 || true
     rm -rf "$sandbox"
 }
@@ -55,7 +58,13 @@ case "$(uname -m)" in
 esac
 
 build_version 1.0.0 "$sandbox/v1"
+# v2 ships a changed example environment file, so the upgrade test can prove the
+# config|noreplace behaviour (the edited local file is kept; the new upstream one
+# lands as .dpkg-dist / .rpmnew) instead of merely reinstalling identical content.
+cp packaging/cirak.env.example "$sandbox/env.orig"
+printf '\n# package-test-upstream-v2\n' >>packaging/cirak.env.example
 build_version 1.0.1 "$sandbox/v2"
+cp "$sandbox/env.orig" packaging/cirak.env.example
 
 for kind in deb rpm; do
     [ -f "$sandbox/v1/cirak_1.0.0_linux_${arch}.${kind}" ] || fail "v1 $kind package is missing"

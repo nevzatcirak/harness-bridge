@@ -45,7 +45,7 @@ wait_for_state() {
 install_pkg() {
     case "$kind" in
         deb)
-            DEBIAN_FRONTEND=noninteractive dpkg -i "$1" >/tmp/install.log 2>&1 || {
+            DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold "$1" >/tmp/install.log 2>&1 || {
                 cat /tmp/install.log >&2
                 fail "dpkg -i $1 failed"
             }
@@ -103,7 +103,17 @@ systemd-analyze verify /usr/lib/systemd/system/cirak.service 2>/tmp/verify.log |
     cat /tmp/verify.log >&2
     fail "systemd-analyze verify rejected the unit"
 }
-ok "systemd-analyze verify accepts the unit and Restart=no is visible"
+for kv in NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes; do
+    key=${kv%%=*}
+    want=${kv#*=}
+    got=$(systemctl show -p "$key" --value cirak.service)
+    [ "$got" = "$want" ] || fail "systemctl show $key=$got, want $want"
+done
+loadcred=$(systemctl show -p LoadCredential --value cirak.service)
+# systemd redacts the credential source in `show` (it prints [unprintable]); an
+# unset property is empty. The exact value is pinned by the fast unit-line check.
+[ -n "$loadcred" ] && [ "$loadcred" != "-" ] || fail "systemctl does not show a LoadCredential"
+ok "systemd-analyze verify accepts the unit and the hardening/credential settings are visible"
 
 [ "$(systemctl is-enabled cirak.service 2>/dev/null || true)" = disabled ] || {
     fail "the package must not enable the unit"
@@ -147,7 +157,14 @@ pid_after=$(systemctl show -p MainPID --value cirak.service)
 [ "$pid_after" = "$pid_before" ] || fail "the upgrade changed the main PID ($pid_before -> $pid_after)"
 [ "$(systemctl show -p NRestarts --value cirak.service)" = 0 ] || fail "the upgrade restarted the unit"
 grep -q 'package-test-upgrade-marker' /etc/cirak/cirak.env.example || fail "the upgrade replaced the conffile"
-ok "(b) the upgrade kept the unit active with PID $pid_before and the edited config file"
+grep -q 'package-test-upstream-v2' /etc/cirak/cirak.env.example && fail "the upstream v2 conffile overwrote the local file"
+case "$kind" in
+    deb) new_conffile=/etc/cirak/cirak.env.example.dpkg-dist ;;
+    rpm) new_conffile=/etc/cirak/cirak.env.example.rpmnew ;;
+esac
+[ -f "$new_conffile" ] || fail "the changed upstream conffile was not saved as $new_conffile"
+grep -q 'package-test-upstream-v2' "$new_conffile" || fail "$new_conffile does not hold the upstream v2 content"
+ok "(b) the upgrade kept the unit active with PID $pid_before and the edited conffile; the upstream one is $new_conffile"
 
 # ---- (c) removal stops it and keeps state and the user -----------------------------
 
