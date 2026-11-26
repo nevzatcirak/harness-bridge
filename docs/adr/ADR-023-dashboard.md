@@ -1030,7 +1030,7 @@ policy; D31 confirmed it (Q9).** Proportions use classes or SVG presentation att
 inline `<svg aria-hidden="true">` with fixed paths (none in v2: chips carry words); no `url()` to a remote host,
 no `@import`, no `@font-face`.
 
-**JavaScript inventory** (the single embedded `dashboard.js`, <= 16 KiB, plus `theme.js`, <= 1 KiB; the
+**JavaScript inventory** (the embedded scripts of A1.17 (D34): a shared core `dashboard.js` and one script per page kind, each <= 16 KiB and all of them <= 32 KiB, plus `theme.js`, <= 1 KiB; the
 existing rules stay: values set with `textContent`, no markup built from data, nothing evaluated, `GET` only):
 
 | # | Behaviour | CSP impact | No-JS fallback |
@@ -1114,7 +1114,7 @@ confirmed by the operator in R-DASH (below).
 4. **No external URL:** the templates, CSS and JS **code** (comments stripped before the scan, or the embedded
    copy has its comments removed in S1; the reference file's comments may name a project) contain no
    `http:`/`https:`/protocol-relative URL, no `@import`, no `@font-face`, no `url(` to a non-embedded path.
-5. **JS hygiene:** the forbidden-API scan of A1.6; a size cap on `dashboard.js` and `theme.js`.
+5. **JS hygiene:** the forbidden-API scan of A1.6 on **every** script; a size cap on each script, on their total (A1.17) and on `theme.js`.
 6. **Reserved colour:** no class other than the pending ones refers to the secondary tokens.
 7. **Typography (Hallmark Floor 9):** the CSS contains no `text-transform: uppercase|capitalize`, no
    `letter-spacing` on a label, table head, tag or nav link, no `font-variant: small-caps`; no template renders a
@@ -1397,3 +1397,28 @@ head before editing and held.
 | #486 P3-4 mock gaps | **FIXED**: the executions footnote says "includes sessions beyond the first 200 shown on the Sessions page"; the primary control is the Refresh **link** (the JS-3 no-JS fallback) and the toolbar lists it | the mock, A1.4 item 1 |
 
 **Out of scope, recorded:** nothing new.
+
+### A1.17 D34 (2026-11-26): per-page scripts
+
+**Decision (maintainer, D34).** `dashboard.js` had reached 16,273 of its 16 KiB cap (A1.6 and A1.9) with S3b (light
+theme) and ADR-017 A2 S5 (badges) still to come. The one script is split; **nothing else in A1 changes** (the JS-1 to
+JS-6 behaviours, the A1.7 pause-on-hidden polling, the textContent-only rule, GET only, the CSP).
+
+- **The files.** `dashboard.js` is now the **core** that every page loads: the helpers, JS-6 (menu), JS-1 (copy), JS-5
+  (relative times), the A1.7 poll engine and the filter helpers of JS-4, and one namespace, `window.cirakDash`, for the
+  page scripts. Three page scripts load after it, in document order, and each stops quietly when the core is missing:
+  `dashboard-list.js` (the sessions page: the filter, the table rebuild, the 5 s poll), `dashboard-detail.js` (the
+  session page: the field and report updates, the 2 s poll) and `dashboard-audit.js` (the audit page: the row filter).
+  The executions, catalog, health and turn pages load the core alone. `theme.js` (S3b) stays a separate file of at most
+  1 KiB.
+- **Caps (replacing "one script, 16 KiB").** Each script is at most **16 KiB** and all the `dashboard*.js` files together
+  at most **32 KiB**; at this change they are 8,186 + 5,785 + 3,416 + 747 = 18,134 bytes. `theme.js` keeps its own cap.
+- **What does not change.** The CSP is still `script-src 'self'` with no inline script and no external fetch; every
+  script is an empty `<script src="/dashboard*.js"></script>`; the A1.6 forbidden-API scan runs on every script; the
+  only request site is the core's poll (GET, `If-None-Match`). The new files are routes of the same table: `GET`/`HEAD`
+  only, no data route, no limiter charge, the same security headers as `/dashboard.js`.
+- **The pages.** A page loads the scripts its markup needs and no more; the tests read the needs from the HTML hooks
+  (`data-poll`, the audit filter and rows), not from the server's own table. A script served and not referenced, or
+  referenced and missing, fails the build.
+- **Effect on S3b and A2 S5.** A new behaviour gets its own script (or a few bytes in the script of its page); the
+  core is the place for what every page needs. No existing slice text is superseded beyond the cap sentence in A1.6.

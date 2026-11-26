@@ -275,6 +275,7 @@ func TestStateHeadHasHeadersAndNoBody(t *testing.T) {
 
 func TestNewRoutesAreGetAndHeadOnly(t *testing.T) {
 	want := map[string]bool{"/": false, "/session/": false, "/api/state": false, "/api/state/session/": false, "/audit": false, "/api/audit": false, "/dashboard.css": false, "/dashboard.js": false,
+		"/dashboard-list.js": false, "/dashboard-detail.js": false, "/dashboard-audit.js": false,
 		"/executions": false, "/catalog": false, "/health": false, "/api/state/executions": false, "/api/state/catalog": false, "/api/state/health": false}
 	for _, r := range Routes(NullSource{}) {
 		if _, ok := want[r.Path]; !ok {
@@ -303,32 +304,54 @@ func TestNewRoutesAreGetAndHeadOnly(t *testing.T) {
 // The page script: no markup from data, no evaluation, GET only, one fetch, same origin,
 // the documented intervals.
 func TestPollingScriptIsSafeAndUsesTheDocumentedIntervals(t *testing.T) {
-	b, err := os.ReadFile("assets/dashboard.js")
-	if err != nil {
-		t.Fatal(err)
+	read := func(name string) string {
+		b, err := os.ReadFile("assets/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
 	}
-	js := string(b)
-	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "importScripts", "localStorage", "sessionStorage", "document.cookie", "http://", "https://", "'POST'", "'PUT'", "'PATCH'", "'DELETE'", `"POST"`, "srcdoc", "javascript:"} {
-		if strings.Contains(js, banned) {
-			t.Errorf("dashboard.js contains %q", banned)
+	var all strings.Builder
+	for _, name := range scriptFiles {
+		js := read(name)
+		all.WriteString(js)
+		for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "importScripts", "localStorage", "sessionStorage", "document.cookie", "http://", "https://", "'POST'", "'PUT'", "'PATCH'", "'DELETE'", `"POST"`, "srcdoc", "javascript:"} {
+			if strings.Contains(js, banned) {
+				t.Errorf("%s contains %q", name, banned)
+			}
+		}
+		if strings.Contains(js, "setInterval") || strings.Contains(js, "hiddenMs") {
+			t.Errorf("%s: the scripts must use self-rescheduling timers only and must not poll while hidden (A1.7)", name)
 		}
 	}
-	if n := strings.Count(js, "fetch("); n != 1 {
-		t.Errorf("%d fetch calls, want 1", n)
+	// One request site for all the scripts (the core), a GET with If-None-Match.
+	if n := strings.Count(all.String(), "fetch("); n != 1 || strings.Count(read(scriptCore), "fetch(") != 1 {
+		t.Errorf("%d fetch calls in the scripts, want 1, in the core", n)
 	}
-	if !strings.Contains(js, "method: 'GET'") || !strings.Contains(js, "'If-None-Match'") || !strings.Contains(js, "r.status === 304") {
-		t.Error("the script does not poll with GET and If-None-Match")
+	core := read(scriptCore)
+	if !strings.Contains(core, "method: 'GET'") || !strings.Contains(core, "'If-None-Match'") || !strings.Contains(core, "r.status === 304") {
+		t.Error("the core does not poll with GET and If-None-Match")
 	}
 	// A1.7 supersedes the hidden-tab cadence of section 4: the intervals while visible are 5 s (list) and 2 s
 	// (detail); while hidden the script is paused (no timer, no request), which the harness tests of
-	// v2s1_script_test.go run.
-	for _, want := range []string{"kind === 'list' ? 5000 : (kind === 'detail' ? 2000 : 0)", "doc.hidden", "'/api/state'", "'/api/state/session/'"} {
-		if !strings.Contains(js, want) {
-			t.Errorf("dashboard.js lacks %q", want)
+	// v2s1_script_test.go run. Each page script names its own interval and URL; the core has none.
+	if !strings.Contains(core, "doc.hidden") {
+		t.Error("the core does not pause while hidden")
+	}
+	for name, wants := range map[string][]string{
+		scriptList:   {"base: 5000", "'/api/state'"},
+		scriptDetail: {"base: 2000", "'/api/state/session/'"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(read(name), want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
 		}
 	}
-	if strings.Contains(js, "setInterval") || strings.Contains(js, "hiddenMs") {
-		t.Error("the script must use self-rescheduling timers only and must not poll while hidden (A1.7)")
+	for _, leak := range []string{"5000", "'/api/state"} {
+		if strings.Contains(core, leak) {
+			t.Errorf("the core carries the page-specific %q", leak)
+		}
 	}
 }
 
@@ -348,9 +371,12 @@ func TestPagesCarryThePollingHooks(t *testing.T) {
 	if strings.Contains(turn, "data-poll") {
 		t.Errorf("a turn page polls")
 	}
-	for _, body := range []string{list, detail, turn} {
-		if strings.Count(body, "<script") != 1 || !strings.Contains(body, `<script src="/dashboard.js"></script>`) {
-			t.Errorf("a page does not carry exactly the one embedded script")
+	for _, c := range []struct {
+		name, body string
+		want       []string
+	}{{"list", list, []string{"/dashboard.js", "/dashboard-list.js"}}, {"detail", detail, []string{"/dashboard.js", "/dashboard-detail.js"}}, {"turn", turn, []string{"/dashboard.js"}}} {
+		if got := scriptSrcs(c.body); strings.Join(got, " ") != strings.Join(c.want, " ") || len(foreignScripts(c.body)) != 0 {
+			t.Errorf("the %s page loads %v, want %v", c.name, got, c.want)
 		}
 	}
 }

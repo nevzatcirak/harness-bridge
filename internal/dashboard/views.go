@@ -317,6 +317,23 @@ func newDash(src Source, opts Options) *dash {
 // unavailablePage answers a data source that failed: HTTP 503 with Retry-After,
 // for the list and the detail alike (review #223 P3-1: one semantics). The page
 // states it; the error text is never shown.
+// Scripts returns the script files of this page, in load order (ADR-023 A1.6, D34): the core on every page, then
+// only the script of the page kind. The sessions page polls and filters; the session page polls; the audit page
+// filters its rows (only when there is a filter and rows to filter). The executions, catalog, health and turn pages
+// need the core alone.
+func (p page) Scripts() []string {
+	out := []string{"/" + scriptCore}
+	switch {
+	case p.ListPage:
+		out = append(out, "/"+scriptList)
+	case p.Poll == "detail":
+		out = append(out, "/"+scriptDetail)
+	case p.AuditPage && p.AuditOn && len(p.Audit) > 0:
+		out = append(out, "/"+scriptAudit)
+	}
+	return out
+}
+
 func unavailablePage(w http.ResponseWriter, p page) {
 	w.Header().Set("Retry-After", "5")
 	renderPage(w, http.StatusServiceUnavailable, p)
