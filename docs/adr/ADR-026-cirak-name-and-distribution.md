@@ -639,3 +639,40 @@ PID and `NRestarts=0` after an upgrade, with the mutations "unguarded stop on up
 | P3-9 Q15 recommendation | **FIXED**: recommendation added; the question stays open | §10 |
 
 **Out of scope, recorded:** nothing new.
+
+## 13. As built (slice S4, dated 2026-11-26, task #574)
+
+Facts about the code, no new decision. The S4 files are `.goreleaser.yaml` (`nfpms`), `packaging/cirak.service`,
+`packaging/cirak.env.example`, `packaging/scripts/{preinstall,postinstall,preremove,postremove}.sh`,
+`.github/workflows/packages.yml` and `tests/packages/`.
+
+- **The packages.** `nfpms` builds `deb` and `rpm` for the two Linux targets. The built binary goes to
+  `/usr/bin/cirak` through `bindir`; the contents are the unit at `/usr/lib/systemd/system/cirak.service`, the
+  example environment at `/etc/cirak/cirak.env.example` with `type: config|noreplace` (a Debian conffile,
+  `%config(noreplace)` in the rpm), and `LICENSE`, `README.md` and `docs/deploy/*.md` under
+  `/usr/share/doc/cirak/`. The unit is the §4.4 sketch with `Restart=no`; the only addition is a standard
+  `[Install] WantedBy=multi-user.target`, so an operator can `systemctl enable` it. The package itself never
+  enables it (the tests assert `is-enabled` is `disabled`).
+- **The user and the scripts.** `preinstall` creates the `cirak` group and user idempotently (`--system`,
+  no home, `nologin`/`false`). `postinstall` runs `systemctl daemon-reload` and prints the next steps; it never
+  enables, starts or restarts. `preremove` stops the unit only for deb `$1 = remove` and rpm `$1 -eq 0`; it does
+  nothing for `upgrade`, `failed-upgrade`, `deconfigure` or rpm `$1 -ge 1`. `postremove` never calls systemctl;
+  its `purge` branch removes only `/etc/cirak`. State directories and the user are never removed by a script.
+- **The container tests.** `tests/packages/run.sh` builds v1.0.0 and v1.0.1 from the real `.goreleaser.yaml`
+  (only the snapshot version differs), builds disposable `debian:bookworm-slim` (`.deb`) and `fedora:41`
+  (`.rpm`) images with systemd as PID 1, and runs `container-test.sh` in each. Both containers passed on
+  2026-11-26 on linux/arm64: install created the user and every file with the expected mode; `systemd-analyze
+  verify` accepted the unit; `Restart=no` was visible in the packaged unit and in `systemctl show`; a non-zero
+  exit stayed failed with `NRestarts=0`; an upgrade left the unit active with the same main PID and `NRestarts=0`
+  and kept the edited conffile; a removal stopped the unit and kept the state directories and the user; a deb
+  purge removed only `/etc/cirak`. The CI job `Package install tests` runs the same script on linux/amd64.
+- **The §1.4 UNVERIFIED row is now proven:** the unit is an ordinary `contents` file and the system user is
+  created by `preinstall`; both install and behave as the row predicted in the two containers. The remaining
+  UNVERIFIED items: no production host and no real service configuration were used; the container's `systemd
+  analyze` and install are not a live-host validation; rpm has no purge, so `rpm -e` removes the packaged config
+  file while the state directories and the user stay (only Debian's `dpkg -P` exercises "purge removes only
+  `/etc/cirak`").
+- **RED mutations (all turned the suite RED).** `Restart=on-failure` in the unit: the file check fails.
+  An unconditional `preremove` stop: the script check fails and the Debian container upgrade reports "the
+  upgrade stopped the unit". A `postinstall` that restarts: the script check fails and the Debian container
+  upgrade reports a changed main PID.

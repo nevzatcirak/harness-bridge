@@ -28,6 +28,67 @@ builds:
       - arm64
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+# ADR-026 section 4.4 (slice S4): the .deb and .rpm packages. The built binary goes to /usr/bin through bindir;
+# the unit, the example environment file and the docs are ordinary contents. The maintainer scripts are guarded
+# on the upgrade argument (preremove stops only on a removal), and the package never enables, starts or restarts
+# the service. The unit is Restart=no: any restart policy is an ADR-010 amendment and a maintainer decision.
+nfpms:
+  - id: cirak
+    package_name: cirak
+    vendor: Nevzat Cirak
+    homepage: https://github.com/nevzatcirak/cirak
+    maintainer: Nevzat Cirak <nevzatcirak17@gmail.com>
+    description: |-
+      Cirak is a local MCP bridge for coding-agent sessions. This package ships the
+      cirak binary, a systemd unit and an example environment file. It does not
+      enable, start or restart the service, and it never restarts it automatically.
+    license: Apache-2.0
+    section: admin
+    priority: optional
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: packaging/cirak.service
+        dst: /usr/lib/systemd/system/cirak.service
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: packaging/cirak.env.example
+        dst: /etc/cirak/cirak.env.example
+        type: config|noreplace
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: LICENSE
+        dst: /usr/share/doc/cirak/LICENSE
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: README.md
+        dst: /usr/share/doc/cirak/README.md
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: docs/deploy/*.md
+        dst: /usr/share/doc/cirak/
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+    scripts:
+      preinstall: packaging/scripts/preinstall.sh
+      postinstall: packaging/scripts/postinstall.sh
+      preremove: packaging/scripts/preremove.sh
+      postremove: packaging/scripts/postremove.sh
+    rpm:
+      group: Applications/System
+
 # Archive names carry no version, so that .../releases/latest/download/<name> resolves for install.sh; the tag
 # is in the download path.
 archives:
