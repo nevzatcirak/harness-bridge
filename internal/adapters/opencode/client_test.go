@@ -126,11 +126,17 @@ func TestErrorsAndNoRedirectOrLeak(t *testing.T) {
 			}
 		})
 	}
-	for _, body := range []string{"bad-json", strings.Repeat("x", (8<<20)+1)} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
-		c, _ := New(server.URL, "", "")
-		if _, e := c.List(context.Background()); e == nil {
-			t.Fatal("invalid response accepted")
+	for _, c := range []struct {
+		body string
+		want error
+	}{
+		{"bad-json", ErrInvalidResponse},
+		{strings.Repeat("x", (8<<20)+1), ErrResponseTooLarge},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(c.body)) }))
+		cl, _ := New(server.URL, "", "")
+		if _, e := cl.List(context.Background()); e == nil || !errors.Is(e, c.want) {
+			t.Fatalf("%q: got %v, want %v", c.body[:min(len(c.body), 20)], e, c.want)
 		}
 		server.Close()
 	}

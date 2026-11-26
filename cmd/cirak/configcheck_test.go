@@ -452,7 +452,7 @@ func TestCheckReusesTheRuntimeValidators(t *testing.T) {
 	check := calls("configcheck.go")
 	for _, want := range []string{"readSecret", "ingressWithToken", "readIngressAt", "claudeConfig", "lifecycleConfig", "permissionRelayMode",
 		"permissionIncarnationMode", "dashboard.ConfigFromEnv", "dashboard.RedactorFromEnv", "security.New", "security.NewLifecycleRoots",
-		"opencode.New", "claudecode.ParseVersions", "config.ValidACLSession", "loadEffective", "cirakEnv"} {
+		"opencode.New", "claudecode.ParseVersions", "config.ValidACLSession", "execution.ParseLivenessEnv", "loadEffective", "cirakEnv"} {
 		if !check[want] {
 			t.Errorf("config check does not call %s: the rule would be copied or dropped", want)
 		}
@@ -464,7 +464,7 @@ func TestCheckReusesTheRuntimeValidators(t *testing.T) {
 			start[k] = true
 		}
 	}
-	for _, want := range []string{"ingressWithToken", "readIngressAt", "lifecycleConfig", "claudeConfig", "readSecret", "loadEffective", "security.New", "permissionRelayMode"} {
+	for _, want := range []string{"ingressWithToken", "readIngressAt", "lifecycleConfig", "claudeConfig", "readSecret", "loadEffective", "security.New", "permissionRelayMode", "execution.ParseLivenessEnv"} {
 		if !start[want] && !(want == "claudeConfig" && calls("claude.go")[want]) {
 			t.Errorf("the start path does not use %s", want)
 		}

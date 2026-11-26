@@ -214,6 +214,9 @@ func TestMainResolvesTheEnvironmentFirst(t *testing.T) {
 		{"loadStartup runs before the scan", "envOnly, warnings, err := cirakEnv(", "token0, cfg0, err0 := loadStartup(os.Getenv)\n\t_, _, _ = token0, cfg0, err0\n\tenvOnly, warnings, err := cirakEnv("},
 		{"a reader runs before the config layer", "token, cfg, err := loadStartup(env)", "token, cfg, err := loadStartup(envOnly)"},
 		{"the scan result is not checked", "envOnly, warnings, err := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}", "envOnly, warnings, _ := cirakEnv(os.Getenv, legacyPhaseFor(version.Version()))"},
+		// ADR-017 A2 S3: the thresholds are validated but the Manager runs with the defaults.
+		{"the Manager runs without the parsed thresholds", "runs := execution.NewWithLiveness(client, liveness)", "runs := execution.New(client)\n\t_ = liveness"},
+		{"the Manager gets fresh defaults instead of the parsed thresholds", "runs := execution.NewWithLiveness(client, liveness)", "runs := execution.NewWithLiveness(client, execution.LivenessConfig{})"},
 	} {
 		src := string(raw)
 		if strings.Count(src, m.old) != 1 {
@@ -346,5 +349,90 @@ func mainEnvProblems(src string) []string {
 		}
 		return true
 	})
+	// ADR-017 A2 S3 (D32 Q13): main must parse the operator thresholds from the effective
+	// environment before the native client, the writer lock and the adapter, and hand the parsed
+	// values to the Manager. A daemon that validated them but built New(client) would silently run
+	// with the defaults while the config check refused invalid values.
+	parsePos, parseName := token.NoPos, ""
+	envPos, envName := token.NoPos, ""
+	clientPos, lockPos, claudePos := token.NoPos, token.NoPos, token.NoPos
+	withLivenessPos := token.NoPos
+	var withLivenessArg ast.Expr
+	ast.Inspect(body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok {
+				if sel, ok := as.Rhs[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "Get" {
+					envPos, envName = as.Pos(), id.Name
+				}
+			}
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) >= 1 && len(as.Rhs) == 1 {
+			if c, ok := as.Rhs[0].(*ast.CallExpr); ok {
+				if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+					if x, ok := sel.X.(*ast.Ident); ok && x.Name == "execution" {
+						switch sel.Sel.Name {
+						case "ParseLivenessEnv":
+							if id, ok := as.Lhs[0].(*ast.Ident); ok && len(c.Args) == 1 {
+								parsePos, parseName = c.Pos(), id.Name
+								if arg, ok := c.Args[0].(*ast.Ident); !ok || envName == "" || arg.Name != envName {
+									problems = append(problems, "ParseLivenessEnv is not given the effective environment")
+								}
+							}
+						case "NewWithLiveness":
+							withLivenessPos = c.Pos()
+							if len(c.Args) == 2 {
+								withLivenessArg = c.Args[1]
+							}
+						}
+					}
+				}
+			}
+		}
+		if c, ok := n.(*ast.CallExpr); ok {
+			switch fn := c.Fun.(type) {
+			case *ast.SelectorExpr:
+				if x, ok := fn.X.(*ast.Ident); ok && x.Name == "opencode" && fn.Sel.Name == "New" {
+					if clientPos == token.NoPos {
+						clientPos = c.Pos()
+					}
+				}
+			case *ast.Ident:
+				switch fn.Name {
+				case "acquireOpenCodeOwnership":
+					if lockPos == token.NoPos {
+						lockPos = c.Pos()
+					}
+				case "openClaude":
+					if claudePos == token.NoPos {
+						claudePos = c.Pos()
+					}
+				}
+			}
+		}
+		return true
+	})
+	switch {
+	case parsePos == token.NoPos || parseName == "":
+		problems = append(problems, "main never calls execution.ParseLivenessEnv")
+	case withLivenessPos == token.NoPos:
+		problems = append(problems, "main never calls execution.NewWithLiveness: the parsed thresholds would be discarded")
+	default:
+		if id, ok := withLivenessArg.(*ast.Ident); !ok || id.Name != parseName {
+			problems = append(problems, "execution.NewWithLiveness does not receive the parsed thresholds")
+		}
+		for _, after := range []struct {
+			name string
+			pos  token.Pos
+		}{
+			{"opencode.New", clientPos}, {"acquireOpenCodeOwnership", lockPos}, {"openClaude", claudePos}, {"execution.NewWithLiveness", withLivenessPos},
+		} {
+			if after.pos != token.NoPos && parsePos > after.pos {
+				problems = append(problems, "the operator thresholds are parsed after "+after.name)
+			}
+		}
+	}
+	if envPos == token.NoPos || (parsePos != token.NoPos && envPos > parsePos) {
+		problems = append(problems, "the thresholds are parsed before the effective environment is loaded")
+	}
 	return problems
 }

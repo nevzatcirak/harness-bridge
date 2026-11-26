@@ -19,7 +19,8 @@ func TestParseAcceptsTheDocumentedShape(t *testing.T) {
 	  "lifecycle": {"config_file": "/etc/cirak/lifecycle.json"}, "overlay": {"dir": "/var/lib/cirak/overlay"},
 	  "permission": {"relay": "off", "incarnation": "off"},
 	  "dashboard": {"socket": "/run/cirak-dashboard/dash.sock", "addr": "", "redact_extra": []},
-	  "limits": {"token_max_lifetime": "168h", "claude_max_turns": 20, "claude_max_budget_usd": "", "claude_run_max": "15m"}
+	  "limits": {"token_max_lifetime": "168h", "claude_max_turns": 20, "claude_max_budget_usd": "", "claude_run_max": "15m"},
+	  "liveness": {"no_progress_s": 120, "tool_long_s": 600}
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +115,8 @@ func TestEveryKeyIsInTheSchemaOnceWithADistinctEnvName(t *testing.T) {
 			t.Errorf("Lookup(%s)", k.Path)
 		}
 	}
-	if len(Keys) != 35 {
-		t.Errorf("ADR-027 section 1.3 has 35 keys, the schema has %d", len(Keys))
+	if len(Keys) != 37 {
+		t.Errorf("ADR-027 section 1.3 plus the ADR-017 A2 liveness keys has 37 keys, the schema has %d", len(Keys))
 	}
 	// Exactly one key is display-only (section 1.2).
 	var open []string

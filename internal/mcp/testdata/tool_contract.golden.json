@@ -595,6 +595,25 @@
                     "stall_suspected": {
                       "type": "boolean"
                     },
+                    "thresholds": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "no_progress_s": {
+                          "type": "integer"
+                        },
+                        "tool_long_s": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "no_progress_s",
+                        "tool_long_s"
+                      ],
+                      "type": [
+                        "null",
+                        "object"
+                      ]
+                    },
                     "tool": {
                       "additionalProperties": false,
                       "properties": {
@@ -770,6 +789,12 @@
                 },
                 "state": {
                   "type": "string"
+                },
+                "unavailable_since": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
                 },
                 "unresolved": {
                   "additionalProperties": false,
@@ -1047,6 +1072,25 @@
                 "stall_suspected": {
                   "type": "boolean"
                 },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
                 "tool": {
                   "additionalProperties": false,
                   "properties": {
@@ -1222,6 +1266,12 @@
             },
             "state": {
               "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
             },
             "unresolved": {
               "additionalProperties": false,
@@ -1844,6 +1894,25 @@
                 "stall_suspected": {
                   "type": "boolean"
                 },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
                 "tool": {
                   "additionalProperties": false,
                   "properties": {
@@ -2019,6 +2088,12 @@
             },
             "state": {
               "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
             },
             "unresolved": {
               "additionalProperties": false,
@@ -3010,6 +3085,25 @@
                 "stall_suspected": {
                   "type": "boolean"
                 },
+                "thresholds": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "no_progress_s": {
+                      "type": "integer"
+                    },
+                    "tool_long_s": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "no_progress_s",
+                    "tool_long_s"
+                  ],
+                  "type": [
+                    "null",
+                    "object"
+                  ]
+                },
                 "tool": {
                   "additionalProperties": false,
                   "properties": {
@@ -3185,6 +3279,12 @@
             },
             "state": {
               "type": "string"
+            },
+            "unavailable_since": {
+              "type": [
+                "null",
+                "string"
+              ]
             },
             "unresolved": {
               "additionalProperties": false,
