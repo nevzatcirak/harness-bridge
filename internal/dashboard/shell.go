@@ -25,10 +25,15 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <span class="brand">Cirak</span>
 <details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
 <li><a href="/"{{if eq .Active "sessions"}} aria-current="page"{{end}}>Sessions</a></li>
+<li><a href="/executions"{{if eq .Active "executions"}} aria-current="page"{{end}}>Executions</a></li>
+<li><a href="/catalog"{{if eq .Active "catalog"}} aria-current="page"{{end}}>Catalog and archived</a></li>
 <li><a href="/audit"{{if eq .Active "audit"}} aria-current="page"{{end}}>Audit</a></li>
+<li><a href="/health"{{if eq .Active "health"}} aria-current="page"{{end}}>About and health</a></li>
 </ul></nav></details>
 <span class="spacer"></span>
-<span class="label">Read-only</span>
+{{if .TopLabel}}<span class="label" id="instance">{{.TopLabel}}</span>
+{{end}}{{with .TopBadge}}<span class="{{.Class}}" title="{{.Title}}">{{.Text}}</span>
+{{end}}<span class="label">Read-only</span>
 </div></header>
 <main id="content" tabindex="-1" class="wrap"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}" data-sig="{{.Sig}}"{{end}}{{end}}>
 <p class="banner" id="stale" role="status" hidden></p>
@@ -68,6 +73,74 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 {{end}}</tbody></table></div>
 {{if .Truncate}}<p class="label">{{.Truncate}}</p>{{end}}{{end}}
 </div>
+</div>
+</section>{{end}}
+{{if .ExecPage}}<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Executions</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn" href="{{.ToggleHref}}">{{.ToggleText}}</a>
+<a class="btn btn--primary" href="{{.RefreshHref}}">Refresh</a>
+<span class="label" id="status">{{if .CountText}}{{.CountText}}, updated <time datetime="{{.StatusISO}}" title="{{.StatusAbs}}">{{.StatusRel}}</time>{{end}}</span>
+</div>
+{{with .State}}<div class="{{.Class}}"><h2>{{.Heading}}</h2><p>{{.Text}}</p>{{if .LinkHref}}<a class="btn" href="{{.LinkHref}}">{{.LinkText}}</a>{{end}}</div>
+{{else}}<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-main">
+<table class="executions">
+<caption class="visually-hidden">Executions of the sessions this Bridge lists, newest first</caption>
+<thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Session</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+<tbody>
+{{range .ExecRows}}<tr>
+<td><span class="{{.StateClass}}" title="{{.State}}">{{.StateLabel}}</span>{{if .Current}} <span class="label">current</span>{{end}}</td>
+<td><code>{{.ID}}</code></td>
+<td>{{if .SessionHref}}<a href="{{.SessionHref}}"><code>{{.SessionText}}</code></a>{{else}}<code>{{.SessionText}}</code>{{end}}</td>
+<td>{{if .StartedISO}}<time datetime="{{.StartedISO}}" title="{{.Started}}">{{.StartedRel}}</time>{{else}}-{{end}}</td>
+<td class="num">{{.Duration}}</td>
+<td>{{if .Live.ChipLabel}}<span class="{{.Live.ChipClass}}"{{if .Live.ChipTitle}} title="{{.Live.ChipTitle}}"{{end}}>{{.Live.ChipLabel}}</span>{{else}}<span class="label">{{.Live.Text}}</span>{{end}}</td>
+</tr>
+{{end}}</tbody></table></div>{{end}}
+<p class="label">Newest first. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
+</div>
+</section>{{end}}
+{{if .CatalogPage}}<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Catalog and archived</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn" href="{{.ToggleHref}}">{{.ToggleText}}</a>
+<a class="btn btn--primary" href="{{.RefreshHref}}">Refresh</a>
+<span class="label" id="status">{{if .CountText}}{{.CountText}}, updated <time datetime="{{.StatusISO}}" title="{{.StatusAbs}}">{{.StatusRel}}</time>{{end}}</span>
+</div>
+<p class="label">Sessions grouped by the lifecycle root that contains them. The root is a label only: it widens nothing.</p>
+{{with .State}}<div class="{{.Class}}"><h2>{{.Heading}}</h2><p>{{.Text}}</p>{{if .LinkHref}}<a class="btn" href="{{.LinkHref}}">{{.LinkText}}</a>{{end}}</div>{{end}}
+{{range .Groups}}<section aria-labelledby="{{.Anchor}}">
+<h2 id="{{.Anchor}}">{{if .Root}}<code>{{.Root}}</code>{{else}}No lifecycle root{{end}} <span class="label">{{.CountTxt}}</span></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="{{.Anchor}}">
+<table>
+<caption class="visually-hidden">Sessions {{if .Root}}under one lifecycle root{{else}}under no lifecycle root{{end}}</caption>
+<thead><tr><th scope="col">Harness</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Last activity</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td><span class="badge">{{.HarnessName}}</span></td>
+<td>{{if .Title}}{{if .Href}}<a href="{{.Href}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}{{if .Archived}} <span class="chip chip--outline">Archived</span>{{end}}<br><code>{{.ID}}</code>{{else}}{{if .Href}}<a href="{{.Href}}">{{.ID}}</a>{{else}}<code>{{.ID}}</code>{{end}}{{if .Archived}} <span class="chip chip--outline">Archived</span>{{end}}{{end}}</td>
+<td><span class="{{.StateClass}}" title="{{.State}}">{{.StateLabel}}</span></td>
+<td>{{if .LastISO}}<time datetime="{{.LastISO}}" title="{{.LastActivity}}">{{.LastRel}}</time>{{else}}-{{end}}</td>
+</tr>
+{{end}}</tbody></table></div>
+</section>
+{{end}}{{if .Truncate}}<p class="label">{{.Truncate}}</p>{{end}}
+</div>
+</section>{{end}}
+{{if .HealthPage}}<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">About and health</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn btn--primary" href="{{.RefreshHref}}">Refresh</a>
+<span class="label" id="status">{{if .StatusISO}}Updated <time datetime="{{.StatusISO}}" title="{{.StatusAbs}}">{{.StatusRel}}</time>{{end}}</span>
+</div>
+{{with .State}}<div class="{{.Class}}"><h2>{{.Heading}}</h2><p>{{.Text}}</p>{{if .LinkHref}}<a class="btn" href="{{.LinkHref}}">{{.LinkText}}</a>{{end}}</div>
+{{else}}<dl class="kv">
+{{range .HealthRows}}<dt>{{.Label}}</dt><dd>{{template "parts" .Parts}}</dd>
+{{end}}</dl>
+<p class="label">Reachability is the outcome of the last session-list read: this page makes no native probe of its own.</p>{{end}}
 </div>
 </section>{{end}}
 {{with .Detail}}<section class="session cards" aria-labelledby="h-main">
@@ -130,8 +203,11 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <caption class="visually-hidden">The audit ring of this Bridge process, newest first</caption>
 <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Error</th><th scope="col">Session</th><th scope="col">Execution</th><th scope="col">Principal</th><th scope="col">Other</th></tr></thead>
 <tbody id="audit-rows">
-{{range .Audit}}<tr><td>{{.Time}}</td><td>{{.Event}}</td><td>{{.Outcome}}</td><td>{{.Error}}</td><td>{{.Session}}</td><td>{{.Execution}}</td><td>{{.Principal}}</td><td>{{.Other}}</td></tr>
-{{end}}</tbody></table></div>{{end}}{{end}}
+{{range .Audit}}<tr><td>{{.Time}}</td><td><span class="{{.EventClass}}" title="{{.Event}}">{{.EventLabel}}</span></td><td>{{if .OutcomeLabel}}<span class="{{.OutcomeClass}}" title="{{.Outcome}}">{{.OutcomeLabel}}</span>{{end}}</td><td>{{.Error}}</td><td>{{.Session}}</td><td>{{.Execution}}</td><td>{{.Principal}}</td><td>{{.Other}}</td></tr>
+{{end}}</tbody></table></div>
+{{if .AuditPager.Show}}<nav aria-label="Audit pages"><p class="label">{{.AuditPager.Range}}</p>
+{{if .AuditPager.NewerHref}}<a class="btn" href="{{.AuditPager.NewerHref}}">Newer entries</a> {{end}}{{if .AuditPager.OlderHref}}<a class="btn" href="{{.AuditPager.OlderHref}}">Older entries</a>{{end}}</nav>{{end}}
+{{end}}{{end}}
 </div>
 </section>{{end}}
 </main>
@@ -151,5 +227,5 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 {{end}}</dl>
 <p class="label">{{.Note}}</p>{{end}}
 {{define "perm"}}<span class="{{chipClass .Tone}}">{{.Label}}</span> {{template "parts" .Parts}}{{end}}
-{{define "parts"}}{{range .}}{{if eq .Kind "chip"}}<span class="{{chipClass .Tone}}">{{.Text}}</span>{{else if eq .Kind "code"}}<code>{{.Text}}</code>{{else if eq .Kind "time"}}<time datetime="{{.ISO}}" title="{{.Abs}}">{{.Rel}}</time>, {{.Abs}}{{else}}{{.Text}}{{end}}{{end}}{{end}}
+{{define "parts"}}{{range .}}{{if eq .Kind "chip"}}<span class="{{chipClass .Tone}}">{{.Text}}</span>{{else if eq .Kind "code"}}<code>{{.Text}}</code>{{else if eq .Kind "time"}}<time datetime="{{.ISO}}" title="{{.Abs}}">{{.Rel}}</time>, {{.Abs}}{{else if eq .Kind "abstime"}}<time datetime="{{.ISO}}">{{.Abs}}</time>{{else}}{{.Text}}{{end}}{{end}}{{end}}
 `))

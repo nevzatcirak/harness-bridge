@@ -1349,7 +1349,9 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
 - **Routes:** `/` (session list), `/session/<harness>/<id>` (detail, executions, diffs),
   `/session/<harness>/<id>/turn/<message>` (one turn's diff), `/api/state` and
   `/api/state/session/<harness>/<id>` (the JSON view models the page polls while it is visible: 5 s list, 2 s detail),
-  `/audit` and `/api/audit` (the 1000-entry audit ring), `/dashboard.css`, `/dashboard.js`.
+  `/executions`, `/catalog` and `/health` with their JSON twins `/api/state/executions`, `/api/state/catalog` and
+  `/api/state/health` (ADR-023 A1, slice S3a), `/audit` (`?page=N`) and `/api/audit` (the 1000-entry audit ring),
+  `/dashboard.css`, `/dashboard.js`.
 - **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
   whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
   other than `GET`/`HEAD` is 405; four data requests and eight requests in flight at once, the rest
@@ -1377,6 +1379,39 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   clock, so the ETag stays stable): `harness_name`, `state_label`, `state_tone`, `guard_text`, `path_short`,
   `last_activity_iso` (omitted when unknown); the list model also carries `count` and `count_text`.
   The page polls only while the tab is visible and sends one request when it becomes visible again (A1.7).
+- **Executions, catalog, health, audit and the top bar (ADR-023 A1, slice S3a).** Every page is server-rendered and
+  needs no script: `dashboard.js` is unchanged (the 16 KiB cap is not touched), and the Refresh link is the no-JS
+  refresh of A1.7. **The poll intervals A1.7 names for these pages (executions and catalog 5 s, health 30 s, the first
+  audit page 10 s) are not implemented**: that needs script bytes the cap does not leave; the JSON twins exist and obey
+  the limiter, the ETag and the cache, ready for a later slice.
+  - **`/executions`** lists the executions of **exactly the sessions the Sessions list lists for the request**: the
+    Source's `Executions` filters the Manager's snapshot by the scope set the same call chain produces (the ACL, the
+    archived flag, the `claudecode:` rows), **before** the Sessions page's 200-row display cap (so an execution of the
+    201st session is listed), newest first, capped at 200 **after** the filter. An execution whose session is not in
+    the scope set is never shown, with or without `?archived=1`; an archived session's executions appear only with it.
+    The Session column is built from the harness-qualified session ID split at its first colon and links to
+    `/session/<harness>/<id>`; an ID the routes would refuse is shown without a link. The page says that it includes
+    sessions beyond the first 200 shown on the Sessions page, that a restart empties the list (ADR-010) and that archived
+    sessions' executions are behind the archived filter. No new native read.
+  - **`/catalog`** groups the Sessions list by the lifecycle root that contains each session (a label only: it widens
+    nothing, ADR-022 6.1), roots in alphabetical order and the sessions under none last, with the archived filter and
+    the Sessions page's 200-row cap. It uses `Source.Sessions`: there is no catalog-specific reader.
+  - **`/health`** is a key/value list: the version, the build (the VCS revision, or "unknown"), the connector token
+    expiry (remote mode only, as an absolute time), the lifecycle, the permission relay and Claude Code as On/Off chips
+    (one row each), the reachability of each harness **taken from the outcome of the last session-list read** (no native
+    probe of its own; a harness not yet read is "Not read"), and the audit feed (on/off and fill). A field the Source does
+    not report is left out, not defaulted. `Source.Health` carries no secret: the token's expiry is a timestamp from the
+    read-only getter `security.Remote.Expires()`, never the token, the Host or the origin.
+  - **`/audit`** shows the ring in pages of 100 (`?page=N`: digits only, 1 to the last page; anything else is page 1 and
+    is never reflected), newest first. The event is a neutral chip and the outcome a chip from a fixed label map (a test
+    scans the AUDIT-01 writers, so a new outcome without a label fails); an unknown word is shown escaped in a neutral
+    chip. The ring is the process audit and is **not** ACL-filtered (A1.0). `/api/audit` is unchanged (the whole ring).
+  - **The top bar** carries, after the five destinations, the optional instance label (`CIRAK_DASHBOARD_LABEL`, at most
+    40 bytes of letters, digits, space, dot, underscore and hyphen, default none; an invalid value is a startup error
+    and a `config check` refusal that names the variable, never the value; it is not an ADR-027 schema key, only a name
+    `config check` knows) and, in remote mode only, the connector-token expiry badge: neutral, warn under 60 minutes,
+    error once expired, the absolute time in its title. The badge is computed from `Source.Health`; a Source that cannot
+    answer leaves it out and the page still renders.
 - **Session detail (ADR-023 A1, slice S2).** The header card (copyable ID: the button is hidden until the script runs
   and the clipboard can be written, the ID is selectable text), the **execution timeline** (state chip, execution,
   start with its absolute time, duration, a liveness cell), and the changes of the working tree (totals, the redaction

@@ -85,6 +85,12 @@ func timePart(t time.Time) part {
 	return part{Kind: "time", ISO: isoTime(t), Abs: fmtTime(t)}
 }
 
+// absTimePart is a time shown only as its absolute form: a moment in the FUTURE (a token's expiry) has no honest
+// "N ago" form, and the relative text of the other part kinds clamps a future time to "0 s ago".
+func absTimePart(t time.Time) part {
+	return part{Kind: "abstime", ISO: isoTime(t), Abs: fmtTime(t)}
+}
+
 // reportRow is one key/value row of the report.
 type reportRow struct {
 	Label string `json:"label"`
@@ -321,7 +327,8 @@ func permissionRow(p *PermissionSummary) *permView {
 		}
 		v.Parts = []part{textPart(fmt.Sprintf("%d %s. %s not attributed to an execution by this Bridge, so no details are shown. Answer it in OpenCode.", n, noun, verb))}
 		if n == 0 {
-			v.Parts = []part{textPart("A native permission request is pending. It is not attributed to an execution by this Bridge, so no details are shown. Answer it in OpenCode.")}
+			// the Bridge reports a pending request but no count: say the count is not known, never "pending" with a zero
+			v.Parts = []part{textPart("The number of pending native permission requests is not known. They are not attributed to an execution by this Bridge, so no details are shown. Answer them in OpenCode.")}
 		}
 		return v
 	}

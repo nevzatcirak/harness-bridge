@@ -97,6 +97,15 @@ func newRemoteAt(origin, principal string, expires time.Time, maxLifetime time.D
 	return &Remote{origin: origin, host: u.Host, principal: principal, expires: expires, maxLifetime: maxLifetime}, nil
 }
 
+// Expires is the configured connector-token expiry: a read-only getter for the dashboard's About and health page and
+// its top-bar badge (ADR-023 A1.8). It returns a timestamp only: never the token, the origin or the principal.
+func (r *Remote) Expires() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	return r.expires
+}
+
 // LogConfig records the configured expiry and maximum lifetime once at
 // startup. Remote holds no token, so none can be logged here.
 func (p *Remote) LogConfig() {

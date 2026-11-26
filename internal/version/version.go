@@ -60,3 +60,21 @@ func Text() string {
 	bi, ok := debug.ReadBuildInfo()
 	return Detail(bi, ok)
 }
+
+// Build returns the VCS revision the toolchain stamped into this binary and whether the tree was modified, or
+// "" when the build carries no revision (a plain `go test` or `go run` binary).
+func Build() (revision string, modified bool) {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi == nil {
+		return "", false
+	}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	return revision, modified
+}

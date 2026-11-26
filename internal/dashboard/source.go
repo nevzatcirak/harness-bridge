@@ -27,6 +27,10 @@ type Execution struct {
 	Ended   *time.Time
 	// Current marks the newest non-terminal execution of the session.
 	Current bool
+	// SessionID is the harness-qualified session ID the execution belongs to ("opencode:ses_..."), copied from the
+	// Manager. The /executions page builds its session link by splitting it at the first colon; an ID the routes
+	// would refuse renders without a link. Display data: the session detail does not need it and leaves it empty.
+	SessionID string
 	// Liveness is the ADR-017 report block the Bridge already holds for the execution (A1.8): display data, a
 	// copy, never a verdict. nil when the Bridge holds none.
 	Liveness *Liveness
@@ -120,6 +124,35 @@ type SessionDetail struct {
 	Executions []Execution
 }
 
+// Health is what the About and health page shows (ADR-023 A1.4 item 6, A1.8): facts about the process and the
+// outcome of the last session-list read. It has no secret: the connector token's EXPIRY is a timestamp, the token
+// itself, the Host and the origin never reach it. A field that is not known is left out, never defaulted.
+type Health struct {
+	// Version is the version of the binary; Build is its VCS revision ("" when the binary carries none).
+	Version, Build string
+	// TokenExpires is the connector token's expiry in remote mode; nil in local mode (ADR-019: no runtime expiry).
+	TokenExpires *time.Time
+	// Features are the on/off settings the page lists, one row each.
+	Features []Feature
+	// Reach is the reachability of each harness, taken from the outcome of the last session-list read: no extra
+	// native probe is made for it.
+	Reach []Reachability
+}
+
+// Feature is one on/off setting of the Bridge: lifecycle, permission relay, Claude Code.
+type Feature struct {
+	Name string
+	On   bool
+}
+
+// Reachability is the outcome of the last session-list read of one harness: "reachable", "unreachable", or "not
+// read" when no read has happened yet (or the harness is not read at all). At is the time of that read.
+type Reachability struct {
+	Harness string
+	State   string
+	At      time.Time
+}
+
 // Source is the dashboard's only path to data, and it is read-only: every
 // method is a reader and none can mutate (ADR-023 T11). A test pins the method
 // set. Nothing in this package depends on the execution manager or the MCP
@@ -137,6 +170,15 @@ type Source interface {
 	// WorkingTreeDiff reads the native working-tree diff (/vcs/diff) of the session's
 	// approved root: the default source (D17 Q2, Q9). The Bridge runs no git for it.
 	WorkingTreeDiff(ctx context.Context, harness, id string) (DiffResult, error)
+	// Executions lists the executions of the sessions in the SAME scope set the Sessions list produces (the ACL
+	// scope of D17 Q6, the archived flag of D17 Q7 read from the request context), BEFORE the Sessions page's
+	// 200-row display cap, newest first, then capped at 200 AFTER the filter (A1.4 item 3, A1.8). An execution
+	// whose session is not in that set is dropped, never shown. It makes no native read beyond the discovery
+	// the Sessions list already makes.
+	Executions(ctx context.Context) ([]Execution, error)
+	// Health reports the process facts and the reachability taken from the last session-list read (A1.8). It
+	// makes no native call.
+	Health(ctx context.Context) (Health, error)
 }
 
 // NullSource is the source used when no data source is connected.
@@ -164,6 +206,12 @@ func (NullSource) TurnDiff(context.Context, string, string, string) (DiffResult,
 func (NullSource) WorkingTreeDiff(context.Context, string, string) (DiffResult, error) {
 	return DiffResult{}, ErrNotFound
 }
+
+// Executions lists nothing.
+func (NullSource) Executions(context.Context) ([]Execution, error) { return nil, nil }
+
+// Health knows nothing: no data source is connected.
+func (NullSource) Health(context.Context) (Health, error) { return Health{}, nil }
 
 type archivedKey struct{}
 

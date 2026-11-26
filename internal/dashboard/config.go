@@ -16,6 +16,31 @@ type Config struct {
 	// Addr is host:port (CIRAK_DASHBOARD_ADDR); the host must be exactly the
 	// IP literal 127.0.0.1 or ::1.
 	Addr string
+	// Label is the optional instance label of the top bar (CIRAK_DASHBOARD_LABEL, ADR-023 A1.8, Q3): at most 40
+	// bytes of [A-Za-z0-9 ._-], default none. It is display text only and never an authority.
+	Label string
+}
+
+// EnvLabel is the instance-label variable (ADR-026 prefix; ADR-023 A1.8).
+const EnvLabel = "CIRAK_DASHBOARD_LABEL"
+
+// maxLabelBytes bounds the instance label.
+const maxLabelBytes = 40
+
+// ValidLabel reports whether s is an acceptable instance label: empty (none), or at most 40 bytes of letters, digits,
+// space, dot, underscore and hyphen. Anything else (a control character, markup, a path separator) is refused at
+// startup like the redaction variable, so a label can never carry more than plain text.
+func ValidLabel(s string) bool {
+	if len(s) > maxLabelBytes {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // Enabled reports whether any transport is configured. The dashboard is
@@ -25,7 +50,10 @@ func (c Config) Enabled() bool { return c.Socket != "" || c.Addr != "" }
 // ConfigFromEnv reads CIRAK_DASHBOARD_SOCKET and CIRAK_DASHBOARD_ADDR. Setting
 // both is refused: one dashboard has one transport.
 func ConfigFromEnv(env func(string) string) (Config, error) {
-	c := Config{Socket: env("CIRAK_DASHBOARD_SOCKET"), Addr: env("CIRAK_DASHBOARD_ADDR")}
+	c := Config{Socket: env("CIRAK_DASHBOARD_SOCKET"), Addr: env("CIRAK_DASHBOARD_ADDR"), Label: env(EnvLabel)}
+	if !ValidLabel(c.Label) {
+		return Config{}, errors.New(EnvLabel + " must be at most 40 bytes of letters, digits, space, dot, underscore and hyphen")
+	}
 	if c.Socket != "" && c.Addr != "" {
 		return Config{}, errors.New("set only one of CIRAK_DASHBOARD_SOCKET and CIRAK_DASHBOARD_ADDR")
 	}

@@ -98,7 +98,7 @@ func TestV2S2LabelMapsAreTotalOverTheKnownWords(t *testing.T) {
 // The maps cover what the Bridge can actually emit: every reason word assigned in internal/execution is in a map,
 // so a reason added there without a label fails here.
 func TestV2S2LabelMapsCoverEveryWordTheManagerEmits(t *testing.T) {
-	files, err := filepath.Glob("../execution/liveness*.go")
+	files, err := filepath.Glob("../execution/*.go") // every non-test source: liveness.go, liveness_failure.go, claude_liveness.go, ...
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no execution sources found: %v", err)
 	}
@@ -318,7 +318,11 @@ func TestV2S2TheSourceTypesCarryNoPatternAndNoNativeText(t *testing.T) {
 		{Liveness{}, "CauseHint CauseSource DegradationReason Explanation LastNativeProgressAt NativeStatus ObservedAt RetryAttempt RetryNextAt RetryOverdue StallReason StallSuspected Thresholds Tool"},
 		{LivenessTool{}, "Name RunningSince"},
 		{LivenessThresholds{}, "NoProgressS ToolLongS"},
-		{Execution{}, "Current Ended ID Liveness Permission Started State Updated"},
+		{Execution{}, "Current Ended ID Liveness Permission SessionID Started State Updated"},
+		// S3a: the process facts carry a version, a build, a timestamp and flags: never the token, the Host or the origin
+		{Health{}, "Build Features Reach TokenExpires Version"},
+		{Feature{}, "Name On"},
+		{Reachability{}, "At Harness State"},
 	} {
 		if got := strings.Join(fields(c.v), " "); got != c.want {
 			t.Errorf("%T has the fields %q, want %q", c.v, got, c.want)
@@ -439,8 +443,9 @@ func TestV2S2DiffStates(t *testing.T) {
 func TestV2S2SplitDiffClassifiesLines(t *testing.T) {
 	cases := []struct{ in, class, text string }{
 		{"+added", "ln add", "+added"}, {"-removed", "ln del", "-removed"}, {" context", "ln", " context"},
-		{"@@ -1 +1 @@", "ln hunk", "@@ -1 +1 @@"}, {"+++ b/x", "ln hunk", "+++ b/x"}, {"--- a/x", "ln hunk", "--- a/x"},
-		{"\\ No newline at end of file", "ln hunk", "\\ No newline at end of file"}, {"", "ln", " "}, {"diff --git a/x b/x", "ln", "diff --git a/x b/x"},
+		{"@@ -1 +1 @@", "ln hunk", "@@ -1 +1 @@"}, {"\\ No newline at end of file", "ln hunk", "\\ No newline at end of file"}, {"", "ln", " "},
+		// a lone "+++"/"---" line is not a header pair: it is content (a header needs its position and its partner)
+		{"+++ b/x", "ln add", "+++ b/x"}, {"--- a/x", "ln del", "--- a/x"},
 	}
 	for _, c := range cases {
 		got := splitDiff(c.in + "\n")
@@ -453,6 +458,45 @@ func TestV2S2SplitDiffClassifiesLines(t *testing.T) {
 	}
 	if got := splitDiff("+a\n-b"); len(got) != 2 {
 		t.Errorf("a patch without a final newline: %+v", got)
+	}
+}
+
+// #568 P3-1 and P3-8: headers are recognised by position and shape. Content lines that merely look like headers
+// ("--- foo" for a removed "-- foo", "+++ foo" for an added "++ foo") are tinted as changes; "diff --git" and the
+// extended header lines are muted.
+func TestV2S2SplitDiffRecognisesHeadersByPositionAndShape(t *testing.T) {
+	classes := func(patch string) string {
+		var out []string
+		for _, l := range splitDiff(patch) {
+			switch l.Class {
+			case "ln hunk":
+				out = append(out, "H")
+			case "ln add":
+				out = append(out, "+")
+			case "ln del":
+				out = append(out, "-")
+			default:
+				out = append(out, ".")
+			}
+		}
+		return strings.Join(out, "")
+	}
+	for name, c := range map[string]struct{ patch, want string }{
+		"a removed SQL comment inside a hunk":      {"@@ -1 +1 @@\n--- foo\n+++ bar\n", "H-+"},
+		"the same pair after a context line":       {"@@ -1,2 +1,2 @@\n ctx\n--- foo\n+++ bar\n", "H.-+"},
+		"headers before the first hunk":            {"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", "HHH-+"},
+		"a git header block":                       {"diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", "HHHHH-+"},
+		"a second file resets the header state":    {"diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/y b/y\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-c\n+d\n", "HHHH-+HHHH-+"},
+		"a new file":                               {"diff --git a/n b/n\nnew file mode 100644\nindex 0..1\n--- /dev/null\n+++ b/n\n@@ -0,0 +1 @@\n+x\n", "HHHHHH+"},
+		"a deleted file and a rename":              {"diff --git a/o b/n\nsimilarity index 90%\nrename from o\nrename to n\n", "HHHH"},
+		"a binary notice":                          {"diff --git a/b b/b\nBinary files a/b and b/b differ\n", "HH"},
+		"a lone removed line starting with dashes": {"--- only\n", "-"},
+		"added content starting with plus signs":   {"@@ -1 +1 @@\n+++ not a header\n", "H+"},
+		"no newline note":                          {"@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n", "H-H+"},
+	} {
+		if got := classes(c.patch); got != c.want {
+			t.Errorf("%s: %q -> %s, want %s", name, c.patch, got, c.want)
+		}
 	}
 }
 
@@ -647,5 +691,43 @@ func TestV2S2CopyableIDIsSelectableWithoutScript(t *testing.T) {
 	}
 	if regexp.MustCompile(`(?i)\.btn\[hidden\]\s*\{[^}]*display:\s*none`).MatchString(readCSS(t, embeddedCSS)) == false {
 		t.Error("a hidden button is not removed from the layout")
+	}
+}
+
+// #568 P3-7: an unattributed row with no count says the count is not known; it never says "pending" with a zero.
+func TestV2S2UnattributedPermissionWithoutACountSaysItIsUnknown(t *testing.T) {
+	p := permissionRow(&PermissionSummary{Count: 0})
+	var txt string
+	for _, x := range p.Parts {
+		txt += x.Text
+	}
+	if !strings.Contains(txt, "The number of pending native permission requests is not known") || strings.Contains(txt, "0 pending") || strings.Contains(txt, "is pending") {
+		t.Errorf("the zero-count row says: %q", txt)
+	}
+}
+
+// #569 P3-1: the 64-rune bound on the pending-permission tool and kind, with a long input.
+func TestV2S2PermissionToolAndKindAreBoundedTo64Runes(t *testing.T) {
+	long := strings.Repeat("é", 200)
+	p := permissionRow(&PermissionSummary{Count: 1, Attributed: true, Tool: long, Kind: long, PatternCount: 1, Digest: digest64})
+	var codes []string
+	for _, x := range p.Parts {
+		if x.Kind == "code" && x.Text != digest64 {
+			codes = append(codes, x.Text)
+		}
+	}
+	if len(codes) != 2 {
+		t.Fatalf("%d mono values besides the digest", len(codes))
+	}
+	for _, c := range codes {
+		if c != strings.Repeat("é", 64)+"…" {
+			t.Errorf("the value is %d runes, want the 64-rune cut with an ellipsis", len([]rune(c)))
+		}
+	}
+	// and in the rendered page
+	src := s2Source(s2Liveness()["healthy"], &PermissionSummary{Count: 1, Attributed: true, Tool: long, Kind: long, PatternCount: 1, Digest: digest64})
+	_, body := s2Page(t, src, "/session/opencode/ses_demo0001")
+	if strings.Contains(body, strings.Repeat("é", 65)) || strings.Count(body, strings.Repeat("é", 64)+"…") != 2 {
+		t.Error("the page does not show the bounded tool and kind")
 	}
 }

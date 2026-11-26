@@ -35,6 +35,7 @@ type dashNative struct {
 	requests []string
 	hold     chan struct{} // when non-nil, diff reads block until it closes or the request ends
 	history  func(id string) string
+	down     atomic.Bool // when set, every request answers 503 (the harness is unreachable)
 }
 
 func (n *dashNative) log() []string {
@@ -58,6 +59,10 @@ func (n *dashNative) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n.requests = append(n.requests, r.Method+" "+r.URL.RequestURI())
 	hold := n.hold
 	n.mu.Unlock()
+	if n.down.Load() {
+		w.WriteHeader(503)
+		return
+	}
 	if r.Method != http.MethodGet {
 		n.t.Errorf("mutating native request: %s %s", r.Method, r.URL)
 		w.WriteHeader(405)
@@ -106,7 +111,13 @@ func (n *dashNative) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Title: "title " + id, Directory: filepath.Join(n.root, "life", "proj"), Time: json.RawMessage(`{"updated":1700000100000}`)})
 		case "ses_out":
 			_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Directory: n.outside})
+		case "":
+			w.WriteHeader(404)
 		default:
+			if strings.HasPrefix(id, "ses_n") { // the many-session fixture of the executions scope tests
+				_ = json.NewEncoder(w).Encode(opencode.Session{ID: id, Title: "title " + id, Directory: n.root, Time: json.RawMessage(`{"updated":1700000000000}`)})
+				return
+			}
 			w.WriteHeader(404)
 		}
 	default:
