@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -40,7 +41,8 @@ type ih struct {
 	stdin            string
 	svcUID           int // 0: the invoking user is the service user
 	svcName          string
-	stdoutRedirected bool // stdout is not a terminal although stdin is
+	stdoutRedirected bool   // stdout is not a terminal although stdin is
+	goos             string // "" means linux
 	env              map[string]string
 	runErr           error
 	randomBytes      []byte
@@ -98,7 +100,7 @@ func (h *ih) deps() initDeps {
 			i++
 			return r
 		},
-		readPassword: func() (string, error) { return h.passwordTyp, nil },
+		readPassword: func(*bufio.Reader) (string, error) { return h.passwordTyp, nil },
 		run: func(name string, args ...string) error {
 			h.runs = append(h.runs, append([]string{name}, args...))
 			return h.runErr
@@ -113,6 +115,14 @@ func (h *ih) deps() initDeps {
 			return h.stage, nil
 		},
 		home: func() (string, error) { return filepath.Join(h.base, "home"), nil },
+		goos: func() string {
+			if h.goos != "" {
+				return h.goos
+			}
+			return "linux"
+		}(),
+		executable: func() (string, error) { return "/usr/local/bin/cirak", nil },
+		makeTemp:   func(p string) (string, error) { return os.MkdirTemp(h.base, p) },
 	}
 }
 
@@ -578,7 +588,7 @@ func TestInitStagesAndPrintsInstallCommandsWhenTheUIDDiffers(t *testing.T) {
 	if strings.Contains(readF(t, filepath.Join(h.stage, "config.json")), h.expectedToken()) || strings.Contains(h.all(), h.expectedToken()) {
 		t.Error("the token is in the staged config or in --yes output")
 	}
-	if !strings.Contains(out, "cirak config check --config "+cfg) {
+	if !strings.Contains(out, "cirak config check --config "+qt(cfg)) {
 		t.Error("the check step is not printed")
 	}
 }

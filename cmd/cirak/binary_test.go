@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -405,5 +406,96 @@ func TestBinaryPrintEffectiveRedactsCredentials(t *testing.T) {
 		if strings.HasPrefix(line, "INJECTED") {
 			t.Errorf("forged line %q", line)
 		}
+	}
+}
+
+// ---- ADR-027 S3: cirak doctor, as the real process ----
+
+// init writes a config, the real daemon starts from it, and `cirak doctor --smoke` talks to that daemon: an
+// initialize and a tools/list, 12 tools with the default relay. OpenCode is a loopback test server of this test.
+func TestBinaryDoctorSmokeAgainstTheRealDaemon(t *testing.T) {
+	bin := builtBinary(t)
+	oc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/session" {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer oc.Close()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	base := privDir(t)
+	ws := filepath.Join(base, "ws")
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg, tok := filepath.Join(base, "cfg", "config.json"), filepath.Join(base, "cfg", "token")
+	env := []string{"XDG_STATE_HOME=" + filepath.Join(base, "state")}
+	if out, code := run(t, bin, env, "init", "--yes", "--root", ws, "--session", "ses_bin", "--token-file", tok, "--config", cfg, "--listen", addr, "--opencode-url", oc.URL); code != 0 {
+		t.Fatalf("init: exit %d\n%s", code, out)
+	}
+	// before the daemon runs: a warning (nothing listens), and --smoke says no answer, never a failure
+	out, code := run(t, bin, nil, "doctor", "--config", cfg, "--smoke")
+	if code != 1 || !strings.Contains(out, "nothing is listening on "+addr) || !strings.Contains(out, "smoke: no answer from") {
+		t.Fatalf("doctor before the start: exit %d\n%s", code, out)
+	}
+	c := exec.Command(bin, "--config", cfg)
+	c.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	var buf lockedBuffer
+	c.Stdout, c.Stderr = &buf, &buf
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill() })
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	out, code = run(t, bin, nil, "doctor", "--config", cfg, "--smoke")
+	token := strings.TrimSpace(readF(t, tok))
+	_ = c.Process.Signal(syscall.SIGTERM)
+	_ = c.Wait()
+	if code != 0 || !strings.Contains(out, "smoke: initialize and tools/list answered, 12 tools (12 required by the configuration), no prompt sent") ||
+		!strings.Contains(out, "opencode reachable at "+oc.URL) || !strings.Contains(out, "result: all checks pass") {
+		t.Fatalf("doctor against the daemon: exit %d\n%s", code, out)
+	}
+	if strings.Contains(out, token) || strings.Contains(buf.String(), token) {
+		t.Fatal("the token reached the doctor output or the daemon log")
+	}
+}
+
+func TestBinaryDoctorEnvFileAndUsage(t *testing.T) {
+	bin := builtBinary(t)
+	base := privDir(t)
+	ws := filepath.Join(base, "ws")
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tokf := filepath.Join(base, "token")
+	writeFile(t, tokf, strings.Repeat("e", 48)+"\n", 0o600)
+	ef := filepath.Join(base, "unit.env")
+	writeFile(t, ef, "CIRAK_TOKEN_FILE="+tokf+"\nCIRAK_ALLOWED_ROOTS="+ws+"\nCIRAK_ALLOWED_SESSIONS=ses_e\nCIRAK_READ_ONLY=1\nOPENCODE_URL=http://127.0.0.1:1\nUNIT_SECRET=ENVFILE-VALUE-CANARY\n", 0o600)
+	out, code := run(t, bin, []string{"CIRAK_LISTEN=0.0.0.0:1"}, "doctor", "--env-file", ef)
+	if code == 2 || strings.Contains(out, "ENVFILE-VALUE-CANARY") || !strings.Contains(out, "environment source: file") || !strings.Contains(out, "  read: "+ef) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// the shell's non-loopback listen played no part: the unit file is the source
+	if strings.Contains(out, "CIRAK_LISTEN") {
+		t.Errorf("the shell's environment leaked into a --env-file run:\n%s", out)
+	}
+	if _, code := run(t, bin, nil, "doctor", "--nope"); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+	if out, code := run(t, bin, nil, "doctor", "--from-unit", "a b"); code != 2 || !strings.Contains(out, "not a valid unit name") {
+		t.Fatalf("exit %d\n%s", code, out)
 	}
 }

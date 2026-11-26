@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,10 +35,13 @@ import (
 const initUsage = `usage: cirak init [--yes] [--local] [--listen addr] [--root path]... [--session id]... [--opencode-url url]
                   [--service-user name] [--config path] [--token-file path] [--expires RFC3339]
                   [--lifecycle-root path]... [--force]
+                  [--install-service [--launch-daemon] [--claude-home path]] [--no-service]
 
 Interactive by default (a terminal is required); --yes never prompts and needs --root, --session and
 --token-file. A token is generated only when --token-file names a NEW file; an existing file is referenced.
-Local mode only in this release: --remote, --tls-cert, --tls-key and --install-service are refused.
+Local mode only in this release: --remote, --tls-cert and --tls-key are refused. --install-service renders a
+systemd unit (linux) or a launchd plist (macOS) and places it only where you can write it, otherwise it prints
+the install command; init never starts or loads a service.
 `
 
 // Defaults of section 2 item 3: 64 characters, 7 days, and the pair written explicitly.
@@ -62,6 +66,8 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 type initOptions struct {
 	yes, local, remote, force bool
 	installService, noService bool
+	launchDaemon              bool
+	claudeHome                string
 	listen, opencodeURL       string
 	serviceUser, configPath   string
 	tokenFile, expires        string
@@ -88,8 +94,10 @@ func parseInitFlags(args []string, stderr io.Writer) (*initOptions, error) {
 	fs.StringVar(&o.expires, "expires", "", "rotation deadline, RFC3339, within 168h")
 	fs.StringVar(&o.tlsCert, "tls-cert", "", "TLS certificate (not in this release)")
 	fs.StringVar(&o.tlsKey, "tls-key", "", "TLS key (not in this release)")
-	fs.BoolVar(&o.installService, "install-service", false, "install a service (not in this release)")
-	fs.BoolVar(&o.noService, "no-service", false, "install no service (the only mode in this release)")
+	fs.BoolVar(&o.installService, "install-service", false, "write a systemd unit (linux) or a launchd plist (macOS); never starts it")
+	fs.BoolVar(&o.noService, "no-service", false, "install no service (the default)")
+	fs.BoolVar(&o.launchDaemon, "launch-daemon", false, "macOS: a system LaunchDaemon instead of the user LaunchAgent (needs --service-user)")
+	fs.StringVar(&o.claudeHome, "claude-home", "", "render the unit for a Claude Code adapter with this HOME (no NoNewPrivileges)")
 	fs.BoolVar(&o.force, "force", false, "replace an existing config (a backup is made)")
 	fs.Usage = func() { fmt.Fprint(stderr, initUsage); fs.PrintDefaults() }
 	if err := fs.Parse(args); err != nil {
@@ -101,8 +109,10 @@ func parseInitFlags(args []string, stderr io.Writer) (*initOptions, error) {
 	switch {
 	case o.remote, o.tlsCert != "", o.tlsKey != "":
 		return nil, errors.New("remote and TLS setup are not in this release (ADR-027 S4); init sets up local mode")
-	case o.installService:
-		return nil, errors.New("service installation is not in this release (ADR-027 S3); init writes the config and prints the start command")
+	case o.installService && o.noService:
+		return nil, errors.New("--install-service and --no-service are exclusive")
+	case (o.launchDaemon || o.claudeHome != "") && !o.installService:
+		return nil, errors.New("--launch-daemon and --claude-home need --install-service")
 	case o.local && o.remote:
 		return nil, errors.New("--local and --remote are exclusive")
 	}
@@ -134,10 +144,13 @@ type initDeps struct {
 	random         io.Reader
 	lookup         func(name string) (userInfo, error) // "" is the invoking user
 	probe          func(ctx context.Context, baseURL, username, password string) openCodeProbe
-	readPassword   func() (string, error)
+	readPassword   func(r *bufio.Reader) (string, error)   // reads one line through the wizard's own reader
 	run            func(name string, args ...string) error // only the read-only sudo -u <user> test -r/-x probe
 	stageDir       func() (string, error)
 	home           func() (string, error)
+	goos           string                               // runtime.GOOS: which service kind is possible
+	executable     func() (string, error)               // the path of this binary, for a launchd plist
+	makeTemp       func(pattern string) (string, error) // a private temporary directory (the generated-config check)
 }
 
 // runInit is the "init" subcommand.
@@ -194,6 +207,11 @@ type wizard struct {
 	typedPw     string // a password typed after a 401: goes to pwPath only
 	tokenShown  bool
 	stagedToken string // set when the new token was only staged, not yet at its final path
+	svcKind     string // "", systemd, systemd-dropin, launchd-agent, launchd-daemon
+	svcFiles    []svcFile
+	svcStage    string // a staging directory made only for the service files
+	stagedFlow  bool   // the service files are staged beside the config files (the staged config flow)
+	logDir      string // the LaunchAgent log directory init creates
 }
 
 func (w *wizard) say(format string, a ...any) { fmt.Fprintf(w.d.stdout, format+"\n", a...) }
@@ -269,6 +287,9 @@ func (w *wizard) run() error {
 	if err := w.rejectUnsafePaths(); err != nil {
 		return err
 	}
+	if err := w.planService(); err != nil {
+		return err
+	}
 	w.listen, w.ocURL = o.listen, o.opencodeURL
 	if w.listen == "" {
 		w.listen = defaultListen
@@ -300,6 +321,9 @@ func (w *wizard) run() error {
 		return w.stage(cfg, lc)
 	}
 	if err := w.write(cfg, lc); err != nil {
+		return err
+	}
+	if err := w.placeServiceFiles(""); err != nil {
 		return err
 	}
 	return w.finish()
@@ -482,7 +506,7 @@ func (w *wizard) askCredentials(ctx context.Context) {
 		return
 	}
 	fmt.Fprint(w.d.stdout, "OpenCode password (hidden): ")
-	pw, err := w.d.readPassword()
+	pw, err := w.d.readPassword(w.in)
 	fmt.Fprintln(w.d.stdout)
 	if err != nil || pw == "" {
 		w.say("OpenCode: no password entered; the config will not reference one")
@@ -671,9 +695,16 @@ func (w *wizard) render() (cfg, lc []byte, err error) {
 	case w.ocPwFile != "":
 		opencodeCfg["password_file"] = w.ocPwFile
 	}
+	tokenCfg := map[string]any{"file": w.tokenPath, "expires": w.expires.Format(time.RFC3339)}
+	switch w.tokenSourceKind() {
+	case "credential": // the full unit delivers the file as the systemd credential "token"
+		tokenCfg = map[string]any{"credential": credentialName, "expires": w.expires.Format(time.RFC3339)}
+	case "packaged": // the packaged unit sets CIRAK_TOKEN_FILE itself: the config names neither
+		tokenCfg = map[string]any{"expires": w.expires.Format(time.RFC3339)}
+	}
 	m := map[string]any{
 		"server":  map[string]any{"listen": w.listen},
-		"token":   map[string]any{"file": w.tokenPath, "expires": w.expires.Format(time.RFC3339)},
+		"token":   tokenCfg,
 		"harness": map[string]any{"opencode": opencodeCfg},
 		"acl":     map[string]any{"roots": []string(w.o.roots), "sessions": []string(w.o.sessions)},
 		"writer":  map[string]any{"lock_dir": w.lockDir},
@@ -847,6 +878,22 @@ func mkdirPrivate(dir string) error {
 	return checkTargetDir(dir)
 }
 
+// removeStagingDir removes a staging directory this run made: it is flat (files only), so every entry is removed
+// one by one with os.Remove and then the directory itself. A directory that cannot be emptied is left as it is.
+func removeStagingDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			return
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+	_ = os.Remove(dir)
+}
+
 // stage handles an invoking uid that is not the service uid: the files are written to a private staging
 // directory the invoking user owns, and the exact install commands are printed. init never applies chown.
 func (w *wizard) stage(cfg, lc []byte) error {
@@ -872,6 +919,19 @@ func (w *wizard) stage(cfg, lc []byte) error {
 	if err != nil {
 		return fmt.Errorf("cannot make a staging directory: %w", err)
 	}
+	if strings.ContainsAny(dir, "\n\r\x00") {
+		// $TMPDIR with a control character: the directory is ours and empty, remove it and refuse
+		_ = os.Remove(dir)
+		return usagef("the staging directory path contains a newline, a carriage return or a NUL (check TMPDIR): refused before anything was staged")
+	}
+	// a staging directory that holds the token never outlives a failed run: it is ours, private and just made
+	staged := false
+	defer func() {
+		if !staged {
+			removeStagingDir(dir)
+			w.stagedToken = ""
+		}
+	}()
 	type item struct {
 		name, dst string
 		data      []byte
@@ -895,7 +955,7 @@ func (w *wizard) stage(cfg, lc []byte) error {
 		}
 	}
 	w.say("The invoking user (uid %d) is not the service user %s (uid %d), so init writes nothing the service would refuse.", w.d.uid, w.svc.Name, w.svc.UID)
-	w.say("The files are staged in %s (private, mode 0700). Run as root (init never applies these):", dir)
+	w.say("The files are staged in %s (private, mode 0700). Run as root (init never applies these):", shq(dir))
 	for _, d := range uniq(filepath.Dir(w.cfgPath), filepath.Dir(w.tokenPath)) {
 		w.say("  install -d -o %s -g %s -m 0700 %s", shq(w.svc.Name), shq(w.svc.Group), shq(d))
 	}
@@ -903,9 +963,13 @@ func (w *wizard) stage(cfg, lc []byte) error {
 	for _, it := range items {
 		w.say("  install -o %s -g %s -m 0600 %s %s", shq(w.svc.Name), shq(w.svc.Group), shq(filepath.Join(dir, it.name)), shq(it.dst))
 	}
+	if err := w.placeServiceFiles(dir); err != nil {
+		return err
+	}
+	staged = true
 	w.say("Then remove the staging directory (it holds the token): rm -r %s", shq(dir))
 	w.connector()
-	w.say("Then: cirak config check --config %s", w.cfgPath)
+	w.say("Then: cirak config check --config %s", shq(w.cfgPath))
 	return nil
 }
 
@@ -913,7 +977,12 @@ func (w *wizard) stage(cfg, lc []byte) error {
 func (w *wizard) finish() error {
 	rep := &report{out: w.d.stdout}
 	fmt.Fprintln(w.d.stdout, "config check of what was written:")
-	generatedConfigCheck(rep, serveFlags{config: w.cfgPath}, func(string) string { return "" }, nil, w.d.uid, false)
+	env, cleanup, err := w.serviceCheckEnv()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	generatedConfigCheck(rep, serveFlags{config: w.cfgPath}, env, nil, w.d.uid, false)
 	switch rep.code() {
 	case 0:
 		w.say("result: clean")
@@ -924,9 +993,9 @@ func (w *wizard) finish() error {
 	}
 	w.connector()
 	w.say("Next steps:")
-	w.say("  1. cirak config check --config %s", w.cfgPath)
-	w.say("  2. start it: cirak --config %s", w.cfgPath)
-	w.say("  3. smoke: cirak doctor --smoke (ships with ADR-027 S3; it checks initialize + tools/list against the running service)")
+	w.say("  1. cirak config check --config %s", shq(w.cfgPath))
+	w.say("  2. start it: cirak --config %s", shq(w.cfgPath))
+	w.say("  3. smoke: cirak doctor --config %s --smoke (initialize + tools/list against the running service)", shq(w.cfgPath))
 	if rep.code() != 0 {
 		return errors.New("the generated config does not check clean (see above); fix the cause and run init again with --force")
 	}
@@ -990,6 +1059,7 @@ func productionDeps(getenv func(string) string, stdin io.Reader, stdout, stderr 
 		run:      prodRun,
 		stageDir: func() (string, error) { return os.MkdirTemp("", "cirak-init-") },
 		home:     os.UserHomeDir,
+		goos:     runtime.GOOS, executable: os.Executable, makeTemp: func(p string) (string, error) { return os.MkdirTemp("", p) },
 	}
 }
 

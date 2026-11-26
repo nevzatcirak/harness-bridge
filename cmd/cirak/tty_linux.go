@@ -26,7 +26,7 @@ func stdoutIsTerminal() bool {
 
 // readPasswordNoEcho reads one line from the terminal with echo off and restores the terminal. The line is
 // never written anywhere by this function.
-func readPasswordNoEcho() (string, error) {
+func readPasswordNoEcho(r *bufio.Reader) (string, error) {
 	fd := int(os.Stdin.Fd())
 	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
@@ -38,7 +38,7 @@ func readPasswordNoEcho() (string, error) {
 		return "", errors.New("cannot turn terminal echo off")
 	}
 	defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := r.ReadString('\n') // the wizard's own reader: a second reader on stdin would lose buffered input
 	if err != nil && line == "" {
 		return "", err
 	}
