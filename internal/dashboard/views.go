@@ -156,6 +156,17 @@ func toRow(s Session) sessionRow {
 type execRow struct {
 	ID, State, Started, Updated, Ended string
 	Current                            bool
+	// The timeline row (A1.4 item 2): the state chip, the start as a datetime, the liveness cell, and, for the
+	// current execution only, the liveness report and the pending-permission row. Duration and StartedRel depend on
+	// the clock, so they are set for the HTML only and never reach the JSON (its ETag).
+	StateLabel, StateClass string
+	StartedISO             string
+	StartedRel, Duration   string
+	startedAt              time.Time // the clock-dependent fields below are derived from these (clockRows)
+	endedAt                *time.Time
+	Live                   livenessCell
+	Report                 *reportView
+	Perm                   *permView
 }
 
 // stateBlock is an empty, error or not-connected state of a data region (A1.4 item 7): a heading, a sentence
@@ -181,10 +192,9 @@ type page struct {
 	Pending    bool // Claude Code: history and diffs pending ADR-021
 	Diff       *diffSection
 	BackHref   string
-	// Polling: the client script polls the JSON model of this view (data-poll).
-	Poll, PollHarness, PollID string
-	// Filter is set on the list page: it shows the archived filter link (D17 Q7).
-	Filter, ShowArchived bool
+	// Polling: the client script polls the JSON model of this view (data-poll). Sig is the signature of the
+	// timeline (see execSignature): when the polled model's signature differs, the page is reloaded.
+	Poll, PollHarness, PollID, Sig string
 	// Audit feed
 	AuditPage bool
 	AuditOn   bool
@@ -229,6 +239,9 @@ func renderPage(w http.ResponseWriter, status int, p page) {
 // pageChromeBytes is the headroom kept for everything that is not patch text.
 const pageChromeBytes = 256 << 10
 
+// lineMarkupBytes bounds the markup one diff line adds around its text: <span class="ln hunk"></span> and a margin.
+const lineMarkupBytes = 40
+
 const patchHiddenNote = "patch not shown: the escaped page would exceed the 2 MiB page bound"
 
 // fitPatches hides every shown patch that does not fit in budget bytes (measured
@@ -247,9 +260,10 @@ func fitPatches(p *page, budget int) {
 			if !f.ShowPatch {
 				continue
 			}
-			size := len(template.HTMLEscapeString(f.Patch)) + len(f.Patch)/16 // + a margin for escapes the string form leaves out
+			// the escaped text, a margin for escapes the string form leaves out, and the span markup of every line
+			size := len(template.HTMLEscapeString(f.Patch)) + len(f.Patch)/16 + len(f.Lines)*lineMarkupBytes
 			if used+size > budget {
-				f.ShowPatch, f.Patch = false, ""
+				f.ShowPatch, f.Patch, f.Lines = false, "", nil
 				if f.Note != "" {
 					f.Note += "; "
 				}
@@ -300,9 +314,9 @@ func (d *dash) indexHandler() http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), requestBound)
 		defer cancel()
 		now := d.now().UTC()
-		p := page{Title: "Sessions - Cirak", Active: "sessions", ListPage: true, Poll: "list", Filter: true, ShowArchived: ArchivedShown(ctx)}
+		p := page{Title: "Sessions - Cirak", Active: "sessions", ListPage: true, Poll: "list"}
 		p.RefreshHref, p.ToggleHref, p.ToggleText = "/", "/?archived=1", "Show archived"
-		if p.ShowArchived {
+		if ArchivedShown(ctx) {
 			p.RefreshHref, p.ToggleHref, p.ToggleText = "/?archived=1", "/", "Hide archived"
 		}
 		if _, none := d.src.(NullSource); none {
@@ -441,12 +455,15 @@ func (d *dash) detailHandler() http.Handler {
 			return
 		}
 		row := toRow(det.Session)
+		row.LastRel = relTimeISO(d.now().UTC(), row.LastISO)
 		p := page{Title: "Session " + truncRunes(det.ID, 128) + " - Cirak", Active: "sessions", Detail: &row, Pending: harness == harnessClaudeCode}
 		if turn {
 			d.turnPage(ctx, w, p, harness, id, parts[3])
 			return
 		}
 		p.Executions, p.Truncate = execRows(det.Executions)
+		p.Sig = execSignature(p.Executions)
+		clockRows(p.Executions, d.now().UTC())
 		p.Poll, p.PollHarness, p.PollID = "detail", harness, id
 		p.Diff = d.detailSection(ctx, harness, id)
 		renderPage(w, http.StatusOK, p)

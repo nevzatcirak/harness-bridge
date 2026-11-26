@@ -373,7 +373,7 @@ func TestPageOverTheBoundAfterEscapingIsDegradedNotAnError(t *testing.T) {
 		}
 		checkSecurityHeaders(t, target, hdr)
 		hidden := strings.Count(body, patchHiddenNote)
-		shown := strings.Count(body, "<pre>")
+		shown := strings.Count(body, `<pre class="diff">`)
 		if hidden == 0 || shown == 0 || hidden+shown != 4 {
 			t.Errorf("%s: %d patches shown, %d hidden: the page must keep what fits and say what it hid", target, shown, hidden)
 		}
@@ -396,8 +396,8 @@ func TestPageOverTheBoundAfterEscapingIsDegradedNotAnError(t *testing.T) {
 // the page is still served.
 func TestPageDegradesToNoPatchesBeforeFailing(t *testing.T) {
 	p := page{Title: "t", Diff: &diffSection{Working: &diffView{Label: LabelChanges, Scope: "s", Files: []fileView{
-		{Path: "a", Patch: strings.Repeat("<", 900<<10), ShowPatch: true},
-		{Path: "b", Patch: strings.Repeat("&", 900<<10), ShowPatch: true},
+		{Path: "a", Patch: strings.Repeat("<", 900<<10), Lines: splitDiff(strings.Repeat("<", 900<<10)), ShowPatch: true},
+		{Path: "b", Patch: strings.Repeat("&", 900<<10), Lines: splitDiff(strings.Repeat("&", 900<<10)), ShowPatch: true},
 	}}}}
 	rec := httptest.NewRecorder()
 	renderPage(rec, http.StatusOK, p)

@@ -193,6 +193,7 @@ td.path span { overflow-wrap: anywhere; }
 .timeline .detail td { padding-block: var(--space-2) var(--space-3); background: var(--surface-low); }
 .timeline .perm-row td { background: var(--tint-secondary); }
 .report { margin: 0 0 var(--space-2); }
+.copyable { user-select: all; }
 .perm-row .chip { background: transparent; border: 1px solid currentColor; }
 .files { list-style: none; margin: 0 0 var(--space-2); padding: 0; display: grid; gap: var(--space-1); font-family: var(--mono); font-size: var(--fs-0); }
 .stat-add { color: var(--ok); }

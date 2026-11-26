@@ -112,7 +112,7 @@ func TestFourLabelsOnTheTurnPage(t *testing.T) {
 
 func TestTurnWithChangesShowsFilesFromTheFixture(t *testing.T) {
 	_, body, _ := fetch(NewHandler(diffSource(t), nil), "/session/opencode/"+sesID+"/turn/"+turnX)
-	for _, want := range []string{"h4/NOTE.md", "MARK-ee3f40", "src/new.go", "old.txt", "no patch in the answer", "(no file name)", "added", "deleted", "modified"} {
+	for _, want := range []string{"h4/NOTE.md", "MARK-ee3f40", "src/new.go", "old.txt", "no patch in the answer", "(no file name)", "Added", "Deleted", "Modified"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("turn page lacks %q", want)
 		}
@@ -271,7 +271,7 @@ func TestCapsAndBinary(t *testing.T) {
 		}
 		src.workDiff = DiffResult{Files: files}
 		_, body, _ := fetch(NewHandler(src, nil), "/session/opencode/"+sesID)
-		if n := strings.Count(body, `<section class="file">`); n != maxDiffFiles {
+		if n := strings.Count(body, `<details class="file"`); n != maxDiffFiles {
 			t.Errorf("%d files rendered, want %d", n, maxDiffFiles)
 		}
 		if !strings.Contains(body, "37 more files not shown") {
