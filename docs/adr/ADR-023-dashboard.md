@@ -1036,7 +1036,7 @@ existing rules stay: values set with `textContent`, no markup built from data, n
 | # | Behaviour | CSP impact | No-JS fallback |
 | --- | --- | --- | --- |
 | JS-1 | Copy-ID button (`navigator.clipboard.writeText`) | none (`script-src 'self'`) | the ID is selectable text (`user-select: all`); the button is `hidden` until the script runs |
-| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint. **The stored value is checked against the two allowed words (`dark`, `light`) before it is used; anything else is ignored and removed.** | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1). The dark state is explicit too: `:root[data-theme="dark"]` sets `color-scheme: dark`, as the light blocks set `light`, so the native controls follow the toggled theme |
+| JS-2 | Theme toggle; `theme.js` is a blocking `<script src>` in `<head>` that sets `data-theme` from `localStorage` before first paint. **The stored value is checked against the two allowed words (`dark`, `light`) before it is used; anything else is ignored and removed.** The storage key is `cirak-theme`. | none; a second same-origin file | the system preference through `prefers-color-scheme`; the toggle stays hidden; a blocked `localStorage` is caught and ignored (Q1). The dark state is explicit too: `:root[data-theme="dark"]` sets `color-scheme: dark`, as the light blocks set `light`, so the native controls follow the toggled theme |
 | JS-3 | Poll refresh of `/api/state` (existing), pausing when hidden (A1.7) | none (`connect-src 'self'`) | a "Refresh" link; optional `?refresh=N` (Q8) |
 | JS-4 | Client-side filter and search for the sessions, executions and audit tables; **the filter state is written to the URL query with `history.replaceState` and re-applied on load.** Query values reach the page only through `.value` of a control or `textContent`, the state and harness values are checked against the options the control offers, and nothing from the query is ever parsed as markup or URL. The filter text stays in the browser history (A1.11); `Referrer-Policy: no-referrer` keeps it out of any request. | none | the full table is shown; the query is ignored |
 | JS-5 | Re-render `<time>` relative text from `datetime` every 30 s; no network | none | the server-rendered relative text and the absolute time in `title` |
@@ -1422,3 +1422,27 @@ JS-6 behaviours, the A1.7 pause-on-hidden polling, the textContent-only rule, GE
   referenced and missing, fails the build.
 - **Effect on S3b and A2 S5.** A new behaviour gets its own script (or a few bytes in the script of its page); the
   core is the place for what every page needs. No existing slice text is superseded beyond the cap sentence in A1.6.
+
+### A1.18 S3b as built (2026-11-26): light theme, `theme.js` and the toggle
+
+Facts about the code (task #586), no new decision; D34 (A1.17) is unchanged.
+
+- **CSS.** The embedded stylesheet gets the two light blocks of the reference file, comment-free: the
+  `prefers-color-scheme: light` block (`:root:not([data-theme="dark"])`) and the toggle blocks
+  `:root[data-theme="dark"]` and `:root[data-theme="light"]`; `:root` declares `color-scheme: dark light`. The contrast
+  test now runs every A1.2 pair for both themes, over both light blocks, and reproduces the documented light figures
+  (minimum text pair 4.65, error chip on the low surface; minimum non-text pair 4.06, the input border on the low
+  surface; the dark minimum stays 4.62). The two light blocks must be identical and equal to the reference file, every
+  dark colour token must have a light value, and no non-colour token may be redefined.
+- **`theme.js`.** 984 bytes (cap 1 KiB, its own cap). The four `dashboard*.js` files are core 8,201 (the frozen namespace added 15
+  bytes), list 5,785, detail 3,416 and audit 747, 18,149 together (cap 32 KiB). A blocking `<script src="/theme.js">` in the head of every page and a hidden
+  `<button id="theme">` in every top bar; the script is routed with the others (`GET`/`HEAD`, no data route). Storage
+  key `cirak-theme`; a stored value other than `dark` or `light` is removed and ignored; the toggle stays hidden without
+  script; a blocked or full storage is caught. The only `localStorage` use of the dashboard.
+- **Carried P3s.** Cap boundaries over a helper (#584 P3-1), the `unavailablePage` doc comment (#584 P3-2), the scheme
+  detector strips tab, CR and LF and trims C0 controls (#585 P3-1), `window.cirakDash` frozen and the hygiene scan raw
+  (#585 P3-2), `BRIDGE_DASHBOARD_LABEL` reported as not read by `config check` (#576 P3-1), single-character label cases
+  (#576 P3-2), the top bar on 503 pages (#576 P3-4), the whole build revision (#576 P3-5), the cap said in the
+  `/executions` footnote (#576 P3-6) and the `?page=` digits-only rule on a full ring (#580 P3-1). The stale manual
+  `tests/dashboard/poll_stub.js` is deleted: the node harness tests cover the split scripts.
+- **Not done.** The A1.7 poll intervals of the S3a pages (separate task); ADR-017 A2 S5 badges (Worker B).

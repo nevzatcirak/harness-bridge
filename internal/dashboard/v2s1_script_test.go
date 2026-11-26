@@ -19,29 +19,32 @@ import (
 
 var jsLineComment = regexp.MustCompile(`(?m)//[^\n]*`)
 
-// A1.6 and D34: the forbidden APIs are scanned in EVERY script, and each script and their sum have a size cap.
+// A1.6, D34 and S3b: the forbidden APIs are scanned in EVERY script (the table the server serves), on the RAW source (a
+// comment stripper that mistakes a "//" inside a string for a comment would hide the rest of the line, #585 P3-2, so
+// the scripts keep these words out of their comments too), and each script, their sum and theme.js have a size cap
+// (checked over scriptCapFailures, which the boundary test also runs).
 func TestV2S1ScriptHygiene(t *testing.T) {
-	total := 0
+	sizes := map[string]int{}
 	var all strings.Builder
-	for _, name := range scriptFiles {
+	for _, name := range allScripts {
 		raw, err := os.ReadFile("assets/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		total += len(raw)
-		if len(raw) > maxScriptBytes {
-			t.Errorf("%s is %d bytes, the cap of one script is 16 KiB", name, len(raw))
-		}
-		code := jsLineComment.ReplaceAllString(cssComment.ReplaceAllString(string(raw), ""), "")
+		sizes[name] = len(raw)
+		code := string(raw)
 		all.WriteString(code)
 		for _, bad := range forbiddenScriptAPIs {
 			if regexp.MustCompile(bad.re).MatchString(code) {
 				t.Errorf("%s uses %s", name, bad.what)
 			}
 		}
+		for _, f := range localStorageUse(name, code) {
+			t.Error(f)
+		}
 	}
-	if total > maxScriptsTotalBytes {
-		t.Errorf("the scripts total %d bytes, the cap of all of them is 32 KiB", total)
+	for _, f := range scriptCapFailures(sizes) {
+		t.Error(f)
 	}
 	for _, want := range []string{"textContent", "AbortController", "visibilitychange", "replaceState", "matchMedia", "If-None-Match", "Retry-After"} {
 		if !strings.Contains(all.String(), want) {
@@ -50,18 +53,20 @@ func TestV2S1ScriptHygiene(t *testing.T) {
 	}
 }
 
-// D34: the size caps of one script and of all of them (ADR-023 A1.6, as amended).
+// D34: the size caps of one script and of the four dashboard*.js together (ADR-023 A1.6, as amended); theme.js has its
+// own cap (maxThemeBytes, s3b_test.go).
 const (
 	maxScriptBytes       = 16 << 10
 	maxScriptsTotalBytes = 32 << 10
 )
 
-// forbiddenScriptAPIs is the A1.6 list; the scan runs on every script file.
+// forbiddenScriptAPIs is the A1.6 list; the scan runs on every script file. localStorage is not in it: it is allowed
+// in theme.js for the theme key only, and refused everywhere else (localStorageUse).
 var forbiddenScriptAPIs = []struct{ re, what string }{
 	{`\.innerHTML`, "innerHTML"}, {`\.outerHTML`, "outerHTML"}, {`insertAdjacentHTML`, "insertAdjacentHTML"},
 	{`document\.write`, "document.write"}, {`\beval\s*\(`, "eval"}, {`new\s+Function`, "new Function"},
 	{`set(Timeout|Interval)\s*\(\s*['"` + "`" + `]`, "a string argument to setTimeout/setInterval"}, {`\bimport\s*\(`, "dynamic import()"},
-	{`https?:`, "an http(s) literal"}, {`localStorage`, "localStorage (only theme.js, in S3, may use it)"}, {`sessionStorage`, "sessionStorage"},
+	{`https?:`, "an http(s) literal"}, {`sessionStorage`, "sessionStorage"}, {`indexedDB`, "indexedDB"},
 	{`XMLHttpRequest`, "XMLHttpRequest"}, {`\.cookie`, "document.cookie"}, {`method:\s*'(POST|PUT|PATCH|DELETE)'`, "a write method"},
 }
 
@@ -95,8 +100,16 @@ type jsResult struct {
 		Notes        []string `json:"notes"`
 		Reloads      int      `json:"reloads"`
 		Copied       []string `json:"copied"`
+		Storage      []struct {
+			Op    string `json:"op"`
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		} `json:"storage"`
 	} `json:"log"`
-	Times []struct {
+	HTMLAttrs map[string]string `json:"htmlAttrs"`
+	Store     map[string]string `json:"store"`
+	Probes    []any             `json:"probes"`
+	Times     []struct {
 		Text     string `json:"text"`
 		Datetime string `json:"datetime"`
 	} `json:"times"`

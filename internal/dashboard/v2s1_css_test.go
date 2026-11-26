@@ -139,10 +139,49 @@ func ratio(a, b rgba) float64 {
 const embeddedCSS = "assets/dashboard.css"
 const referenceCSS = "../../docs/design/dashboard-v2.css"
 
-// A1.10 item 2: every pair of A1.2 for the dark theme, >= 4.5 for text and >= 3 for non-text, computed from
-// the embedded stylesheet itself (so a token that changes fails here), including the states a component draws.
-func TestV2S1ContrastOverTheDarkTokens(t *testing.T) {
-	tok := rootTokens(readCSS(t, embeddedCSS))
+// Theme blocks of the stylesheet (A1.1, A1.6 JS-2): the dark tokens are the unconditional :root; the light theme is
+// a prefers-color-scheme block (unless the dark choice is made) and the block of the toggle's explicit choice. The two
+// light blocks must be identical.
+const (
+	lightMediaSel  = `@media (prefers-color-scheme: light) >> :root:not([data-theme="dark"])`
+	lightToggleSel = `:root[data-theme="light"]`
+	darkToggleSel  = `:root[data-theme="dark"]`
+)
+
+// isTokenBlock reports whether a flattened selector is one of the blocks that define the colour tokens, where a
+// literal colour is the point (Floor 1) and the secondary tokens are defined (the reserved-colour rule).
+func isTokenBlock(sel string) bool {
+	return sel == ":root" || sel == lightMediaSel || sel == lightToggleSel || sel == darkToggleSel
+}
+
+// blockTokens returns the custom properties of the one rule with the given flattened selector.
+func blockTokens(src, sel string) map[string]string {
+	tok := map[string]string{}
+	for _, r := range flatRules(src) {
+		if r.Sel != sel {
+			continue
+		}
+		for _, m := range cssProp.FindAllStringSubmatch(r.Body, -1) {
+			tok[m[1]] = strings.TrimSpace(m[2])
+		}
+	}
+	return tok
+}
+
+// lightTokens is the dark :root with the light block laid over it (the tokens the light theme really draws).
+func lightTokens(src, block string) map[string]string {
+	tok := rootTokens(src)
+	for k, v := range blockTokens(src, block) {
+		tok[k] = v
+	}
+	return tok
+}
+
+// contrastReport checks every pair of A1.2 for one theme's tokens, >= 4.5 for text and >= 3 for non-text, computed
+// from the embedded stylesheet itself (so a token that changes fails here), including the states a component draws.
+// It returns the minima and the number of pairs checked.
+func contrastReport(t *testing.T, theme string, tok map[string]string) (minText, minNon float64, checks int) {
+	t.Helper()
 	col := func(name string) rgba {
 		v, ok := tok["--"+name]
 		if !ok {
@@ -151,13 +190,12 @@ func TestV2S1ContrastOverTheDarkTokens(t *testing.T) {
 		return parseColour(t, v)
 	}
 	surfaces := []string{"bg", "surface-low", "surface", "surface-high"}
-	minText, minNon := 99.0, 99.0
+	minText, minNon = 99.0, 99.0
 	var failures []string
-	checks := 0
 	check := func(name string, got, floor float64, text bool) {
 		checks++
 		if got < floor {
-			failures = append(failures, fmt.Sprintf("%s %.3f < %.1f", name, got, floor))
+			failures = append(failures, fmt.Sprintf("%s (%s) %.3f < %.1f", name, theme, got, floor))
 		}
 		if text && got < minText {
 			minText = got
@@ -228,14 +266,41 @@ func TestV2S1ContrastOverTheDarkTokens(t *testing.T) {
 		t.Error(f)
 	}
 	if checks < 70 { // A1.2: 124 token pairs and 26 fill pairs over both themes, so about 75 per theme
-		t.Errorf("only %d pairs were checked", checks)
+		t.Errorf("only %d pairs were checked for the %s theme", checks, theme)
 	}
-	// A1.2 documents these minima; a token change that moves them must change the ADR with it.
+	if minNon < 3 {
+		t.Errorf("minimum non-text pair of the %s theme = %.3f", theme, minNon)
+	}
+	return minText, minNon, checks
+}
+
+// A1.10 item 2, dark theme.
+func TestV2S1ContrastOverTheDarkTokens(t *testing.T) {
+	minText, _, _ := contrastReport(t, "dark", rootTokens(readCSS(t, embeddedCSS)))
+	// A1.2 documents this minimum; a token change that moves it must change the ADR with it.
 	if math.Abs(minText-4.62) > 0.005 {
 		t.Errorf("minimum text pair = %.3f, A1.2 documents 4.62", minText)
 	}
-	if minNon < 3 {
-		t.Errorf("minimum non-text pair = %.3f", minNon)
+}
+
+// A1.10 item 2, light theme (slice S3b): the same pairs over the light tokens, for the media-query block and for the
+// block of the toggle's explicit choice, which A1.2 says are identical. The documented minima are the least text pair
+// of the light theme (the error chip on the low surface) and the least non-text pair of both themes (the light input
+// border on the low surface, 4.06).
+func TestS3bContrastOverTheLightTokens(t *testing.T) {
+	src := readCSS(t, embeddedCSS)
+	for _, block := range []string{lightMediaSel, lightToggleSel} {
+		tok := lightTokens(src, block)
+		if len(blockTokens(src, block)) < 25 {
+			t.Fatalf("the light block %q has %d tokens: it is missing", block, len(blockTokens(src, block)))
+		}
+		minText, minNon, _ := contrastReport(t, "light "+block, tok)
+		if math.Abs(minText-4.65) > 0.005 {
+			t.Errorf("%s: minimum text pair = %.3f, A1.2 documents 4.65 (the error chip on the low surface)", block, minText)
+		}
+		if math.Abs(minNon-4.06) > 0.005 {
+			t.Errorf("%s: minimum non-text pair = %.3f, A1.2 documents 4.06 (the input border on the low surface)", block, minNon)
+		}
 	}
 }
 
@@ -269,7 +334,88 @@ func TestV2S1ContrastReproducesTheDocumentedFigures(t *testing.T) {
 	}
 }
 
-// D31 Q10: the docs file is the reference and the embedded stylesheet is its dark-only copy. The tokens of the
+// The documented values of A1.2 (light side), reproduced to two decimals: the table cannot drift from the file.
+func TestS3bContrastReproducesTheDocumentedLightFigures(t *testing.T) {
+	tok := lightTokens(readCSS(t, embeddedCSS), lightToggleSel)
+	col := func(name string) rgba {
+		v, ok := tok["--"+name]
+		if !ok {
+			t.Fatalf("token --%s is missing", name)
+		}
+		return parseColour(t, v)
+	}
+	surf := map[string]rgba{"bg": col("bg"), "low": col("surface-low"), "mid": col("surface"), "high": col("surface-high")}
+	chip := func(tone, s string) float64 {
+		return ratio(col("chip-"+tone), col("tint-"+tone).over(surf[s]))
+	}
+	for _, c := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"text on bg", ratio(col("text"), surf["bg"]), 15.43}, {"text on high", ratio(col("text"), surf["high"]), 16.10},
+		{"muted on bg", ratio(col("text-muted"), surf["bg"]), 6.71}, {"muted on high", ratio(col("text-muted"), surf["high"]), 7.00},
+		{"chip ok on bg", chip("ok", "bg"), 6.05}, {"chip info on mid", chip("info", "mid"), 5.91},
+		{"chip secondary on high", chip("secondary", "high"), 5.92}, {"chip error on high", chip("error", "high"), 5.17},
+		{"chip error on low", chip("error", "low"), 4.65}, {"chip warn on low", chip("warn", "low"), 4.67},
+		{"chip neutral on mid", chip("neutral", "mid"), 12.19},
+		{"input border on low", ratio(col("input-border"), surf["low"]), 4.06}, {"focus ring on bg", ratio(col("primary"), surf["bg"]), 4.69},
+		{"text on primary", ratio(col("on-primary"), col("primary")), 4.90}, {"text on pressed primary", ratio(col("on-primary"), col("primary-active")), 6.70},
+		{"pressed fill on low", ratio(col("primary-active"), surf["low"]), 5.99}, {"pressed fill on card", ratio(col("primary-active"), surf["mid"]), 6.70},
+		{"text on the pressed hairline fill", ratio(col("text"), col("hairline")), 12.20},
+		{"semantic ok on card", ratio(col("ok"), surf["mid"]), 7.87},
+	} {
+		if math.Abs(c.got-c.want) > 0.006 {
+			t.Errorf("%s = %.3f, A1.2 documents %.2f", c.name, c.got, c.want)
+		}
+	}
+}
+
+// Slice S3b: the two light blocks are identical to each other and to the reference file's, every colour token of the
+// dark theme has a light value (a missing one would leave a dark colour on a light page), and no non-colour token is
+// redefined (the light theme changes colour only).
+func TestS3bLightBlocksAreIdenticalAndEqualTheReference(t *testing.T) {
+	emb, ref := readCSS(t, embeddedCSS), readCSS(t, referenceCSS)
+	for _, block := range []string{lightMediaSel, lightToggleSel} {
+		e, r := blockTokens(emb, block), blockTokens(ref, block)
+		if len(e) < 25 {
+			t.Fatalf("the embedded light block %q has %d tokens", block, len(e))
+		}
+		for k, v := range r {
+			if e[k] != v {
+				t.Errorf("%s: token %s: embedded %q, reference %q", block, k, e[k], v)
+			}
+		}
+		for k := range e {
+			if _, ok := r[k]; !ok {
+				t.Errorf("%s: token %s is embedded but not in the reference", block, k)
+			}
+		}
+	}
+	media, toggle := blockTokens(emb, lightMediaSel), blockTokens(emb, lightToggleSel)
+	for k, v := range media {
+		if toggle[k] != v {
+			t.Errorf("the media block and the toggle block differ at %s: %q vs %q", k, v, toggle[k])
+		}
+	}
+	for k := range toggle {
+		if _, ok := media[k]; !ok {
+			t.Errorf("token %s is in the toggle block only", k)
+		}
+	}
+	colour := regexp.MustCompile(`^(#[0-9a-fA-F]{6}|rgb\()`)
+	for k, v := range rootTokens(emb) {
+		_, overridden := toggle[k]
+		switch {
+		case colour.MatchString(v) && !overridden:
+			t.Errorf("the dark colour token %s has no light value", k)
+		case !colour.MatchString(v) && overridden:
+			t.Errorf("the light block redefines the non-colour token %s", k)
+		}
+	}
+}
+
+// D31 Q10: the docs file is the reference and the embedded stylesheet is its comment-free copy. The tokens of the
 // dark :root block must stay identical.
 func TestV2S1EmbeddedTokensEqualTheReference(t *testing.T) {
 	emb := rootTokens(readCSS(t, embeddedCSS))
@@ -289,16 +435,34 @@ func TestV2S1EmbeddedTokensEqualTheReference(t *testing.T) {
 	}
 }
 
-// S1 is dark only (light arrives with S3): color-scheme dark, no light blocks, no theme selectors.
-func TestV2S1EmbeddedStylesheetIsDarkOnly(t *testing.T) {
+// Slice S3b: both themes. The unconditional :root is dark (the default) and declares both colour schemes, the light theme
+// is a prefers-color-scheme block unless the dark choice is made, and the toggle's explicit choices set color-scheme too
+// (so the native controls follow the toggled theme: review #486 P3-2).
+func TestS3bStylesheetCarriesBothThemes(t *testing.T) {
 	css := cssComment.ReplaceAllString(readCSS(t, embeddedCSS), "")
-	for _, bad := range []string{"prefers-color-scheme", `data-theme`, "color-scheme: dark light", "color-scheme: light"} {
-		if strings.Contains(css, bad) {
-			t.Errorf("the dark-only stylesheet contains %q", bad)
+	if !regexp.MustCompile(`:root\s*\{[^}]*color-scheme:\s*dark light;`).MatchString(css) {
+		t.Error(":root does not declare color-scheme: dark light")
+	}
+	flat := flatRules(css)
+	want := map[string]string{
+		lightMediaSel:  "color-scheme: light",
+		lightToggleSel: "color-scheme: light",
+		darkToggleSel:  "color-scheme: dark",
+	}
+	for sel, decl := range want {
+		found := false
+		for _, r := range flat {
+			if r.Sel == sel && strings.Contains(r.Body, decl) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no rule %q with %q", sel, decl)
 		}
 	}
-	if !regexp.MustCompile(`:root\s*\{[^}]*color-scheme:\s*dark;`).MatchString(css) {
-		t.Error(":root does not set color-scheme: dark")
+	// the toggle blocks come after the media block, so an explicit choice wins over the system preference
+	if strings.Index(css, `:root[data-theme="light"]`) < strings.Index(css, "prefers-color-scheme: light") {
+		t.Error("the toggle blocks are before the media block")
 	}
 }
 
@@ -342,7 +506,7 @@ func TestV2S1StylesheetTypographyAndFloors(t *testing.T) {
 	// No literal colour or font-family outside the token blocks.
 	lit := regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|hwb\(|oklch\(|oklab\(|color\(`)
 	for _, r := range flatRules(src) {
-		if r.Sel == ":root" {
+		if isTokenBlock(r.Sel) {
 			continue
 		}
 		if lit.MatchString(r.Body) {
@@ -374,7 +538,7 @@ func TestV2S1SecondaryColourIsReservedForPending(t *testing.T) {
 	src := readCSS(t, embeddedCSS)
 	n := 0
 	for _, r := range flatRules(src) {
-		if r.Sel == ":root" || !regexp.MustCompile(`--(chip-|tint-)?secondary\b`).MatchString(r.Body) {
+		if isTokenBlock(r.Sel) || !regexp.MustCompile(`--(chip-|tint-)?secondary\b`).MatchString(r.Body) {
 			continue
 		}
 		n++

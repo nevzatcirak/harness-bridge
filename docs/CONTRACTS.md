@@ -1351,14 +1351,25 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   `/api/state/session/<harness>/<id>` (the JSON view models the page polls while it is visible: 5 s list, 2 s detail),
   `/executions`, `/catalog` and `/health` with their JSON twins `/api/state/executions`, `/api/state/catalog` and
   `/api/state/health` (ADR-023 A1, slice S3a), `/audit` (`?page=N`) and `/api/audit` (the 1000-entry audit ring),
-  `/dashboard.css`, `/dashboard.js` (the core) and the page scripts `/dashboard-list.js`, `/dashboard-detail.js` and
-  `/dashboard-audit.js` (ADR-023 A1.17, D34).
+  `/dashboard.css`, `/dashboard.js` (the core), the page scripts `/dashboard-list.js`, `/dashboard-detail.js` and
+  `/dashboard-audit.js` (ADR-023 A1.17, D34) and the theme script `/theme.js` (A1.6 JS-2, slice S3b).
 - **Per-page scripts (ADR-023 A1.17, D34).** The dashboard script is a core, `dashboard.js`, that every page loads, and
   one script per page kind loaded after it: `dashboard-list.js` (sessions), `dashboard-detail.js` (session) and
   `dashboard-audit.js` (audit, only when the page has a filter and rows). Each file is at most 16 KiB and all of them at
   most 32 KiB; the pages that need nothing more (executions, catalog, health, the turn page) load the core alone. The
   page scripts use only `window.cirakDash`, which the core exports. CSP, the no-inline-script rule, GET only and the
   forbidden-API scan are unchanged and apply to every script.
+- **Light theme and the toggle (ADR-023 A1.6 JS-2, A1.9 S3b).** The stylesheet carries the dark tokens (the default) and
+  the light tokens twice, identical: in a `prefers-color-scheme: light` block (unless the dark choice is made) and in the
+  `:root[data-theme="light"]` block of the toggle's explicit choice; `:root[data-theme="dark"]` sets `color-scheme: dark`.
+  `theme.js` (at most 1 KiB, its own file, outside the 32 KiB of the dashboard scripts) is a blocking
+  `<script src="/theme.js">` in the head of every page. It sets `data-theme` from `localStorage` key `cirak-theme`
+  before first paint **only when the stored value is `dark` or `light`** (anything else is ignored and removed), and shows
+  the toggle, a button in the top bar that is `hidden` in the markup and so absent without script; a click switches the
+  theme and stores the choice. A blocked or full `localStorage` is caught and ignored: the theme still switches for the
+  page. `localStorage` is used by no other script and for no other key (a test refuses it). `window.cirakDash` is frozen.
+  The instance label and the token badge stay on the 503 pages, the build row of `/health` shows the whole revision and the
+  `/executions` footnote says the list is capped at the newest 200.
 - **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
   whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
   other than `GET`/`HEAD` is 405; four data requests and eight requests in flight at once, the rest

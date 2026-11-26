@@ -433,6 +433,10 @@ func unknownEnvNames(environ []string) []string {
 			canonical = name
 		case strings.HasPrefix(name, legacyPrefix):
 			canonical = envPrefix + strings.TrimPrefix(name, legacyPrefix)
+			if canonical == config.EnvDashboardLabel { // new under ADR-026's prefix: it never had a legacy twin, so the daemon ignores it
+				unknown = append(unknown, name)
+				continue
+			}
 		default:
 			continue
 		}

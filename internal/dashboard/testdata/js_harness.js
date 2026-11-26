@@ -78,10 +78,28 @@ const win = {
   navigator: scenario.clipboard ? { clipboard: { writeText: function (t) { (log.copied = log.copied || []).push(t); return scenario.clipboard === 'refuse' ? Promise.reject(new Error('denied')) : Promise.resolve(); } } } : {},
   history: { replaceState: function (s, t, u) { log.replaceState.push(u); } },
   matchMedia: function (q) {
-    const mq = { matches: !!scenario.narrow, media: q, listeners: [], addEventListener: function (t, f) { this.listeners.push(f); } };
-    win.__mq = mq; return mq;
+    const scheme = /prefers-color-scheme/.test(q);
+    const mq = { matches: scheme ? !!scenario.prefersLight : !!scenario.narrow, media: q, listeners: [], addEventListener: function (t, f) { this.listeners.push(f); } };
+    if (!scheme) { win.__mq = mq; } // the menu's narrow-screen query; the theme query must not replace it
+    return mq;
   },
 };
+// The theme script (ADR-023 A1.6 JS-2): document.documentElement, and a recording localStorage that can be blocked
+// (every access throws), full (setItem throws) or absent.
+const htmlEl = new El('html');
+Object.keys(scenario.htmlAttrs || {}).forEach(function (k) { htmlEl.setAttribute(k, scenario.htmlAttrs[k]); });
+doc.documentElement = htmlEl;
+const store = Object.assign({}, scenario.stored || {});
+log.storage = [];
+if (scenario.storage === 'blocked') {
+  Object.defineProperty(win, 'localStorage', { get: function () { throw new Error('SecurityError'); } });
+} else if (scenario.storage !== 'absent') {
+  win.localStorage = {
+    getItem: function (k) { log.storage.push({ op: 'get', key: k }); return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem: function (k, v) { log.storage.push({ op: 'set', key: k, value: String(v) }); if (scenario.storage === 'full') { throw new Error('QuotaExceededError'); } store[k] = String(v); },
+    removeItem: function (k) { log.storage.push({ op: 'remove', key: k }); delete store[k]; },
+  };
+}
 const FakeDate = class extends Date { constructor(...a) { if (a.length === 0) { super(clock.now); } else { super(...a); } } static now() { return clock.now; } };
 
 function fakeSetTimeout(fn, ms) {
@@ -138,6 +156,7 @@ async function advance(ms) {
 (async function () {
   scriptPaths.split(',').forEach(function (p) { vm.runInContext(fs.readFileSync(p, 'utf8'), ctx, { filename: p.split('/').pop() }); });
   await flush();
+  if (!scenario.noReady) { doc.fire('DOMContentLoaded'); await flush(); } // the scripts of the head run before it, the document is parsed after
   const out = { steps: [] };
   for (const step of scenario.steps || []) {
     if (step.advance) { await advance(step.advance); }
@@ -155,6 +174,9 @@ async function advance(ms) {
     out.steps.push(snap);
   }
   out.log = log;
+  out.htmlAttrs = htmlEl.attrs;
+  out.store = store;
+  out.probes = (scenario.probes || []).map(function (src) { try { return vm.runInContext(src, ctx); } catch (e) { return 'ERR: ' + e.message; } });
   out.times = root.querySelectorAll('time').map(function (t) { return { text: t.textContent, datetime: t.getAttribute('datetime') }; });
   out.live = ids.live ? ids.live.children.map(serialize).join('') : '';
   out.statusInner = ids.status ? ids.status.children.map(serialize).join('') : '';

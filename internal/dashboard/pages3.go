@@ -179,7 +179,7 @@ func (d *dash) executionsHandler() http.Handler {
 		if err != nil {
 			p.State = &stateBlock{Class: "state state--error", Heading: "Data source unavailable",
 				Text: "The Bridge could not read its executions just now. Nothing was changed. Try again in a few seconds.", LinkHref: p.RefreshHref, LinkText: "Try again"}
-			unavailablePage(w, p)
+			d.unavailablePage(ctx, w, p)
 			return
 		}
 		now := d.now().UTC()
@@ -322,7 +322,7 @@ func (d *dash) catalogHandler() http.Handler {
 		if err != nil {
 			p.State = &stateBlock{Class: "state state--error", Heading: "Data source unavailable",
 				Text: "The Bridge could not read its sessions just now. Nothing was changed. Try again in a few seconds.", LinkHref: p.RefreshHref, LinkText: "Try again"}
-			unavailablePage(w, p)
+			d.unavailablePage(ctx, w, p)
 			return
 		}
 		p.Groups, p.Truncate = groupCatalog(rows)
@@ -420,11 +420,11 @@ func buildHealthRows(h Health, label string, audit AuditSource) []healthRow {
 		version = "unknown"
 	}
 	text("Version", version)
-	build := "unknown"
-	if h.Build != "" {
-		build = truncRunes(h.Build, 12)
+	if h.Build != "" { // the whole VCS revision (40 hex characters), bounded (#576 P3-5)
+		rows = append(rows, healthRow{Label: "Build", Parts: []part{codePart(truncRunes(h.Build, 64))}})
+	} else {
+		text("Build", "unknown")
 	}
-	text("Build", build)
 	if h.TokenExpires != nil {
 		rows = append(rows, healthRow{Label: "Connector token expires", Parts: []part{absTimePart(*h.TokenExpires)}})
 	}
@@ -468,7 +468,7 @@ func (d *dash) healthHandler() http.Handler {
 		if err != nil {
 			p.State = &stateBlock{Class: "state state--error", Heading: "Data source unavailable",
 				Text: "The Bridge could not read its own state just now. Nothing was changed. Try again in a few seconds.", LinkHref: p.RefreshHref, LinkText: "Try again"}
-			unavailablePage(w, p)
+			d.unavailablePage(ctx, w, p)
 			return
 		}
 		now := d.now().UTC()
