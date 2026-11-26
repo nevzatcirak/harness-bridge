@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,6 +49,8 @@ type doctorDeps struct {
 	openCode       func(ctx context.Context, baseURL, username, password string) openCodeLive
 	dial           func(network, addr string, timeout time.Duration) error
 	smoke          func(ctx context.Context, endpoint, token string) ([]string, error)
+	stageDir       func() (string, error) // a private directory for a file `config import` may not write itself
+	random         io.Reader              // the names of temporary files and nothing else
 }
 
 // openCodeLive is the result of the live OpenCode reads: Status is the HTTP status of the first failing read
@@ -101,28 +102,15 @@ func runDoctor(args []string, d doctorDeps) int {
 }
 
 func doctor(rep *report, o doctorOptions, d doctorDeps) {
-	getenv, environ := d.getenv, d.environ
-	switch {
-	case o.fromUnit != "":
-		u, err := d.unitSource(o.fromUnit)
-		if err != nil {
-			rep.refuse("unit %s: %v", o.fromUnit, err)
-			return
-		}
-		getenv, environ = u.getenv, u.environ()
-		unitSourceLines(rep, "unit "+o.fromUnit, u)
-	case o.envFile != "":
-		u, err := envFileSource(o.envFile, d.readFile)
-		if err != nil {
-			rep.refuse("environment file: %v", err)
-			return
-		}
-		getenv, environ = u.getenv, u.environ()
-		unitSourceLines(rep, "file", u)
-	default:
-		fmt.Fprintln(rep.out, "environment source: this process (your shell). Use --from-unit <name> for what a service sees.")
+	src, ok := d.selectSource(rep, o.fromUnit, o.envFile)
+	if !ok {
+		return
 	}
-	env, ld := checkConfigurationFull(rep, o.serve, getenv, environ, d.uid, true)
+	getenv, environ := src.getenv, src.environ
+	if src.fromSrc {
+		compareWithConfig(rep, o.serve, src, d)
+	}
+	env, ld := checkConfigurationHome(rep, o.serve, getenv, environ, d.uid, true, src.home, src.fromSrc)
 	if ld == nil {
 		return
 	}
@@ -208,23 +196,18 @@ func checkTLS(rep *report, env func(string) string, now time.Time, d doctorDeps)
 		rep.refuse("tls.cert_file is unreadable")
 		return
 	}
-	block, _ := pem.Decode(data)
-	if block == nil || block.Type != "CERTIFICATE" {
-		rep.refuse("tls.cert_file holds no PEM certificate")
-		return
-	}
-	c, err := x509.ParseCertificate(block.Bytes)
+	notAfter, err := parseCertificateNotAfter(data)
 	if err != nil {
-		rep.refuse("tls.cert_file is not a valid certificate")
+		rep.refuse("tls.cert_file %v", err)
 		return
 	}
-	switch left := c.NotAfter.Sub(now); {
+	switch left := notAfter.Sub(now); {
 	case left <= 0:
-		rep.refuse("tls certificate expired on %s", c.NotAfter.UTC().Format("2006-01-02"))
+		rep.refuse("tls certificate expired on %s", notAfter.UTC().Format("2006-01-02"))
 	case left < 14*24*time.Hour:
-		rep.warn("tls certificate expires in %d day(s), on %s", int(left.Hours()/24), c.NotAfter.UTC().Format("2006-01-02"))
+		rep.warn("tls certificate expires in %d day(s), on %s", int(left.Hours()/24), notAfter.UTC().Format("2006-01-02"))
 	default:
-		rep.ok("tls certificate valid until %s", c.NotAfter.UTC().Format("2006-01-02"))
+		rep.ok("tls certificate valid until %s", notAfter.UTC().Format("2006-01-02"))
 	}
 	if info, err := os.Lstat(key); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 		rep.refuse("tls.key_file must be a private regular file (mode 0600)")
@@ -527,6 +510,7 @@ func productionDoctorDeps(getenv func(string) string, environ []string, stdout, 
 	return doctorDeps{
 		getenv: getenv, environ: environ, uid: os.Geteuid(), now: time.Now, stdout: stdout, stderr: stderr,
 		showUnit: prodShowUnit, readFile: osReadEnvFile, openCode: liveOpenCode, dial: dialOnce, smoke: smokeCall,
+		stageDir: prodStageDir, random: rand.Reader,
 	}
 }
 

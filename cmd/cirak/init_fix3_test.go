@@ -19,7 +19,10 @@ import (
 
 func TestInstallServiceClaudeHomeIsValidatedBeforeAnythingIsWritten(t *testing.T) {
 	bad := []string{"/", "-/", "+/etc", "!/x", "@/x", ":/x", "relative/dir", "../..", "/home/../etc", "/home/x/", "/home//x", "/home/./x",
-		"/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/root"}
+		"/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/proc", "/sys", "/dev", "/run", "/root",
+		// #557 P3-1: broad one-component paths and anything under a system tree, including the aliases
+		"/home", "/opt", "/srv", "/mnt", "/tmp", "/media", "/var/run", "/proc/sys", "/usr/local", "/usr/bin", "/etc/claude", "/var/lib",
+		"/var/lib/claude", "/root/claude", "/run/user/1000", "/sys/fs", "/lib64/x"}
 	for _, staged := range []bool{false, true} {
 		for i, v := range bad {
 			// the subtest name becomes part of the temporary directory path, and a value such as "!/x" would
@@ -60,7 +63,7 @@ func TestInstallServiceClaudeHomeIsValidatedBeforeAnythingIsWritten(t *testing.T
 		}
 	}
 	// a valid home is accepted and is the only ReadWritePaths= entry
-	for _, v := range []string{"/home/hbclaude", "/srv/claude", "/var/lib/claude", "/opt/claude-home"} {
+	for _, v := range []string{"/home/hbclaude", "/srv/claude", "/opt/claude-home", "/mnt/data/claude", "/home/a/..cache"} {
 		e := newSvcEnv(t)
 		if code := e.h.init(e.args("--claude-home", v)...); code != 0 {
 			t.Fatalf("%s: exit %d\n%s", v, code, e.h.all())
@@ -96,7 +99,8 @@ func TestDoctorSmokeIsUnverifiedInRemoteModeAndNeverCallsTheService(t *testing.T
 	}
 }
 
-// ---- P2-3 and P3-1: a symlinked unit directory is refused in the pre-flight, in both flows ----
+// ---- P2-3 and P3-1: a symlinked unit directory is refused in the pre-flight, in both flows; since R559 (#557
+// P3-2) it is a usage error, exit 2, like every other pre-flight refusal ----
 
 func TestInstallServiceRefusesASymlinkedUnitDirectoryBeforeAnythingIsPrintedOrStaged(t *testing.T) {
 	setup := func(t *testing.T, staged bool) (*svcEnv, string) {
@@ -127,7 +131,7 @@ func TestInstallServiceRefusesASymlinkedUnitDirectoryBeforeAnythingIsPrintedOrSt
 			args := e.args()
 			before := listTree(t, h.base)
 			code := h.init(args...)
-			if code != 1 || !strings.Contains(h.errb.String(), "symbolic link") || !strings.Contains(h.errb.String(), "no service file was written or staged") {
+			if code != 2 || !strings.Contains(h.errb.String(), "symbolic link") || !strings.Contains(h.errb.String(), "no service file was written or staged") {
 				t.Fatalf("exit %d:\n%s", code, h.all())
 			}
 			if strings.Join(before, "\n") != strings.Join(listTree(t, h.base), "\n") {
@@ -163,6 +167,10 @@ func TestInstallServiceAFailedStagedRunRemovesItsStagingDirectory(t *testing.T) 
 		entries, _ := os.ReadDir(h.stage)
 		t.Errorf("the staging directory survived a failed run: %v", entries)
 	}
+	// #557 P3-3: a failed run prints no command that names the removed staging directory
+	if strings.Contains(h.out.String(), "install -") || strings.Contains(h.out.String(), "rm -r") || strings.Contains(h.out.String(), h.stage) {
+		t.Errorf("a failed staged run printed commands for a directory it removed:\n%s", h.out.String())
+	}
 }
 
 // The staged flow says "staged", never "placed", for a file that was only staged.
@@ -189,10 +197,17 @@ func TestInstallServiceStagedFlowSaysStagedNotPlaced(t *testing.T) {
 func TestServiceAndDoctorCodeHaveNoOwnershipModeOrProcessCalls(t *testing.T) {
 	bannedSel := map[string]bool{"os.StartProcess": true, "syscall.Exec": true, "syscall.ForkExec": true, "syscall.StartProcess": true,
 		"os.Chown": true, "os.Lchown": true, "os.Chmod": true, "unix.Exec": true}
-	for _, file := range []string{"initservice.go", "unit.go", "doctor.go"} {
+	for _, file := range []string{"initservice.go", "unit.go", "doctor.go", "configimport.go", "initremote.go", "unitenv.go"} {
 		f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// only the doctor's one `systemctl show` may import os/exec: the import (S4) and the remote wizard never
+		// run a command
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"os/exec"` && file != "doctor.go" {
+				t.Errorf("%s imports os/exec", file)
+			}
 		}
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
