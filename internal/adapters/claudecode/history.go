@@ -86,7 +86,8 @@ func (c StoreConfig) withDefaults() StoreConfig {
 
 // Block is the payload of an assistant_block record.
 type Block struct {
-	Type  string `json:"type"` // text | tool_use
+	Type  string `json:"type"`         // text | tool_use
+	ID    string `json:"id,omitempty"` // tool_use id (ADR-017 A2 S4 tool pairing)
 	Text  string `json:"text,omitempty"`
 	Name  string `json:"name,omitempty"`
 	Input string `json:"input,omitempty"`
