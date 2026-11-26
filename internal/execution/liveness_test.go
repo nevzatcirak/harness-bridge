@@ -644,6 +644,7 @@ func TestLivenessNeverChangesStateOrGuard(t *testing.T) {
 	comparable := func(v Execution) Execution {
 		v.ID, v.MessageID, v.Liveness = "", "", nil
 		v.RetryAttemptSince = nil // A2 report memory, switched off with the report
+		v.UnavailableSince = nil  // A2 S3 report memory, same rule
 		return v
 	}
 	type observation struct {

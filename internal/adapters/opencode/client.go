@@ -115,6 +115,18 @@ type HTTPError struct{ Status int }
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("opencode HTTP %d", e.Status) }
 
+// Error classes of a native read (ADR-017 A2.4 item 1). The execution layer
+// classifies these sentinels; the messages stay the stable ones callers saw
+// before. HTTP failures are *HTTPError; the rest are transport/read/decode
+// failures that must be told apart so only a transport/read failure counts as
+// a native-unavailable probe.
+var (
+	ErrTransport        = errors.New("opencode transport unavailable or request canceled")
+	ErrResponseRead     = errors.New("opencode response read failed")
+	ErrResponseTooLarge = errors.New("opencode response exceeds 8 MiB")
+	ErrInvalidResponse  = errors.New("invalid opencode JSON response")
+)
+
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func ValidID(id, prefix string) bool {
@@ -189,7 +201,7 @@ func (c *Client) doHeaders(ctx context.Context, method, path string, body, out a
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return errors.New("opencode transport unavailable or request canceled")
+		return ErrTransport
 	}
 	defer res.Body.Close()
 	if headers != nil {
@@ -203,13 +215,13 @@ func (c *Client) doHeaders(ctx context.Context, method, path string, body, out a
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, (8<<20)+1))
 	if err != nil {
-		return errors.New("opencode response read failed")
+		return ErrResponseRead
 	}
 	if len(data) > 8<<20 {
-		return errors.New("opencode response exceeds 8 MiB")
+		return ErrResponseTooLarge
 	}
 	if err = json.Unmarshal(data, out); err != nil {
-		return errors.New("invalid opencode JSON response")
+		return ErrInvalidResponse
 	}
 	return nil
 }

@@ -41,6 +41,7 @@ func snapshot(v Execution) Execution {
 	v.ReconciledAt = copyTime(v.ReconciledAt)
 	v.GuardReleasedAt = copyTime(v.GuardReleasedAt)
 	v.RetryAttemptSince = copyTime(v.RetryAttemptSince)
+	v.UnavailableSince = copyTime(v.UnavailableSince)
 	if v.LocalFailure != nil {
 		local := *v.LocalFailure
 		v.LocalFailure = &local
@@ -233,21 +234,28 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 			if reconciling {
 				x.view.Unresolved.LastCheckedAt = &now
 			}
-			m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
+			m.setLiveness(x, m.nativeFailureLiveness(x, ctx, reason, err))
 			x.view.PermissionRejection = nil
 			// Observation failed: never keep a stale actionable detail or count.
 			x.view.PendingPermission, x.view.PendingPermissionCount = nil, nil
+		}
+		// The error is threaded out for classification only: an
+		// OBSERVATION_UNAVAILABLE probe keeps its existing public outcome (the
+		// execution's unresolved state), while an identity mismatch still returns
+		// its Fail error as before.
+		if reason == "OBSERVATION_UNAVAILABLE" {
+			return nil
 		}
 		return err
 	}
 	meta, err := x.runner.Get(ctx, x.native)
 	if err != nil {
-		return failed("OBSERVATION_UNAVAILABLE", "native metadata unavailable", nil)
+		return failed("OBSERVATION_UNAVAILABLE", "native metadata unavailable", err)
 	}
 	if err = validateSession(ctx, x, meta); err != nil {
 		if errors.Is(err, errFSTimeout) {
 			// V6: unknown, never a mismatch; no promotion, the guard is kept.
-			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", nil)
+			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", err)
 		}
 		x.mu.Lock()
 		x.messages = nil
@@ -256,15 +264,15 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	}
 	statuses, err := x.runner.Status(ctx)
 	if err != nil {
-		return failed("OBSERVATION_UNAVAILABLE", "native status unavailable", nil)
+		return failed("OBSERVATION_UNAVAILABLE", "native status unavailable", err)
 	}
 	msgs, err := x.runner.History(ctx, x.native)
 	if err != nil {
-		return failed("OBSERVATION_UNAVAILABLE", "native history unavailable", nil)
+		return failed("OBSERVATION_UNAVAILABLE", "native history unavailable", err)
 	}
 	permissions, err := x.runner.Permissions(ctx)
 	if err != nil {
-		return failed("OBSERVATION_UNAVAILABLE", "native permissions unavailable", nil)
+		return failed("OBSERVATION_UNAVAILABLE", "native permissions unavailable", err)
 	}
 	// Native reads are not atomic. Detect observed replacement during those reads
 	// before exposing content, committing terminal proof or permitting interruption.
@@ -272,7 +280,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		if errors.Is(err, errFSTimeout) {
 			// V7: as V6. The re-check starts its own call, so it observes the
 			// filesystem after the native reads.
-			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", nil)
+			return failed("OBSERVATION_UNAVAILABLE", "workspace identity check did not complete", err)
 		}
 		x.mu.Lock()
 		x.messages = nil
@@ -297,7 +305,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		// Also after the native reads, so it starts its own call (as V7).
 		resolved, err := evalSymlinksFresh(ctx, msg.Info.Path.Cwd)
 		if errors.Is(err, errFSTimeout) {
-			return failed("OBSERVATION_UNAVAILABLE", "correlated assistant workspace check did not complete", nil)
+			return failed("OBSERVATION_UNAVAILABLE", "correlated assistant workspace check did not complete", err)
 		}
 		if err != nil {
 			resolved = ""
@@ -314,6 +322,8 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	x.unavailableSince = time.Time{}
+	x.view.UnavailableSince = nil
 	if terminal(x.view.State) {
 		return nil
 	}
@@ -342,7 +352,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 				if reconciling {
 					x.view.Unresolved.LastCheckedAt = &now
 				}
-				m.setLiveness(x, unavailableLiveness(m.clock().UTC()))
+				m.setLiveness(x, unavailableLiveness(m.clock().UTC(), m.thresholdsObject()))
 				x.view.PermissionRejection = nil
 				x.view.PendingPermission, x.view.PendingPermissionCount = nil, nil
 				return Fail("FORBIDDEN", "correlated assistant workspace differs")
@@ -378,6 +388,7 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		unfinished: unfinished, proof: proof != nil, permissionPending: pending, started: x.view.Started,
 		retrySince: x.retrySince,
 		toolLong:   m.toolLongThreshold,
+		thresholds: *m.thresholdsObject(),
 	})
 	// ADR-018 (d): report-only, from the reads above plus the in-memory witness.
 	// It is assigned only to x.view.PermissionRejection and never consulted for
@@ -409,6 +420,8 @@ func (m *Manager) probe(ctx context.Context, x *run, reconciling bool) error {
 		x.retrySince = time.Time{}
 		x.retryAttemptSeen = 0
 		x.view.RetryAttemptSince = nil
+		x.unavailableSince = time.Time{}
+		x.view.UnavailableSince = nil
 		x.view.PermissionRejection = nil
 		x.view.State = terminalState(*proof)
 		x.view.Updated = now
