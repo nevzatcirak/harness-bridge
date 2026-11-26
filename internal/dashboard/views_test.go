@@ -41,6 +41,28 @@ type fakeSource struct {
 	workCalls     int
 	block         func(ctx context.Context) // a slow native read: runs first in every diff read
 	blockTurnDiff func(ctx context.Context) // a slow per-turn read only
+
+	// Slice S3a: the executions list and the health report.
+	execs       []Execution
+	execsErr    error
+	execCalls   int
+	health      Health
+	healthErr   error
+	healthCalls int
+}
+
+func (f *fakeSource) Executions(ctx context.Context) ([]Execution, error) {
+	f.mu.Lock()
+	f.execCalls++
+	f.mu.Unlock()
+	return f.execs, f.execsErr
+}
+
+func (f *fakeSource) Health(ctx context.Context) (Health, error) {
+	f.mu.Lock()
+	f.healthCalls++
+	f.mu.Unlock()
+	return f.health, f.healthErr
 }
 
 func (f *fakeSource) SessionTurns(ctx context.Context, harness, id string) ([]Turn, error) {

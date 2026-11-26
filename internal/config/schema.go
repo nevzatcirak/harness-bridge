@@ -110,6 +110,10 @@ const (
 	EnvInlineToken    = "CIRAK_TOKEN"
 	EnvInlinePassword = "OPENCODE_SERVER_PASSWORD"
 	EnvCredentialsDir = "CREDENTIALS_DIRECTORY"
+	// EnvDashboardLabel is the optional dashboard instance label (ADR-023 A1.8). It is read by the dashboard from
+	// the environment and is not a schema key (ADR-027 section 1.3 does not list it), so it is a known name that
+	// `config check` must not report as unknown.
+	EnvDashboardLabel = "CIRAK_DASHBOARD_LABEL"
 )
 
 var byPath = func() map[string]*Key {
@@ -132,7 +136,7 @@ func Lookup(path string) (Key, bool) {
 // KnownEnvNames returns every CIRAK_* name the daemon understands, for the unknown-name warning of config
 // check. Its legacy twin shares the suffix (ADR-026).
 func KnownEnvNames() map[string]bool {
-	m := map[string]bool{EnvConfig: true, EnvInlineToken: true}
+	m := map[string]bool{EnvConfig: true, EnvInlineToken: true, EnvDashboardLabel: true}
 	for _, k := range Keys {
 		m[k.Env] = true
 	}

@@ -70,6 +70,9 @@ func OpenWithOptions(cfg Config, src Source, uid int, opts Options) (*Server, er
 		}
 		hosts = DefaultHosts
 	}
+	if opts.Label == "" {
+		opts.Label = cfg.Label
+	}
 	s := &Server{ln: ln, srv: &http.Server{
 		Handler:           NewHandlerOptions(src, hosts, opts),
 		ReadHeaderTimeout: 5 * time.Second,

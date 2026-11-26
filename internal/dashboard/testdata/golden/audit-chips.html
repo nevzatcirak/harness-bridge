@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit" aria-current="page">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+
+
+
+
+
+
+<section class="audit cards" aria-labelledby="h-main">
+<h1 id="h-main">Audit</h1>
+<div class="card">
+<p class="label">6 entries (the ring keeps the last 1000; the journal is the audit authority).</p>
+<div class="filters" id="filters" hidden><label for="audit-filter">Filter</label> <input class="input" type="search" id="audit-filter" maxlength="64" autocomplete="off"></div>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-main"><table class="audit-feed">
+<caption class="visually-hidden">The audit ring of this Bridge process, newest first</caption>
+<thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Error</th><th scope="col">Session</th><th scope="col">Execution</th><th scope="col">Principal</th><th scope="col">Other</th></tr></thead>
+<tbody id="audit-rows">
+<tr><td>2026-11-21 17:48:05Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0000</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:48:04Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0001</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:48:05Z</td><td><span class="chip" title="interrupt">Interrupt</span></td><td><span class="chip chip--ok" title="accepted">Accepted</span></td><td></td><td>ses_0000</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:48:05Z</td><td><span class="chip" title="guard_release">Guard release</span></td><td><span class="chip chip--error" title="refused">Refused</span></td><td></td><td>ses_0000</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:48:05Z</td><td><span class="chip" title="session_create">Session create</span></td><td><span class="chip chip--ok" title="created">Created</span></td><td></td><td>ses_0000</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:48:05Z</td><td><span class="chip" title="future_event">future_event</span></td><td><span class="chip" title="future_outcome">future_outcome</span></td><td></td><td>ses_0000</td><td></td><td>operator</td><td></td></tr>
+</tbody></table></div>
+
+
+</div>
+</section>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

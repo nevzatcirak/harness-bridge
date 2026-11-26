@@ -90,6 +90,9 @@ func v2Pages(t *testing.T) map[string]string {
 	for name, body := range s2Pages(t) { // slice S2: the detail page, one per liveness reason, and its states
 		out[name] = body
 	}
+	for name, body := range s3Pages(t) { // slice S3a: executions, catalog, health, the audit chips and pages, the top bar
+		out[name] = body
+	}
 	_, out["empty"], _ = v2Get(t, v2Handler(&fakeSource{rows: []Session{}}), "/")
 	code, body, _ := v2Get(t, v2Handler(&fakeSource{rowsErr: context.DeadlineExceeded}), "/")
 	if code != http.StatusServiceUnavailable {
@@ -241,10 +244,13 @@ func TestV2S1ShellHasOnlyExistingDestinations(t *testing.T) {
 		if !strings.Contains(body, `<details class="menu" id="menu" open>`) {
 			t.Errorf("%s: the menu is not open without script", name)
 		}
-		for _, absent := range []string{"/executions", "/catalog", "/health"} {
-			if strings.Contains(nav, `"`+absent+`"`) {
-				t.Errorf("%s: a destination whose page does not exist yet: %s", name, absent)
-			}
+		// S3a: all five destinations of A1.3 exist, in this order, and nothing else is in the menu
+		var got []string
+		for _, l := range links {
+			got = append(got, l[1])
+		}
+		if strings.Join(got, " ") != "/ /executions /catalog /audit /health" {
+			t.Errorf("%s: the menu is %v", name, got)
 		}
 	}
 	if body := v2Pages(t)["audit"]; !strings.Contains(body, `href="/audit" aria-current="page"`) {

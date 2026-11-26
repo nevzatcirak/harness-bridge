@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About and health - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health" aria-current="page">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+
+
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">About and health</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn btn--primary" href="/health">Refresh</a>
+<span class="label" id="status">Updated <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></span>
+</div>
+<dl class="kv">
+<dt>Version</dt><dd>v0.1.0</dd>
+<dt>Build</dt><dd>0123456789ab…</dd>
+<dt>Lifecycle</dt><dd><span class="chip chip--ok">On</span></dd>
+<dt>Permission relay</dt><dd><span class="chip chip--ok">On</span></dd>
+<dt>Claude Code</dt><dd><span class="chip">Off</span></dd>
+<dt>OpenCode reachability</dt><dd><span class="chip chip--ok">Reachable</span>, last session-list read <time datetime="2026-11-21T17:47:53Z" title="2026-11-21 17:47:53Z">12 s ago</time>, 2026-11-21 17:47:53Z</dd>
+<dt>Claude Code reachability</dt><dd><span class="chip">Not read</span></dd>
+<dt>Audit feed</dt><dd><span class="chip">Off</span></dd>
+</dl>
+<p class="label">Reachability is the outcome of the last session-list read: this page makes no native probe of its own.</p>
+</div>
+</section>
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+
