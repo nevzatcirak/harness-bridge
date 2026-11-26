@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -34,13 +35,26 @@ type unitEnvironment struct {
 // openFile reads a whole environment file; a variable so tests use temp files and nothing else.
 type fileReader func(path string) ([]byte, error)
 
+// maxEnvFile is the largest EnvironmentFile read (the config file's own cap). A larger file is an ERROR, never
+// a silently truncated source: a setting after the cut would be invisible (ADR-027 section 3 item 6).
+const maxEnvFile = 1 << 20
+
+var errEnvFileTooLarge = errors.New("the file is larger than 1 MiB")
+
 func osReadEnvFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(f, maxEnvFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxEnvFile {
+		return nil, errEnvFileTooLarge
+	}
+	return data, nil
 }
 
 // parseSystemctlShow reads the text of `systemctl show -p Environment -p EnvironmentFiles -p UnsetEnvironment`.
@@ -197,6 +211,9 @@ func loadUnitEnvironment(assign []string, files []envFileEntry, unset []string, 
 	}
 	for _, f := range files {
 		data, err := read(f.Path)
+		if err == nil && len(data) > maxEnvFile {
+			err = errEnvFileTooLarge // a reader that did not enforce the cap itself
+		}
 		switch {
 		case err == nil:
 		case errors.Is(err, os.ErrNotExist) && f.Optional:
@@ -246,4 +263,50 @@ func (u *unitEnvironment) environ() []string {
 // envFileSource reads one explicit --env-file as a unit-style environment source.
 func envFileSource(path string, read fileReader) (*unitEnvironment, error) {
 	return loadUnitEnvironment(nil, []envFileEntry{{Path: path}}, nil, read)
+}
+
+// envSource is the environment a command reads: the process (the operator's shell), one unit, or one file. home
+// is the home directory the implicit per-user config discovery may use: for a unit or a file it is the source's
+// own HOME, never the invoking user's, so a service is never diagnosed against the operator's file (#548 P3-4).
+type envSource struct {
+	getenv  func(string) string
+	environ []string
+	home    func() (string, error)
+	fromSrc bool // a unit or a file, not the process
+}
+
+// selectSource picks the source from --from-unit / --env-file (both empty: the process) and prints its
+// value-free description. It reports false after a REFUSED line, so the caller stops.
+func (d doctorDeps) selectSource(rep *report, fromUnit, envFile string) (*envSource, bool) {
+	var u *unitEnvironment
+	var err error
+	switch {
+	case fromUnit != "":
+		if u, err = d.unitSource(fromUnit); err != nil {
+			rep.refuse("unit %s: %v", fromUnit, err)
+			return nil, false
+		}
+		unitSourceLines(rep, "unit "+fromUnit, u)
+	case envFile != "":
+		if u, err = envFileSource(envFile, d.readFile); err != nil {
+			rep.refuse("environment file: %v", err)
+			return nil, false
+		}
+		unitSourceLines(rep, "file", u)
+	default:
+		fmt.Fprintln(rep.out, "environment source: this process (your shell). Use --from-unit <name> for what a service sees.")
+		return &envSource{getenv: d.getenv, environ: d.environ, home: processHome}, true
+	}
+	return &envSource{getenv: u.getenv, environ: u.environ(), home: u.homeDir, fromSrc: true}, true
+}
+
+// homeDir is the HOME the unit's environment sets. systemd's implicit HOME (User=) is not in `systemctl show`,
+// so without one there is no per-user fallback: the config is found by CIRAK_CONFIG, the system path or an
+// XDG_CONFIG_HOME of the source, never by the invoking user's home.
+func (u *unitEnvironment) homeDir() (string, error) {
+	h := u.Vars["HOME"]
+	if h == "" || !filepath.IsAbs(h) {
+		return "", errors.New("the source sets no absolute HOME")
+	}
+	return h, nil
 }

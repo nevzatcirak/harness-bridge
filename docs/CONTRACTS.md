@@ -213,15 +213,37 @@ daemon reads the environment exactly as before; every start logs `config: using 
   (`harness.opencode.url`, `server.public_origin`) is shown as scheme and host only, userinfo as `***@`, a path,
   query or fragment not shown, and a value that is not a plain URL not echoed; any value with a control or
   unprintable character is shown quoted, so it cannot forge a line.
-- Not in the config slice: `config import`, and `--from-unit`/`--env-file`/`--as` on `config check` (ADR-027
-  S4; `cirak doctor` has `--from-unit` and `--env-file`, see below).
+- **`config check --from-unit name | --env-file path` (ADR-027 S4):** the same source as `doctor`. The command reads what
+  the unit would run with (`systemctl show -p Environment -p EnvironmentFiles -p UnsetEnvironment`, then its
+  `EnvironmentFile=` files, merged with systemd's order) instead of the operator's shell, and prints the paths of the
+  files read, never a value. An unreadable, unparseable or **over-1-MiB** file, a mandatory file that is missing and an
+  unexpanded specifier such as `%d` are errors that stop the command; only a `-`-prefixed missing file is skipped. In
+  source mode the per-user config discovery uses the **source's own `HOME`** (a relative or absent one means no
+  per-user file), never the invoking user's, so a service is not diagnosed against the operator's file. A token that
+  the unit delivers with `LoadCredential=` cannot be resolved (`systemctl show` does not expose
+  `$CREDENTIALS_DIRECTORY`): the line is `UNVERIFIED` and says so, and the credential is never read.
+- **`cirak config import (--from-unit name | --env-file path) --out path [--reject-unknown] [--force]` (ADR-027 S4):**
+  writes the non-secret settings of that source as a config file, mode `0600`, through an `O_EXCL` file; an existing
+  `--out` needs `--force` and gets a `.bak-<UTC stamp>` copy (`0600`, the rollback of section 5 step 5). The output is
+  **value-free**: key names, the files read and skipped, never a value. Every key of the schema is converted by
+  `config.JSONValue`; before anything is written the command proves that the file alone resolves to the same
+  effective value as the source for **every** key (otherwise nothing is written), and a source the daemon itself
+  would refuse (a legacy name differing from its `CIRAK_` twin, a token file with an inline token) is refused. An
+  inline `CIRAK_TOKEN`/`BRIDGE_TOKEN` or `OPENCODE_SERVER_PASSWORD` is **not copied**: the command prints the
+  `install -m 0600 /dev/null <path>` line that makes the private file and the key to set, and exits `1`. An unknown
+  `CIRAK_*`/`BRIDGE_*` name is a warning (names only), an error with `--reject-unknown`. Where `--out` cannot be
+  written by the invoker (the directory is missing or not writable) the config is staged in a private directory and
+  the quoted `install -d` / `install -o root -g root -m 0600` command is printed; the command never runs `sudo`,
+  `systemctl`, `chown` or `chmod`. Exit `0` imported, `1` imported with warnings (legacy names, an inline secret,
+  a staged file), `2` refused with nothing written.
 
 ### `cirak init` (ADR-027 S2)
 
 `cirak init [--yes] [--listen addr] [--root path]... [--session id]... [--lifecycle-root path]...
 [--opencode-url url] [--service-user name] [--config path] [--token-file path] [--expires RFC3339] [--force]`
-sets up **local mode**: no remote or TLS path (`--remote`, `--tls-cert`, `--tls-key` are refused with a usage
-error); a service file only with `--install-service` (below). It never starts or loads a service.
+sets up **local mode** by default; `--remote` (with `--tls-cert`, `--tls-key`, `--public-origin`, `--principal`) writes
+remote mode, see "Remote mode (ADR-027 S4)" below. A service file only with `--install-service` (below). It never starts
+or loads a service.
 - **Interactive** needs a terminal; **`--yes`** never prompts and needs `--root`, `--session` and `--token-file`.
 - **OpenCode** is probed with the Bridge's own bounded read (`GET /session/status`); the version is reported
   as `unknown` (no supported endpoint). A 401 asks for the credentials (echo off) and retries; a typed password
@@ -264,6 +286,26 @@ error); a service file only with `--install-service` (below). It never starts or
 - The lifecycle file is written only when `--lifecycle-root` is given (default none, so the default tool
   surface is unchanged): `create` mode only; `archive` and the overlay directory stay an operator step.
 
+### Remote mode (ADR-027 S4)
+
+`cirak init --remote --tls-cert path --tls-key path --public-origin https://host --principal name` (with `--yes`
+all four are required; on a terminal init asks). It writes `server.public_origin`, `server.principal`,
+`server.tls.cert_file` and `server.tls.key_file` beside the usual settings and the explicit `token.expires` (within
+`limits.token_max_lifetime`, 168h as in local mode), and the connector URL it prints is `<public origin>/mcp`.
+- The origin, the principal and the deadline are validated by the daemon's own `security.NewRemoteWithMaxLifetime`
+  (an HTTPS origin without path or credentials, a named principal, a future deadline within the maximum), and
+  `--listen` by `ValidateListen` in remote mode (loopback, or an explicit private IP): nothing the daemon would refuse
+  is written. The certificate must be an absolute canonical path, a regular file, a valid, unexpired PEM
+  certificate (a warning under 14 days); the key a regular file with mode `0600` and no symlink in its path. The
+  service user must be able to read both; otherwise the exact `chmod`/`chown`/`setfacl` fix is printed and **not applied**.
+  Every refusal happens before OpenCode is probed or anything is written.
+- `--tls-cert`, `--tls-key`, `--public-origin` and `--principal` need `--remote`: a certificate alone never turns a
+  local setup into a remote one. A missing half of the TLS pair is refused, never a plaintext fallback.
+- init never opens a firewall or edits a reverse proxy; it points at `docs/deploy/Caddyfile.example` and
+  `docs/deploy/PRIVATE_HTTPS_PREPARATION.md` (a proxy may terminate the client TLS and must forward over verified TLS
+  to this backend). The listener and the live TLS handshake are not exercised by init (UNVERIFIED): the written config
+  is checked with `config check`, and `doctor` reports the certificate's expiry.
+
 ### Service install (ADR-027 S3)
 
 `cirak init --install-service [--service-user name] [--launch-daemon] [--claude-home path] [--force]` renders a
@@ -289,9 +331,11 @@ code has no exec call): the reload and start commands are printed, quoted, for t
   - **Claude adapter** (`--claude-home path`): `NoNewPrivileges=yes` is **omitted** (the adapter child runs under
     `sudo -u hbclaude`, and sudo is setuid), the drop-in sets `NoNewPrivileges=no`, and the chosen form is
     `ProtectHome=off` with `ReadWritePaths=<claude home>`; the unit says which it chose. The path must be absolute and
-    canonical, not `/` and not a top-level system directory (`/etc`, `/usr`, `/var`, `/bin`, `/sbin`, `/lib*`, `/boot`,
-    `/proc`, `/sys`, `/dev`, `/run`, `/root`), with no `..` and no leading `-`, `+`, `!`, `@` or `:`; otherwise `init`
-    refuses with exit 2 before anything is written, staged or printed.
+    canonical (no `..`, `//` or trailing slash), of **at least two components** (so never `/`, `/home` or `/opt`), not
+    one of the system trees or **below one** (`/etc`, `/usr`, `/var`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`,
+    `/bin`, `/sbin`, `/lib*`; so `/var/run`, `/proc/sys`, `/usr/local` and `/etc/claude` are refused), with no leading
+    `-`, `+`, `!`, `@` or `:`; otherwise `init` refuses with exit 2 before anything is written, staged or printed.
+    A path that is a symlink to a system directory on the host is not resolved.
 - **macOS (launchd):** a `LaunchAgent` for you by default (`~/Library/LaunchAgents/dev.cirak.agent.plist`, no root,
   logs under `~/Library/Logs/cirak`), or with `--launch-daemon --service-user` a `LaunchDaemon`
   (`/Library/LaunchDaemons/dev.cirak.daemon.plist`, root-owned, so staged unless you can write it). `KeepAlive`,
@@ -324,6 +368,14 @@ sockets (private directory, `srw-------`, a stale-socket note) and whether anyth
   that is not `NAME=VALUE`, or an unexpanded specifier such as `%d` is an **error** that stops the command, never an
   empty source. Run it as root or as a user that can read every file. `--env-file path` is the explicit alternative.
   The `systemctl show` property formats were taken from systemd's documentation, not a live host: UNVERIFIED.
+- **Side by side (ADR-027 section 5 step 3):** with a unit or file source and a config file in use, `doctor` first
+  prints a `compare:` table: for every key either side sets, the source's value and the file's value (a secret
+  reference as `set`/`unset`, a URL redacted), and `same`, `DIFFERENT`, `ONLY IN THE SOURCE` or `only in the file`. A
+  differing guarded pair is `REFUSED` (a start with both refuses it); a setting only in the source (or an inline token the
+  file does not carry) is a warning; each says **do NOT remove the legacy lines**. Only when the table shows no
+  difference does it say the legacy lines may go after a clean check. No config file in use prints one line saying
+  there is nothing to compare. The H5 host migration itself is an operator step: see
+  [CONFIG_MIGRATION](deploy/CONFIG_MIGRATION.md); no worker runs it.
 - **`--smoke`** makes one bounded `initialize` and `tools/list` call against the **already running** local endpoint
   (a client call: no prompt, no mutation, no listener). The surface must match the configuration: the 11 base tools,
   `reply_permission` unless the relay is `off`, `list_catalog` and `create_session` with a lifecycle config (the
