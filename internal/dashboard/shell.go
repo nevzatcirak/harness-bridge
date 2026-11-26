@@ -18,6 +18,7 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <title>{{.Title}}</title>
 <meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
 <link rel="stylesheet" href="/dashboard.css">
+<script src="/theme.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
@@ -33,7 +34,8 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <span class="spacer"></span>
 {{if .TopLabel}}<span class="label" id="instance">{{.TopLabel}}</span>
 {{end}}{{with .TopBadge}}<span class="{{.Class}}" title="{{.Title}}">{{.Text}}</span>
-{{end}}<span class="label">Read-only</span>
+{{end}}<button class="btn" type="button" id="theme" title="Switch between the dark and the light theme" hidden>Theme</button>
+<span class="label">Read-only</span>
 </div></header>
 <main id="content" tabindex="-1" class="wrap"{{if .Poll}} data-poll="{{.Poll}}"{{if .PollHarness}} data-harness="{{.PollHarness}}" data-session="{{.PollID}}" data-sig="{{.Sig}}"{{end}}{{end}}>
 <p class="banner" id="stale" role="status" hidden></p>
@@ -98,7 +100,7 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <td>{{if .Live.ChipLabel}}<span class="{{.Live.ChipClass}}"{{if .Live.ChipTitle}} title="{{.Live.ChipTitle}}"{{end}}>{{.Live.ChipLabel}}</span>{{else}}<span class="label">{{.Live.Text}}</span>{{end}}</td>
 </tr>
 {{end}}</tbody></table></div>{{end}}
-<p class="label">Newest first. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
+<p class="label">Newest first, at most the newest 200 executions. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
 </div>
 </section>{{end}}
 {{if .CatalogPage}}<section aria-labelledby="h-main" class="cards">

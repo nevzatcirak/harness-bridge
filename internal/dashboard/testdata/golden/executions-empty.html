@@ -6,6 +6,7 @@
 <title>Executions - Cirak</title>
 <meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
 <link rel="stylesheet" href="/dashboard.css">
+<script src="/theme.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
@@ -20,6 +21,7 @@
 </ul></nav></details>
 <span class="spacer"></span>
 <span class="chip chip--warn" title="Connector token expiry 2026-11-21 18:40:05Z">Token expires in 52 min</span>
+<button class="btn" type="button" id="theme" title="Switch between the dark and the light theme" hidden>Theme</button>
 <span class="label">Read-only</span>
 </div></header>
 <main id="content" tabindex="-1" class="wrap">
@@ -35,7 +37,7 @@
 </div>
 <div class="state"><h2>No executions</h2><p>This Bridge process has recorded no execution for a session you may see. A restart empties the list. Executions of archived sessions are shown only when you ask for them.</p><a class="btn" href="/executions?archived=1">Show archived</a></div>
 
-<p class="label">Newest first. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
+<p class="label">Newest first, at most the newest 200 executions. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
 </div>
 </section>
 

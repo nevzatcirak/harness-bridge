@@ -17,10 +17,10 @@ import (
 var scriptTagRe = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>|<script\b[^>]*>`)
 
 // embeddedScriptRe is the one form of script element a page may carry: a same-origin file of the dashboard.
-var embeddedScriptRe = regexp.MustCompile(`^<script src="(/dashboard[a-z-]*\.js)"></script>$`)
+var embeddedScriptRe = regexp.MustCompile(`^<script src="(/(?:dashboard[a-z-]*|theme)\.js)"></script>$`)
 
 func knownScript(src string) bool {
-	for _, n := range scriptFiles {
+	for _, n := range allScripts {
 		if src == "/"+n {
 			return true
 		}
@@ -66,7 +66,7 @@ func TestD34AssetsAreTheStylesheetAndTheScriptTable(t *testing.T) {
 	for _, e := range entries {
 		have = append(have, e.Name())
 	}
-	want := append([]string{"dashboard.css"}, scriptFiles...)
+	want := append([]string{"dashboard.css"}, allScripts...)
 	sort.Strings(have)
 	sort.Strings(want)
 	if strings.Join(have, " ") != strings.Join(want, " ") {
@@ -76,7 +76,7 @@ func TestD34AssetsAreTheStylesheetAndTheScriptTable(t *testing.T) {
 		t.Errorf("the script table is %v: the core first, then the three page scripts", scriptFiles)
 	}
 	h := NewHandlerOptions(NullSource{}, nil, Options{Audit: NewAuditRing()})
-	for _, name := range scriptFiles {
+	for _, name := range allScripts {
 		raw, err := os.ReadFile("assets/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -103,7 +103,7 @@ func TestD34AssetsAreTheStylesheetAndTheScriptTable(t *testing.T) {
 func TestD34EachPageLoadsOnlyTheScriptsItNeeds(t *testing.T) {
 	seen := map[string]int{}
 	for name, body := range goldenPages(t) {
-		want := []string{"/" + scriptCore}
+		want := []string{"/" + scriptTheme, "/" + scriptCore} // theme.js is blocking in the head, the scripts of the body follow
 		switch {
 		case strings.Contains(body, `data-poll="list"`):
 			want = append(want, "/"+scriptList)
@@ -142,7 +142,7 @@ func TestD34EachPageLoadsOnlyTheScriptsItNeeds(t *testing.T) {
 	}
 	// The pages that need the core alone: no poll, no filter.
 	for _, name := range []string{"executions", "catalog", "health-remote"} {
-		if got := scriptSrcs(s3Pages(t)[name]); strings.Join(got, " ") != "/dashboard.js" {
+		if got := scriptSrcs(s3Pages(t)[name]); strings.Join(got, " ") != "/theme.js /dashboard.js" {
 			t.Errorf("%s loads %v, want the core alone", name, got)
 		}
 	}
@@ -150,7 +150,7 @@ func TestD34EachPageLoadsOnlyTheScriptsItNeeds(t *testing.T) {
 	o := v2Opts()
 	o.Audit = fakeAuditOf()
 	_, body, _ := v2Get(t, NewHandlerOptions(&fakeSource{}, nil, o), "/audit")
-	if got := scriptSrcs(body); strings.Join(got, " ") != "/dashboard.js" {
+	if got := scriptSrcs(body); strings.Join(got, " ") != "/theme.js /dashboard.js" {
 		t.Errorf("an empty audit page loads %v, want the core alone", got)
 	}
 }
@@ -167,7 +167,7 @@ func TestD34CSPOnPagesAndScripts(t *testing.T) {
 	}
 	h := NewHandlerOptions(&fakeSource{rows: v2Rows()}, nil, Options{Audit: NewAuditRing()})
 	targets := []string{"/", "/audit", "/executions", "/catalog", "/health", "/session/opencode/ses_demo0001", "/nope"}
-	for _, n := range scriptFiles {
+	for _, n := range allScripts {
 		targets = append(targets, "/"+n)
 	}
 	for _, target := range targets {
@@ -188,7 +188,7 @@ func TestD34NoInlineScriptOnAnyPage(t *testing.T) {
 			}
 		}
 		for _, a := range htmlAttrs(body) {
-			if strings.HasPrefix(a.name, "on") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.value)), "javascript:") {
+			if strings.HasPrefix(a.name, "on") || runsScript(a.value) {
 				t.Errorf("%s: attribute %s=%q", name, a.name, a.value)
 			}
 		}
@@ -215,7 +215,7 @@ func TestD34PageScriptsUseOnlyTheCoreExports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?s)window\.cirakDash = \{(.*?)\n  \};`).FindStringSubmatch(string(core))
+	m := regexp.MustCompile(`(?s)window\.cirakDash = Object\.freeze\(\{(.*?)\n  \}\);`).FindStringSubmatch(string(core))
 	if m == nil {
 		t.Fatal("the core does not export window.cirakDash")
 	}
@@ -245,7 +245,7 @@ func TestD34PageScriptsUseOnlyTheCoreExports(t *testing.T) {
 		}
 	}
 	// No script defines a global other than the one namespace.
-	for _, name := range scriptFiles {
+	for _, name := range allScripts {
 		raw, _ := os.ReadFile("assets/" + name)
 		for _, g := range regexp.MustCompile(`window\.(\w+)\s*=[^=]`).FindAllStringSubmatch(string(raw), -1) {
 			if g[1] != "cirakDash" {

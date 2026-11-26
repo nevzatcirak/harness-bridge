@@ -3,9 +3,9 @@
  * axes: system face, dark default with a light theme, restrained accent · contrast: pass · v2.0.0 */
 /* Hallmark · pre-emit critique: P3 H4 E3 S4 R4 V3 · weakest: E, the mock has not been rendered in a browser; checked by sloplint and by the contrast script only */
 /* Hallmark · waive 7b · stamp surface: absolute, genre modern-minimal allows #fff paper, no tinted base is derived · the maintainer's light paper token is pure white and the dashboard keeps it as its card surface and as text on the primary colour */
-/* Embedded dark-only copy of the reference stylesheet under docs/design (ADR-023 A1, slice S1, D31 Q10); the light theme arrives with S3. */
+/* Embedded copy of the reference stylesheet under docs/design (ADR-023 A1, D31 Q10): dark default, the light theme by media query and by the toggle (slice S3b). */
 :root {
-  color-scheme: dark;
+  color-scheme: dark light;
   --bg: #121212;
   --surface-low: #1a1a1a;
   --surface: #1e1e1e;
@@ -57,6 +57,73 @@
   --dur-micro: 80ms;
   --dur-short: 140ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #fafafa;
+    --surface-low: #f2f2f2;
+    --surface: #ffffff;
+    --surface-high: #ffffff;
+    --text: #212121;
+    --text-muted: #595959;
+    --hairline: #e0e0e0;
+    --primary: #2962ff;
+    --on-primary: #ffffff;
+    --primary-active: #1a4fd6;
+    --secondary: #6200ea;
+    --ok: #1b5e20;
+    --warn: #9a4700;
+    --error: #c62828;
+    --info: #01579b;
+    --input-border: #767676;
+    --chip-ok: #1b5e20;
+    --chip-info: #01579b;
+    --chip-secondary: #6200ea;
+    --chip-error: #b71c1c;
+    --chip-warn: #9a4700;
+    --chip-neutral: #212121;
+    --tint-ok: rgb(27 94 32 / 0.14);
+    --tint-info: rgb(1 87 155 / 0.14);
+    --tint-secondary: rgb(98 0 234 / 0.14);
+    --tint-error: rgb(183 28 28 / 0.14);
+    --tint-warn: rgb(154 71 0 / 0.14);
+    --tint-neutral: rgb(33 33 33 / 0.14);
+  }
+}
+
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fafafa;
+  --surface-low: #f2f2f2;
+  --surface: #ffffff;
+  --surface-high: #ffffff;
+  --text: #212121;
+  --text-muted: #595959;
+  --hairline: #e0e0e0;
+  --primary: #2962ff;
+  --on-primary: #ffffff;
+  --primary-active: #1a4fd6;
+  --secondary: #6200ea;
+  --ok: #1b5e20;
+  --warn: #9a4700;
+  --error: #c62828;
+  --info: #01579b;
+  --input-border: #767676;
+  --chip-ok: #1b5e20;
+  --chip-info: #01579b;
+  --chip-secondary: #6200ea;
+  --chip-error: #b71c1c;
+  --chip-warn: #9a4700;
+  --chip-neutral: #212121;
+  --tint-ok: rgb(27 94 32 / 0.14);
+  --tint-info: rgb(1 87 155 / 0.14);
+  --tint-secondary: rgb(98 0 234 / 0.14);
+  --tint-error: rgb(183 28 28 / 0.14);
+  --tint-warn: rgb(154 71 0 / 0.14);
+  --tint-neutral: rgb(33 33 33 / 0.14);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
