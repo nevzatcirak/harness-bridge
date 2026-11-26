@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/" aria-current="page">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label" id="instance">bridge-a</span>
+<span class="chip chip--warn" title="Connector token expiry 2026-11-21 18:40:05Z">Token expires in 52 min</span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap" data-poll="list">
+<p class="banner" id="stale" role="status" hidden></p>
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Sessions</h1>
+<div class="card">
+<div class="toolbar">
+<div class="filters" id="filters" role="search" aria-label="Filter sessions" hidden>
+<label class="visually-hidden" for="f-q">Search sessions</label>
+<input class="input" id="f-q" type="search" maxlength="64" autocomplete="off" placeholder="Search title, path or ID">
+<label class="visually-hidden" for="f-state">State</label>
+<select class="select" id="f-state"><option value="">All states</option><option value="running">Running</option><option value="waiting_for_permission">Waiting for permission</option><option value="idle">Idle</option><option value="unknown">Unknown</option></select>
+<label class="visually-hidden" for="f-harness">Harness</label>
+<select class="select" id="f-harness"><option value="">All harnesses</option><option value="opencode">OpenCode</option><option value="claudecode">Claude Code</option></select>
+</div>
+<a class="btn" href="/?archived=1">Show archived</a>
+<a class="btn btn--primary" href="/">Refresh</a>
+<span class="label" id="status">5 sessions, updated <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></span>
+</div>
+<div id="live">
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-main">
+<table>
+<caption class="visually-hidden">Sessions known to this Bridge</caption>
+<thead><tr><th scope="col">Harness</th><th scope="col">Session</th><th scope="col">Repository and path</th><th scope="col">Lifecycle root</th><th scope="col">State</th><th scope="col">Guard</th><th scope="col">Current execution</th><th scope="col">Last activity</th></tr></thead>
+<tbody>
+<tr data-harness="opencode" data-state="running">
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_demo0001">Fix flaky retry test</a><br><code>ses_demo0001</code></td>
+<td class="path"><span title="/srv/demo/work/payments-api">/srv/demo/work/payments-api</span></td>
+<td class="path"><span>/srv/demo/work</span></td>
+<td><span class="chip chip--info" title="running">Running</span></td>
+<td>None</td>
+<td>None</td>
+<td><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time></td>
+</tr>
+<tr data-harness="opencode" data-state="waiting_for_permission">
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_demo0002">Migrate config loader</a><br><code>ses_demo0002</code></td>
+<td class="path"><span title="/srv/demo/work/tools">/srv/demo/work/tools</span></td>
+<td class="path"><span>/srv/demo/work</span></td>
+<td><span class="chip chip--secondary" title="waiting_for_permission">Waiting for permission</span></td>
+<td>None</td>
+<td>None</td>
+<td><time datetime="2026-11-21T17:42:05Z" title="2026-11-21 17:42:05Z">6 min ago</time></td>
+</tr>
+<tr data-harness="opencode" data-state="idle">
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_lab0001">Lab notes</a><br><code>ses_lab0001</code></td>
+<td class="path"><span title="/srv/lab/notes">/srv/lab/notes</span></td>
+<td class="path"><span>/srv/lab</span></td>
+<td><span class="chip" title="idle">Idle</span></td>
+<td>None</td>
+<td>None</td>
+<td><time datetime="2026-11-21T15:48:05Z" title="2026-11-21 15:48:05Z">2 h ago</time></td>
+</tr>
+<tr data-harness="claudecode" data-state="unknown">
+<td><span class="badge">Claude Code</span></td>
+<td><a href="/session/claudecode/cc-demo-1">Docs pass</a><br><code>cc-demo-1</code></td>
+<td class="path"><span title="/srv/other/docs">/srv/other/docs</span></td>
+<td class="path">None</td>
+<td><span class="chip chip--warn" title="unknown">Unknown</span></td>
+<td>None</td>
+<td>None</td>
+<td><time datetime="2026-11-21T16:48:05Z" title="2026-11-21 16:48:05Z">1 h ago</time></td>
+</tr>
+<tr data-harness="opencode" data-state="idle">
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_none0001">Spike: cache layer</a><br><code>ses_none0001</code></td>
+<td class="path"><span title="/home/op/spikes/cache">/home/op/spikes/cache</span></td>
+<td class="path">None</td>
+<td><span class="chip" title="idle">Idle</span></td>
+<td>None</td>
+<td>None</td>
+<td><time datetime="2026-11-20T11:48:05Z" title="2026-11-20 11:48:05Z">1 d ago</time></td>
+</tr>
+</tbody></table></div>
+
+</div>
+</div>
+</section>
+
+
+
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

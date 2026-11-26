@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Executions - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions" aria-current="page">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Executions</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn" href="/executions?archived=1">Show archived</a>
+<a class="btn btn--primary" href="/executions">Refresh</a>
+<span class="label" id="status"></span>
+</div>
+<div class="state"><h2>No data source</h2><p>No data source is connected.</p></div>
+
+<p class="label">Newest first. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
+</div>
+</section>
+
+
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

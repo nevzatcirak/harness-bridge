@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog and archived - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog" aria-current="page">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label" id="instance">bridge-a</span>
+<span class="chip chip--warn" title="Connector token expiry 2026-11-21 18:40:05Z">Token expires in 52 min</span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Catalog and archived</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn" href="/catalog">Hide archived</a>
+<a class="btn btn--primary" href="/catalog?archived=1">Refresh</a>
+<span class="label" id="status">6 sessions, updated <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></span>
+</div>
+<p class="label">Sessions grouped by the lifecycle root that contains them. The root is a label only: it widens nothing.</p>
+
+<section aria-labelledby="g0">
+<h2 id="g0"><code>/srv/demo/work</code> <span class="label">3 sessions</span></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="g0">
+<table>
+<caption class="visually-hidden">Sessions under one lifecycle root</caption>
+<thead><tr><th scope="col">Harness</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Last activity</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_demo0001">Fix flaky retry test</a><br><code>ses_demo0001</code></td>
+<td><span class="chip chip--info" title="running">Running</span></td>
+<td><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time></td>
+</tr>
+<tr>
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_demo0002">Migrate config loader</a><br><code>ses_demo0002</code></td>
+<td><span class="chip chip--secondary" title="waiting_for_permission">Waiting for permission</span></td>
+<td><time datetime="2026-11-21T17:42:05Z" title="2026-11-21 17:42:05Z">6 min ago</time></td>
+</tr>
+<tr>
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_demo0009?archived=1">Old prototype</a> <span class="chip chip--outline">Archived</span><br><code>ses_demo0009</code></td>
+<td><span class="chip" title="idle">Idle</span></td>
+<td><time datetime="2026-11-12T17:48:05Z" title="2026-11-12 17:48:05Z">9 d ago</time></td>
+</tr>
+</tbody></table></div>
+</section>
+<section aria-labelledby="g1">
+<h2 id="g1"><code>/srv/lab</code> <span class="label">1 session</span></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="g1">
+<table>
+<caption class="visually-hidden">Sessions under one lifecycle root</caption>
+<thead><tr><th scope="col">Harness</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Last activity</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_lab0001">Lab notes</a><br><code>ses_lab0001</code></td>
+<td><span class="chip" title="idle">Idle</span></td>
+<td><time datetime="2026-11-21T15:48:05Z" title="2026-11-21 15:48:05Z">2 h ago</time></td>
+</tr>
+</tbody></table></div>
+</section>
+<section aria-labelledby="g-none">
+<h2 id="g-none">No lifecycle root <span class="label">2 sessions</span></h2>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="g-none">
+<table>
+<caption class="visually-hidden">Sessions under no lifecycle root</caption>
+<thead><tr><th scope="col">Harness</th><th scope="col">Session</th><th scope="col">State</th><th scope="col">Last activity</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="badge">Claude Code</span></td>
+<td><a href="/session/claudecode/cc-demo-1">Docs pass</a><br><code>cc-demo-1</code></td>
+<td><span class="chip chip--warn" title="unknown">Unknown</span></td>
+<td><time datetime="2026-11-21T16:48:05Z" title="2026-11-21 16:48:05Z">1 h ago</time></td>
+</tr>
+<tr>
+<td><span class="badge">OpenCode</span></td>
+<td><a href="/session/opencode/ses_none0001">Spike: cache layer</a><br><code>ses_none0001</code></td>
+<td><span class="chip" title="idle">Idle</span></td>
+<td><time datetime="2026-11-20T11:48:05Z" title="2026-11-20 11:48:05Z">1 d ago</time></td>
+</tr>
+</tbody></table></div>
+</section>
+
+</div>
+</section>
+
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

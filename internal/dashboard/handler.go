@@ -59,6 +59,8 @@ type Options struct {
 	// Audit is the read-only audit feed (the ring of the tee handler). Nil means the
 	// feed is not enabled: the audit pages say so and show nothing.
 	Audit AuditSource
+	// Label is the instance label of the top bar (CIRAK_DASHBOARD_LABEL); empty shows none.
+	Label string
 }
 
 func routes(src Source, opts Options) []Route {
@@ -68,6 +70,12 @@ func routes(src Source, opts Options) []Route {
 		{Path: sessionPrefix, Methods: getHead, Handler: d.detailHandler(), Prefix: true, Data: true},
 		{Path: "/api/state", Methods: getHead, Handler: d.stateListHandler(), Data: true},
 		{Path: statePrefix, Methods: getHead, Handler: d.stateDetailHandler(), Prefix: true, Data: true},
+		{Path: "/executions", Methods: getHead, Handler: d.executionsHandler(), Data: true},
+		{Path: "/catalog", Methods: getHead, Handler: d.catalogHandler(), Data: true},
+		{Path: "/health", Methods: getHead, Handler: d.healthHandler(), Data: true},
+		{Path: "/api/state/executions", Methods: getHead, Handler: d.executionsJSONHandler(), Data: true},
+		{Path: "/api/state/catalog", Methods: getHead, Handler: d.catalogJSONHandler(), Data: true},
+		{Path: "/api/state/health", Methods: getHead, Handler: d.healthJSONHandler(), Data: true},
 		{Path: "/audit", Methods: getHead, Handler: d.auditPageHandler()},
 		{Path: "/api/audit", Methods: getHead, Handler: d.auditJSONHandler()},
 		{Path: "/dashboard.css", Methods: getHead, Handler: assetHandler("assets/dashboard.css", "text/css; charset=utf-8")},

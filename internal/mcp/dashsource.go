@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nevzatcirak/cirak/internal/adapters/claudecode"
@@ -11,6 +12,7 @@ import (
 	"github.com/nevzatcirak/cirak/internal/dashboard"
 	"github.com/nevzatcirak/cirak/internal/execution"
 	"github.com/nevzatcirak/cirak/internal/security"
+	"github.com/nevzatcirak/cirak/internal/version"
 )
 
 // maxDashTurns bounds the turns one detail read returns (the newest are kept; the
@@ -30,7 +32,8 @@ const maxDashTurns = 1000
 // lifecycle roots label the rows (D17 Q6): the label widens nothing, the rows are still exactly
 // the ACL-authorized sessions (the rule of list_catalog, ADR-022 6.1).
 func (s *Server) DashboardSource(archive ArchiveOverlay) dashboard.Source {
-	d := &dashSource{runs: s.Runs, archive: archive, claude: map[string]bool{}}
+	d := &dashSource{runs: s.Runs, archive: archive, claude: map[string]bool{}, remote: s.Remote,
+		features: []dashboard.Feature{{Name: "Lifecycle", On: s.Catalog != nil}, {Name: "Permission relay", On: s.PermissionRelay != nil}, {Name: "Claude Code", On: s.Claude != nil}}}
 	if s.Catalog != nil {
 		d.roots = s.Catalog.Roots
 		if d.archive == nil {
@@ -64,6 +67,23 @@ type dashSource struct {
 	archive ArchiveOverlay
 	roots   *security.LifecycleRoots // nil: no lifecycle configuration, no label
 	claude  map[string]bool          // claudecode: IDs without the prefix
+
+	// What Health reports (ADR-023 A1.8): the Bridge's own settings, fixed at construction, and the outcome of the
+	// last session-list read, which every Sessions call records. Health makes no native call of its own.
+	remote   *security.Remote
+	features []dashboard.Feature
+	mu       sync.Mutex
+	read     struct {
+		at   time.Time
+		seen bool
+		ok   bool
+	}
+}
+
+func (d *dashSource) noteRead(err error) {
+	d.mu.Lock()
+	d.read.at, d.read.seen, d.read.ok = time.Now(), true, err == nil
+	d.mu.Unlock()
 }
 
 func nonTerminal(state string) bool {
@@ -124,6 +144,7 @@ func (d *dashSource) openCodeRow(v dashView, m Session, native opencode.Session)
 // them (sorted by ID), then the pending claudecode: rows sorted by ID.
 func (d *dashSource) Sessions(ctx context.Context) ([]dashboard.Session, error) {
 	all, err := d.srv.discoverNative(ctx)
+	d.noteRead(err)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +235,7 @@ func detail(v dashView, r dashboard.Session, qualified string) dashboard.Session
 	for _, e := range v.bySession[qualified] {
 		x := dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.ID == r.CurrentExecution,
 			Liveness: dashLiveness(e.Liveness), Permission: dashPermission(e)}
+		// SessionID is carried by the /executions page only; the detail of one session does not need it
 		out.Executions = append(out.Executions, x)
 	}
 	return out
@@ -347,4 +369,77 @@ func (d *dashSource) WorkingTreeDiff(ctx context.Context, harness, id string) (d
 		return dashboard.DiffResult{}, notListed(err)
 	}
 	return diffResult(files), nil
+}
+
+// maxDashExecutions is the cap of the /executions list, applied AFTER the scope filter (A1.4 item 3): a hidden
+// session's executions can neither appear nor crowd a visible one out.
+const maxDashExecutions = 200
+
+// Executions lists the executions of exactly the sessions the Sessions call lists for this request: the scope set is
+// the one Sessions produces (the ACL, the archived flag in the request context, the claudecode: rows), taken BEFORE
+// the Sessions page's 200-row display cap because the cap belongs to the page, not to Sessions. The Manager's
+// snapshot holds every execution (no cap, no native read); one whose session is not in the scope set is dropped,
+// never shown. The result is newest first and capped at maxDashExecutions after the filter. The rows are copies.
+func (d *dashSource) Executions(ctx context.Context) ([]dashboard.Execution, error) {
+	scope, err := d.Sessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[string]string, len(scope)) // harness-qualified ID -> the session's current execution
+	for _, r := range scope {
+		current[r.Harness+":"+r.ID] = r.CurrentExecution
+	}
+	if d.runs == nil {
+		return []dashboard.Execution{}, nil
+	}
+	var out []dashboard.Execution
+	for _, e := range d.runs.DashboardSnapshot().Executions {
+		cur, in := current[e.SessionID]
+		if !in {
+			continue
+		}
+		out = append(out, dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended,
+			Current: cur != "" && cur == e.ID, SessionID: e.SessionID, Liveness: dashLiveness(e.Liveness)})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Started.Equal(out[j].Started) {
+			return out[i].Started.After(out[j].Started)
+		}
+		return out[i].ID > out[j].ID
+	})
+	if len(out) > maxDashExecutions {
+		out = out[:maxDashExecutions]
+	}
+	if out == nil {
+		out = []dashboard.Execution{}
+	}
+	return out, nil
+}
+
+// Health reports the Bridge's own facts and the outcome of the last session-list read (ADR-023 A1.8). It makes no
+// native call: a harness that has not been read yet is "not read", never guessed. The connector token's expiry is a
+// timestamp from the remote settings' read-only getter; the token, the origin and the principal never reach it.
+func (d *dashSource) Health(context.Context) (dashboard.Health, error) {
+	h := dashboard.Health{Version: version.Version(), Features: append([]dashboard.Feature(nil), d.features...)}
+	if rev, _ := version.Build(); rev != "" {
+		h.Build = rev
+	}
+	if d.remote != nil {
+		if t := d.remote.Expires(); !t.IsZero() {
+			h.TokenExpires = &t
+		}
+	}
+	d.mu.Lock()
+	read := d.read
+	d.mu.Unlock()
+	oc := dashboard.Reachability{Harness: "opencode", State: "not read"}
+	if read.seen {
+		oc.At, oc.State = read.at, "unreachable"
+		if read.ok {
+			oc.State = "reachable"
+		}
+	}
+	// Claude Code sessions are listed as pending rows only (ADR-021): the dashboard reads nothing from that harness.
+	h.Reach = []dashboard.Reachability{oc, {Harness: "claudecode", State: "not read"}}
+	return h, nil
 }

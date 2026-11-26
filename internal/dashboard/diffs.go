@@ -94,19 +94,37 @@ type diffLine struct {
 	Class, Text string
 }
 
+// headerPrefixes are the extended header lines of a git patch, muted when they stand where a header can stand.
+var headerPrefixes = []string{"index ", "new file mode ", "deleted file mode ", "old mode ", "new mode ", "similarity index ", "dissimilarity index ",
+	"rename from ", "rename to ", "copy from ", "copy to ", "Binary files ", "GIT binary patch"}
+
 // splitDiff turns a patch into lines. A line that starts with "+" is added, "-" is removed, "@@" and the file
-// headers "+++ "/"--- " and "\ No newline" notes are muted, everything else is context. The class values are a
-// closed set; the text is data and reaches the page escaped. A blank line keeps one space so it keeps its height.
+// headers are muted (never tinted as a change), a "\ No newline" note is muted, everything else is context. The
+// class values are a closed set; the text is data and reaches the page escaped. A blank line keeps one space so it
+// keeps its height.
+//
+// A header is recognised by POSITION and SHAPE, not by its first characters: a "diff --git" line starts a file header
+// and the lines up to the first "@@" of that file are headers (the "--- "/"+++ " pair, and the extended header lines);
+// from the first "@@" on, every "+"/"-" line is content, so a removed line whose text is "-- foo" (shown "--- foo")
+// or an added line "++ foo" is tinted like any other change. Before any "@@" (a patch that starts with its headers,
+// or has none) a "--- " line directly followed by a "+++ " line is the header pair.
 func splitDiff(patch string) []diffLine {
 	if patch == "" {
 		return nil
 	}
 	raw := strings.Split(strings.TrimSuffix(patch, "\n"), "\n")
 	out := make([]diffLine, 0, len(raw))
-	for _, l := range raw {
+	inHunk := false
+	for i, l := range raw {
 		class := "ln"
 		switch {
-		case strings.HasPrefix(l, "+++ ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "\\"):
+		case strings.HasPrefix(l, "diff --git "):
+			inHunk, class = false, "ln hunk"
+		case strings.HasPrefix(l, "@@"):
+			inHunk, class = true, "ln hunk"
+		case strings.HasPrefix(l, "\\"):
+			class = "ln hunk"
+		case !inHunk && isHeaderLine(raw, i):
 			class = "ln hunk"
 		case strings.HasPrefix(l, "+"):
 			class = "ln add"
@@ -119,6 +137,24 @@ func splitDiff(patch string) []diffLine {
 		out = append(out, diffLine{Class: class, Text: l})
 	}
 	return out
+}
+
+// isHeaderLine reports whether raw[i], standing before the first hunk of a file, is a header line: an extended header
+// line, or one of the "--- "/"+++ " pair (the two lines must stand next to each other, in that order).
+func isHeaderLine(raw []string, i int) bool {
+	l := raw[i]
+	for _, p := range headerPrefixes {
+		if strings.HasPrefix(l, p) {
+			return true
+		}
+	}
+	switch {
+	case strings.HasPrefix(l, "--- "):
+		return i+1 < len(raw) && strings.HasPrefix(raw[i+1], "+++ ")
+	case strings.HasPrefix(l, "+++ "):
+		return i > 0 && strings.HasPrefix(raw[i-1], "--- ")
+	}
+	return false
 }
 
 // statusWord is the word of the file list for a closed status.

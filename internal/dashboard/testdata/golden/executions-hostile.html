@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Executions - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions" aria-current="page">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label" id="instance">bridge a</span>
+<span class="chip" title="Connector token expiry 2026-11-21 18:48:05Z">Token expires in 1 h 00 min</span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+<section aria-labelledby="h-main" class="cards">
+<h1 id="h-main">Executions</h1>
+<div class="card">
+<div class="toolbar">
+<a class="btn" href="/executions?archived=1">Show archived</a>
+<a class="btn btn--primary" href="/executions">Refresh</a>
+<span class="label" id="status">2 executions, updated <time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></span>
+</div>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-main">
+<table class="executions">
+<caption class="visually-hidden">Executions of the sessions this Bridge lists, newest first</caption>
+<thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Session</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="chip chip--warn" title="unknown">Unknown</span> <span class="label">current</span></td>
+<td><code>&lt;script&gt;alert(1)&lt;/script&gt;&#34;&gt;&lt;img src=x onerror=alert(2)&gt;</code></td>
+<td><code>&lt;script&gt;alert(1)&lt;/script&gt;&#34;&gt;&lt;img src=x onerror=alert(2)&gt;</code></td>
+<td><time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></td>
+<td class="num">Running for 0 s</td>
+<td><span class="label">No report yet</span></td>
+</tr>
+<tr>
+<td><span class="chip chip--ok" title="completed">Completed</span></td>
+<td><code>e2</code></td>
+<td><a href="/session/opencode/ses_evil0001"><code>ses_evil0001</code></a></td>
+<td><time datetime="2026-11-21T17:48:05Z" title="2026-11-21 17:48:05Z">0 s ago</time></td>
+<td class="num">-</td>
+<td><span class="label">Ended</span></td>
+</tr>
+</tbody></table></div>
+<p class="label">Newest first. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
+</div>
+</section>
+
+
+
+
+
+
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

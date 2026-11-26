@@ -274,7 +274,8 @@ func TestStateHeadHasHeadersAndNoBody(t *testing.T) {
 }
 
 func TestNewRoutesAreGetAndHeadOnly(t *testing.T) {
-	want := map[string]bool{"/": false, "/session/": false, "/api/state": false, "/api/state/session/": false, "/audit": false, "/api/audit": false, "/dashboard.css": false, "/dashboard.js": false}
+	want := map[string]bool{"/": false, "/session/": false, "/api/state": false, "/api/state/session/": false, "/audit": false, "/api/audit": false, "/dashboard.css": false, "/dashboard.js": false,
+		"/executions": false, "/catalog": false, "/health": false, "/api/state/executions": false, "/api/state/catalog": false, "/api/state/health": false}
 	for _, r := range Routes(NullSource{}) {
 		if _, ok := want[r.Path]; !ok {
 			t.Errorf("unexpected route %s", r.Path)

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit" aria-current="page">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap">
+<p class="banner" id="stale" role="status" hidden></p>
+
+
+
+
+
+
+
+<section class="audit cards" aria-labelledby="h-main">
+<h1 id="h-main">Audit</h1>
+<div class="card">
+<p class="label">250 entries (the ring keeps the last 1000; the journal is the audit authority).</p>
+<div class="filters" id="filters" hidden><label for="audit-filter">Filter</label> <input class="input" type="search" id="audit-filter" maxlength="64" autocomplete="off"></div>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-main"><table class="audit-feed">
+<caption class="visually-hidden">The audit ring of this Bridge process, newest first</caption>
+<thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Outcome</th><th scope="col">Error</th><th scope="col">Session</th><th scope="col">Execution</th><th scope="col">Principal</th><th scope="col">Other</th></tr></thead>
+<tbody id="audit-rows">
+<tr><td>2026-11-21 17:46:25Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0100</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:24Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0101</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:23Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0102</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:22Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0103</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:21Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0104</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:20Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0105</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:19Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0106</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:18Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0107</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:17Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0108</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:16Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0109</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:15Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0110</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:14Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0111</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:13Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0112</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:12Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0113</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:11Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0114</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:10Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0115</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:09Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0116</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:08Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0117</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:07Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0118</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:06Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0119</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:05Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0120</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:04Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0121</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:03Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0122</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:02Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0123</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:01Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0124</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:46:00Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0125</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:59Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0126</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:58Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0127</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:57Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0128</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:56Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0129</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:55Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0130</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:54Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0131</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:53Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0132</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:52Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0133</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:51Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0134</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:50Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0135</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:49Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0136</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:48Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0137</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:47Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0138</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:46Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0139</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:45Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0140</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:44Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0141</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:43Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0142</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:42Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0143</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:41Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0144</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:40Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0145</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:39Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0146</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:38Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0147</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:37Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0148</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:36Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0149</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:35Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0150</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:34Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0151</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:33Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0152</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:32Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0153</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:31Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0154</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:30Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0155</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:29Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0156</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:28Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0157</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:27Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0158</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:26Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0159</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:25Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0160</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:24Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0161</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:23Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0162</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:22Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0163</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:21Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0164</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:20Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0165</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:19Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0166</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:18Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0167</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:17Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0168</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:16Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0169</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:15Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0170</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:14Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0171</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:13Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0172</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:12Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0173</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:11Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0174</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:10Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0175</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:09Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0176</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:08Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0177</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:07Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0178</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:06Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0179</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:05Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0180</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:04Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0181</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:03Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0182</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:02Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0183</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:01Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0184</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:45:00Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0185</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:59Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0186</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:58Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0187</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:57Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0188</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:56Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0189</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:55Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0190</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:54Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0191</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:53Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0192</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:52Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0193</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:51Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0194</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:50Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0195</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:49Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0196</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:48Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0197</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:47Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0198</td><td></td><td>operator</td><td></td></tr>
+<tr><td>2026-11-21 17:44:46Z</td><td><span class="chip" title="prompt_submission">Prompt submission</span></td><td><span class="chip chip--ok" title="new">New</span></td><td></td><td>ses_0199</td><td></td><td>operator</td><td></td></tr>
+</tbody></table></div>
+<nav aria-label="Audit pages"><p class="label">Entries 101 to 200 of 250</p>
+<a class="btn" href="/audit">Newer entries</a> <a class="btn" href="/audit?page=3">Older entries</a></nav>
+
+</div>
+</section>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
+
+
+
+

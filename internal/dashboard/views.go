@@ -196,10 +196,21 @@ type page struct {
 	// timeline (see execSignature): when the polled model's signature differs, the page is reloaded.
 	Poll, PollHarness, PollID, Sig string
 	// Audit feed
-	AuditPage bool
-	AuditOn   bool
-	AuditMsg  string
-	Audit     []auditRow
+	AuditPage  bool
+	AuditOn    bool
+	AuditMsg   string
+	Audit      []auditRow
+	AuditPager auditPager
+	// The top bar of every page (A1.3): the instance label and, in remote mode, the token-expiry badge.
+	TopLabel string
+	TopBadge *topBadge
+	// The executions, catalog and health screens (A1.4 items 3, 4 and 6).
+	ExecPage    bool
+	ExecRows    []execListRow
+	CatalogPage bool
+	Groups      []catalogGroup
+	HealthPage  bool
+	HealthRows  []healthRow
 }
 
 // renderPage executes the template into a buffer and never serves a partial page. The
@@ -286,6 +297,8 @@ type dash struct {
 	now    func() time.Time
 	modMu  sync.Mutex
 	mod    map[string]modStamp
+	label  string // the instance label of the top bar
+	hc     healthCache
 }
 
 func newDash(src Source, opts Options) *dash {
@@ -297,7 +310,7 @@ func newDash(src Source, opts Options) *dash {
 	if now == nil {
 		now = time.Now
 	}
-	return &dash{src: src, audit: opts.Audit, red: red, cache: newDiffCache(opts.Now), now: now, mod: map[string]modStamp{},
+	return &dash{src: src, audit: opts.Audit, red: red, cache: newDiffCache(opts.Now), now: now, mod: map[string]modStamp{}, label: opts.Label,
 		models: newFlightCache[modelResult](opts.Now, modelTTL, modelMax)}
 }
 
@@ -321,7 +334,7 @@ func (d *dash) indexHandler() http.Handler {
 		}
 		if _, none := d.src.(NullSource); none {
 			p.State = &stateBlock{Class: "state", Heading: "No data source", Text: "No data source is connected."}
-			renderPage(w, http.StatusOK, p)
+			d.render(ctx, w, http.StatusOK, p)
 			return
 		}
 		rows, err := d.src.Sessions(ctx)
@@ -341,7 +354,7 @@ func (d *dash) indexHandler() http.Handler {
 			p.State = &stateBlock{Class: "state", Heading: "No sessions", Text: "This Bridge lists no session you may see. Archived sessions are hidden unless you ask for them.",
 				LinkHref: p.ToggleHref, LinkText: p.ToggleText}
 		}
-		renderPage(w, http.StatusOK, p)
+		d.render(ctx, w, http.StatusOK, p)
 	})
 }
 
@@ -466,7 +479,7 @@ func (d *dash) detailHandler() http.Handler {
 		clockRows(p.Executions, d.now().UTC())
 		p.Poll, p.PollHarness, p.PollID = "detail", harness, id
 		p.Diff = d.detailSection(ctx, harness, id)
-		renderPage(w, http.StatusOK, p)
+		d.render(ctx, w, http.StatusOK, p)
 	})
 }
 
@@ -477,7 +490,7 @@ func (d *dash) turnPage(ctx context.Context, w http.ResponseWriter, p page, harn
 	p.BackHref = sessionHref(harness, id)
 	if harness == harnessClaudeCode {
 		p.Diff = &diffSection{Pending: true}
-		renderPage(w, http.StatusOK, p)
+		d.render(ctx, w, http.StatusOK, p)
 		return
 	}
 	scope := "turn " + truncRunes(messageID, 128)
@@ -488,7 +501,7 @@ func (d *dash) turnPage(ctx context.Context, w http.ResponseWriter, p page, harn
 	}
 	if err != nil {
 		p.Diff = &diffSection{Single: finishView(unavailableView(scope, err))}
-		renderPage(w, http.StatusOK, p)
+		d.render(ctx, w, http.StatusOK, p)
 		return
 	}
 	var found *Turn
@@ -527,5 +540,5 @@ func (d *dash) turnPage(ctx context.Context, w http.ResponseWriter, p page, harn
 		v = finishView(diffView{Label: LabelNotComputed, Scope: scope, Reason: "unknown state"})
 	}
 	p.Diff = &diffSection{Single: v}
-	renderPage(w, http.StatusOK, p)
+	d.render(ctx, w, http.StatusOK, p)
 }
