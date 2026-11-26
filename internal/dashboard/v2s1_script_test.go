@@ -19,32 +19,50 @@ import (
 
 var jsLineComment = regexp.MustCompile(`(?m)//[^\n]*`)
 
-// A1.6: the forbidden APIs, and the size cap of the script.
+// A1.6 and D34: the forbidden APIs are scanned in EVERY script, and each script and their sum have a size cap.
 func TestV2S1ScriptHygiene(t *testing.T) {
-	raw, err := os.ReadFile("assets/dashboard.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(raw) > 16<<10 {
-		t.Errorf("dashboard.js is %d bytes, the cap is 16 KiB", len(raw))
-	}
-	code := jsLineComment.ReplaceAllString(cssComment.ReplaceAllString(string(raw), ""), "")
-	for _, bad := range []struct{ re, what string }{
-		{`\.innerHTML`, "innerHTML"}, {`\.outerHTML`, "outerHTML"}, {`insertAdjacentHTML`, "insertAdjacentHTML"},
-		{`document\.write`, "document.write"}, {`\beval\s*\(`, "eval"}, {`new\s+Function`, "new Function"},
-		{`set(Timeout|Interval)\s*\(\s*['"` + "`" + `]`, "a string argument to setTimeout/setInterval"}, {`\bimport\s*\(`, "dynamic import()"},
-		{`https?:`, "an http(s) literal"}, {`localStorage`, "localStorage (only theme.js, in S3, may use it)"}, {`sessionStorage`, "sessionStorage"},
-		{`XMLHttpRequest`, "XMLHttpRequest"}, {`\.cookie`, "document.cookie"}, {`method:\s*'(POST|PUT|PATCH|DELETE)'`, "a write method"},
-	} {
-		if regexp.MustCompile(bad.re).MatchString(code) {
-			t.Errorf("dashboard.js uses %s", bad.what)
+	total := 0
+	var all strings.Builder
+	for _, name := range scriptFiles {
+		raw, err := os.ReadFile("assets/" + name)
+		if err != nil {
+			t.Fatal(err)
 		}
+		total += len(raw)
+		if len(raw) > maxScriptBytes {
+			t.Errorf("%s is %d bytes, the cap of one script is 16 KiB", name, len(raw))
+		}
+		code := jsLineComment.ReplaceAllString(cssComment.ReplaceAllString(string(raw), ""), "")
+		all.WriteString(code)
+		for _, bad := range forbiddenScriptAPIs {
+			if regexp.MustCompile(bad.re).MatchString(code) {
+				t.Errorf("%s uses %s", name, bad.what)
+			}
+		}
+	}
+	if total > maxScriptsTotalBytes {
+		t.Errorf("the scripts total %d bytes, the cap of all of them is 32 KiB", total)
 	}
 	for _, want := range []string{"textContent", "AbortController", "visibilitychange", "replaceState", "matchMedia", "If-None-Match", "Retry-After"} {
-		if !strings.Contains(code, want) {
-			t.Errorf("dashboard.js lacks %q", want)
+		if !strings.Contains(all.String(), want) {
+			t.Errorf("the scripts lack %q", want)
 		}
 	}
+}
+
+// D34: the size caps of one script and of all of them (ADR-023 A1.6, as amended).
+const (
+	maxScriptBytes       = 16 << 10
+	maxScriptsTotalBytes = 32 << 10
+)
+
+// forbiddenScriptAPIs is the A1.6 list; the scan runs on every script file.
+var forbiddenScriptAPIs = []struct{ re, what string }{
+	{`\.innerHTML`, "innerHTML"}, {`\.outerHTML`, "outerHTML"}, {`insertAdjacentHTML`, "insertAdjacentHTML"},
+	{`document\.write`, "document.write"}, {`\beval\s*\(`, "eval"}, {`new\s+Function`, "new Function"},
+	{`set(Timeout|Interval)\s*\(\s*['"` + "`" + `]`, "a string argument to setTimeout/setInterval"}, {`\bimport\s*\(`, "dynamic import()"},
+	{`https?:`, "an http(s) literal"}, {`localStorage`, "localStorage (only theme.js, in S3, may use it)"}, {`sessionStorage`, "sessionStorage"},
+	{`XMLHttpRequest`, "XMLHttpRequest"}, {`\.cookie`, "document.cookie"}, {`method:\s*'(POST|PUT|PATCH|DELETE)'`, "a write method"},
 }
 
 // ---- the harness ---------------------------------------------------------------------------------------------
@@ -106,11 +124,55 @@ func (r jsResult) el(t *testing.T, i int, id string) jsEl {
 	return e
 }
 
+// scriptPathsFor returns the files the harness runs, in load order: the scenario's own "scripts" (file names), or
+// those the page of the scenario's DOM loads (the core, plus the one for its data-poll or its audit filter).
+func scriptPathsFor(scenario map[string]any) []string {
+	names := []string{scriptCore}
+	if own, ok := scenario["scripts"].([]string); ok {
+		names = own
+	} else if dom, ok := scenario["dom"].(map[string]any); ok {
+		switch {
+		case domHasAttr(dom, "data-poll", "list"):
+			names = append(names, scriptList)
+		case domHasAttr(dom, "data-poll", "detail"):
+			names = append(names, scriptDetail)
+		case domHasID(dom, "audit-filter"):
+			names = append(names, scriptAudit)
+		}
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = "assets/" + n
+	}
+	return out
+}
+
+func domWalk(n map[string]any, f func(map[string]any) bool) bool {
+	if f(n) {
+		return true
+	}
+	kids, _ := n["children"].([]map[string]any)
+	for _, c := range kids {
+		if domWalk(c, f) {
+			return true
+		}
+	}
+	return false
+}
+
+func domHasAttr(n map[string]any, k, v string) bool {
+	return domWalk(n, func(m map[string]any) bool { a, _ := m["attrs"].(map[string]string); return a != nil && a[k] == v })
+}
+
+func domHasID(n map[string]any, id string) bool {
+	return domWalk(n, func(m map[string]any) bool { s, _ := m["id"].(string); return s == id })
+}
+
 func runJS(t *testing.T, scenario map[string]any) jsResult {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node is not installed: the dashboard.js behaviour tests did NOT run (a skip is not a pass)")
+		t.Skip("node is not installed: the dashboard script behaviour tests did NOT run (a skip is not a pass)")
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "scenario.json")
@@ -118,7 +180,7 @@ func runJS(t *testing.T, scenario map[string]any) jsResult {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(node, "testdata/js_harness.js", "assets/dashboard.js", path)
+	cmd := exec.Command(node, "testdata/js_harness.js", strings.Join(scriptPathsFor(scenario), ","), path)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

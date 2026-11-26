@@ -712,25 +712,3 @@ func TestV3TwinsAnswerNotModifiedForAnUnchangedModel(t *testing.T) {
 		}
 	}
 }
-
-// S3a adds no script: the byte count of dashboard.js is the one S2 left (the cap is not raised and nothing is split).
-func TestV3DashboardScriptIsUnchangedAndUnderTheCap(t *testing.T) {
-	b, err := os.ReadFile("assets/dashboard.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(b) != 16273 {
-		t.Errorf("dashboard.js is %d bytes; S2 left 16273 and S3a must not change it", len(b))
-	}
-	if len(b) > 16<<10 {
-		t.Errorf("dashboard.js is over the 16 KiB cap")
-	}
-	entries, _ := os.ReadDir("assets")
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	if strings.Join(names, " ") != "dashboard.css dashboard.js" {
-		t.Errorf("the assets are %v: no second script file in S3a", names)
-	}
-}

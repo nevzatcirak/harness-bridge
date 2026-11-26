@@ -1351,7 +1351,14 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   `/api/state/session/<harness>/<id>` (the JSON view models the page polls while it is visible: 5 s list, 2 s detail),
   `/executions`, `/catalog` and `/health` with their JSON twins `/api/state/executions`, `/api/state/catalog` and
   `/api/state/health` (ADR-023 A1, slice S3a), `/audit` (`?page=N`) and `/api/audit` (the 1000-entry audit ring),
-  `/dashboard.css`, `/dashboard.js`.
+  `/dashboard.css`, `/dashboard.js` (the core) and the page scripts `/dashboard-list.js`, `/dashboard-detail.js` and
+  `/dashboard-audit.js` (ADR-023 A1.17, D34).
+- **Per-page scripts (ADR-023 A1.17, D34).** The dashboard script is a core, `dashboard.js`, that every page loads, and
+  one script per page kind loaded after it: `dashboard-list.js` (sessions), `dashboard-detail.js` (session) and
+  `dashboard-audit.js` (audit, only when the page has a filter and rows). Each file is at most 16 KiB and all of them at
+  most 32 KiB; the pages that need nothing more (executions, catalog, health, the turn page) load the core alone. The
+  page scripts use only `window.cirakDash`, which the core exports. CSP, the no-inline-script rule, GET only and the
+  forbidden-API scan are unchanged and apply to every script.
 - **Security checks on every route:** a `Host` not on the allowlist (TCP) is 400; an `Origin` header
   whose host is not on the allowlist is 403, and on the unix socket any `Origin` is 403; a method
   other than `GET`/`HEAD` is 405; four data requests and eight requests in flight at once, the rest
@@ -1380,7 +1387,7 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
   `last_activity_iso` (omitted when unknown); the list model also carries `count` and `count_text`.
   The page polls only while the tab is visible and sends one request when it becomes visible again (A1.7).
 - **Executions, catalog, health, audit and the top bar (ADR-023 A1, slice S3a).** Every page is server-rendered and
-  needs no script: `dashboard.js` is unchanged (the 16 KiB cap is not touched), and the Refresh link is the no-JS
+  needs no page script: they load the core `dashboard.js` alone (D34, above), and the Refresh link is the no-JS
   refresh of A1.7. **The poll intervals A1.7 names for these pages (executions and catalog 5 s, health 30 s, the first
   audit page 10 s) are not implemented**: that needs script bytes the cap does not leave; the JSON twins exist and obey
   the limiter, the ETag and the cache, ready for a later slice.

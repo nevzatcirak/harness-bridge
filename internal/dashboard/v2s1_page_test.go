@@ -137,7 +137,7 @@ func TestV2S1CSPAndNoInlineOnEveryPage(t *testing.T) {
 		}
 	}
 	h := v2Handler(&fakeSource{rows: v2Rows()})
-	for _, target := range []string{"/", "/audit", "/dashboard.css", "/dashboard.js", "/api/state", "/nope", "/session/opencode/x"} {
+	for _, target := range []string{"/", "/audit", "/dashboard.css", "/dashboard.js", "/dashboard-list.js", "/dashboard-detail.js", "/dashboard-audit.js", "/api/state", "/nope", "/session/opencode/x"} {
 		_, _, hdr := v2Get(t, h, target)
 		if got := hdr.Get("Content-Security-Policy"); got != contentSecurityPolicy {
 			t.Errorf("%s: CSP = %q", target, got)

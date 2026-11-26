@@ -220,9 +220,13 @@ func hostile() (title, root, id string) {
 
 func assertNoActiveContent(t *testing.T, what, body string) {
 	t.Helper()
-	// The page itself has exactly one script element: the embedded asset.
-	if n := strings.Count(strings.ToLower(body), "<script"); n != 1 {
-		t.Errorf("%s: %d <script elements, want exactly the one embedded asset:\n%s", what, n, body)
+	// The page has script elements only for the embedded assets (D34): each one is <script src="/dashboard*.js"></script>
+	// and nothing else (no inline script, no other source).
+	if bad := foreignScripts(body); len(bad) > 0 {
+		t.Errorf("%s: <script elements other than the embedded assets: %q\n%s", what, bad, body)
+	}
+	if n := len(scriptSrcs(body)); n < 1 {
+		t.Errorf("%s: no embedded script element", what)
 	}
 	for _, bad := range []string{`"><img`, "<img", "</title><script", "<b>"} {
 		if strings.Contains(body, bad) {

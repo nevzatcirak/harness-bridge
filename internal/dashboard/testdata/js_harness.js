@@ -1,12 +1,12 @@
 'use strict';
-// Test harness for assets/dashboard.js (ADR-023 A1.10 items 9 and 12). It runs the shipped script in a
+// Test harness for the shipped dashboard scripts (ADR-023 A1.10 items 9 and 12, D34). It runs them, in the order given, in a
 // vm context with a minimal fake DOM, a fake clock, a scripted fetch and a recording history, then prints
-// one JSON document with what the script did. Usage: node js_harness.js <path-to-dashboard.js> <scenario.json>
+// one JSON document with what the scripts did. Usage: node js_harness.js <comma-separated script paths> <scenario.json>
 // It is test code: it is never served and never embedded.
 const fs = require('fs');
 const vm = require('vm');
 
-const [, , scriptPath, scenarioPath] = process.argv;
+const [, , scriptPaths, scenarioPath] = process.argv;
 const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
 const log = { fetches: [], replaceState: [], timers: [], aborted: 0, notes: [] };
 const clock = { now: Date.parse(scenario.now || '2026-11-21T17:48:05Z'), timers: [], seq: 0 };
@@ -136,7 +136,7 @@ async function advance(ms) {
 }
 
 (async function () {
-  vm.runInContext(fs.readFileSync(scriptPath, 'utf8'), ctx, { filename: 'dashboard.js' });
+  scriptPaths.split(',').forEach(function (p) { vm.runInContext(fs.readFileSync(p, 'utf8'), ctx, { filename: p.split('/').pop() }); });
   await flush();
   const out = { steps: [] };
   for (const step of scenario.steps || []) {

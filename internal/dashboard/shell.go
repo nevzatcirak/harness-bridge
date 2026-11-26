@@ -211,8 +211,8 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 </div>
 </section>{{end}}
 </main>
-<script src="/dashboard.js"></script>
-</body>
+{{range .Scripts}}<script src="{{.}}"></script>
+{{end}}</body>
 </html>
 {{define "diffview"}}<div class="diff-block"><p class="label"><span class="badge label-{{.LabelClass}}">{{.Label}}</span> {{.Scope}}{{if .Reason}} ({{.Reason}}){{end}}{{if .Totals}}. {{.Totals}}{{end}}</p>
 {{if .Redaction}}<p class="label">{{.Redaction}}</p>{{end}}
