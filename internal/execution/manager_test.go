@@ -27,6 +27,9 @@ type fake struct {
 	quiesced string
 	// Native read counters (ADR-017 §3(a): liveness adds no native read).
 	gets, statusReads, historyReads, permissionReads int
+	// ADR-017 A2 S3: one injectable error per native read, for the failure
+	// classification tests. Nil means the read behaves as before.
+	readErrGet, readErrStatus, readErrHistory, readErrPermission error
 }
 
 // reads returns the native read counters.
@@ -39,8 +42,12 @@ func (f *fake) reads() [4]int {
 func (f *fake) Get(ctx context.Context, id string) (opencode.Session, error) {
 	f.mu.Lock()
 	f.gets++
+	err := f.readErrGet
 	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
+		return opencode.Session{}, err
+	}
+	if err != nil {
 		return opencode.Session{}, err
 	}
 	return opencode.Session{ID: id, Directory: "/"}, nil
@@ -49,6 +56,9 @@ func (f *fake) History(context.Context, string) ([]opencode.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.historyReads++
+	if f.readErrHistory != nil {
+		return nil, f.readErrHistory
+	}
 	if f.disconnected {
 		return nil, errors.New("offline")
 	}
@@ -58,6 +68,9 @@ func (f *fake) Status(context.Context) (map[string]opencode.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statusReads++
+	if f.readErrStatus != nil {
+		return nil, f.readErrStatus
+	}
 	if f.disconnected {
 		return nil, errors.New("offline")
 	}
@@ -79,6 +92,9 @@ func (f *fake) Permissions(context.Context) ([]opencode.Permission, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.permissionReads++
+	if f.readErrPermission != nil {
+		return nil, f.readErrPermission
+	}
 	if f.permission {
 		if f.permissionList != nil {
 			return append([]opencode.Permission(nil), f.permissionList...), nil
