@@ -30,8 +30,13 @@ func s2Executions(l *Liveness, p *PermissionSummary) []Execution {
 	started := v2Now.Add(-8*time.Minute - 50*time.Second)
 	end := func(from time.Time, d time.Duration) *time.Time { e := from.Add(d); return &e }
 	c1, c2, c3 := v2Now.Add(-27*time.Minute), v2Now.Add(-46*time.Minute), v2Now.Add(-60*time.Minute)
+	var unavailable *time.Time
+	if l != nil && l.StallReason == "HARNESS_UNREACHABLE" {
+		t := v2Now.Add(-3 * time.Minute)
+		unavailable = &t
+	}
 	return []Execution{
-		{ID: "7a2c91e0", State: "running", Started: started, Updated: v2Now.Add(-4 * time.Second), Current: true, Liveness: l, Permission: p},
+		{ID: "7a2c91e0", State: "running", Started: started, Updated: v2Now.Add(-4 * time.Second), Current: true, Liveness: l, Permission: p, UnavailableSince: unavailable},
 		{ID: "5d03aa17", State: "completed", Started: c1, Updated: c1.Add(6*time.Minute + 2*time.Second), Ended: end(c1, 6*time.Minute+2*time.Second),
 			Liveness: &Liveness{NativeStatus: "absent", StallReason: "NO_PROGRESS", StallSuspected: true, ObservedAt: c1}},
 		{ID: "0c9be452", State: "failed", Started: c2, Updated: c2.Add(75 * time.Second), Ended: end(c2, 75*time.Second)},
@@ -52,13 +57,22 @@ func s2Liveness() map[string]*Liveness {
 		"no-assistant": {NativeStatus: "absent", StallSuspected: true, StallReason: "NO_CORRELATED_ASSISTANT", Thresholds: th, ObservedAt: obs},
 		"no-evidence":  {NativeStatus: "absent", StallSuspected: true, StallReason: "COMPLETED_WITHOUT_TERMINAL_EVIDENCE", Thresholds: th, ObservedAt: obs},
 		"unreachable":  {NativeStatus: "unavailable", StallSuspected: true, StallReason: "HARNESS_UNREACHABLE", Thresholds: th, ObservedAt: obs},
-		"retrying": {NativeStatus: "retry", RetryAttempt: ptrInt(2), RetryNextAt: ptrTime(v2Now.Add(20 * time.Second)), DegradationReason: "PROVIDER_RETRYING",
-			CauseHint: "network", CauseSource: "bounded_text", Thresholds: th, ObservedAt: obs},
-		"retry-overdue": {NativeStatus: "retry", RetryAttempt: ptrInt(3), RetryNextAt: ptrTime(v2Now.Add(-70 * time.Second)), RetryOverdue: true, DegradationReason: "PROVIDER_RETRY_OVERDUE",
+		"retrying": {NativeStatus: "retry", RetryAttempt: ptrInt(2), RetryMax: ptrInt(5), RetryNextAt: ptrTime(v2Now.Add(20 * time.Second)), DegradationReason: "PROVIDER_RETRYING", ProgressSource: "native",
+			LastNativeProgressAt: ptrTime(v2Now.Add(-10 * time.Second)),
+			CauseHint:            "network", CauseSource: "bounded_text", Thresholds: th, ObservedAt: obs},
+		"retry-overdue": {NativeStatus: "retry", RetryAttempt: ptrInt(3), RetryMax: ptrInt(5), RetryNextAt: ptrTime(v2Now.Add(-70 * time.Second)), RetryOverdue: true, DegradationReason: "PROVIDER_RETRY_OVERDUE", ProgressSource: "native",
 			CauseHint: "rate_limit", CauseSource: "structured", Thresholds: th, ObservedAt: obs},
 		"provider-error": {NativeStatus: "absent", DegradationReason: "PROVIDER_ERROR", CauseHint: "auth", CauseSource: "structured", Thresholds: th, ObservedAt: obs},
 		"tool-long": {NativeStatus: "busy", Tool: &LivenessTool{Name: "bash", RunningSince: v2Now.Add(-12 * time.Minute)}, Explanation: "TOOL_RUNNING_LONG",
 			LastNativeProgressAt: ptrTime(v2Now.Add(-12 * time.Minute)), Thresholds: th, ObservedAt: obs},
+		// A wedged retry: the A2.8 Variant A combination (degradation AND the A1 stall), not one state.
+		"wedged": {NativeStatus: "retry", RetryAttempt: ptrInt(4), RetryMax: ptrInt(5), RetryNextAt: ptrTime(v2Now.Add(-90 * time.Second)), RetryOverdue: true,
+			DegradationReason: "PROVIDER_RETRY_OVERDUE", StallSuspected: true, StallReason: "NO_PROGRESS", ProgressSource: "native", Thresholds: th, ObservedAt: obs},
+		// A busy running tool at the long threshold: stalled plus the tool-running explanation.
+		"tool-stalled": {NativeStatus: "busy", StallSuspected: true, StallReason: "NO_PROGRESS", Tool: &LivenessTool{Name: "bash", RunningSince: v2Now.Add(-12 * time.Minute)},
+			Explanation: "TOOL_RUNNING_LONG", LastNativeProgressAt: ptrTime(v2Now.Add(-12 * time.Minute)), Thresholds: th, ObservedAt: obs},
+		// A stale tool part with status absent is not reported as tool running.
+		"stale-tool": {NativeStatus: "absent", LastNativeProgressAt: ptrTime(v2Now.Add(-20 * time.Minute)), Thresholds: th, ObservedAt: obs},
 		// The words a future Bridge may add: never shown as received, never shown as if known.
 		"unknown-words": {NativeStatus: "weird", StallSuspected: true, StallReason: "FUTURE_STALL_<b>x</b>", DegradationReason: "FUTURE_DEGRADATION", Explanation: "FUTURE_EXPLANATION",
 			CauseHint: "future_cause", CauseSource: "future_source", ObservedAt: obs},
@@ -157,7 +171,7 @@ func renderS2Pages(t *testing.T) map[string]string {
 		}
 		out[name] = body
 	}
-	for _, name := range []string{"healthy", "noprogress", "no-assistant", "no-evidence", "unreachable", "retrying", "retry-overdue", "provider-error", "tool-long", "unknown-words", "flag-only", "reason-only"} {
+	for _, name := range []string{"healthy", "noprogress", "no-assistant", "no-evidence", "unreachable", "retrying", "retry-overdue", "provider-error", "tool-long", "wedged", "tool-stalled", "stale-tool", "unknown-words", "flag-only", "reason-only"} {
 		get("detail-live-"+name, s2Source(s2Liveness()[name], nil), "/session/opencode/ses_demo0001")
 	}
 	get("detail-perm-unattributed", s2Source(s2Liveness()["healthy"], &PermissionSummary{Count: 1}), "/session/opencode/ses_demo0001")

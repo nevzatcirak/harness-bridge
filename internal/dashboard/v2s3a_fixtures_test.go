@@ -21,7 +21,8 @@ func s3Execs() []Execution {
 	a, b, c, dd := v2Now.Add(-8*time.Minute), v2Now.Add(-27*time.Minute), v2Now.Add(-46*time.Minute), v2Now.Add(-3*time.Hour)
 	return []Execution{
 		{ID: "7a2c91e0", State: "running", Started: a, Updated: v2Now, Current: true, SessionID: "opencode:ses_demo0001",
-			Liveness: &Liveness{NativeStatus: "busy", StallReason: "NO_PROGRESS", StallSuspected: true, ObservedAt: v2Now}},
+			Liveness: &Liveness{NativeStatus: "retry", RetryAttempt: ptrInt(4), RetryMax: ptrInt(5), RetryNextAt: ptrTime(v2Now.Add(-90 * time.Second)),
+				RetryOverdue: true, DegradationReason: "PROVIDER_RETRY_OVERDUE", StallReason: "NO_PROGRESS", StallSuspected: true, ObservedAt: v2Now}},
 		{ID: "b81f03d4", State: "waiting_for_permission", Started: b, Updated: v2Now, Current: true, SessionID: "opencode:ses_demo0002",
 			Liveness: &Liveness{NativeStatus: "busy", ObservedAt: v2Now}},
 		{ID: "5d03aa17", State: "completed", Started: c, Updated: v2Now, Ended: end(c, 6*time.Minute+2*time.Second), SessionID: "opencode:ses_demo0001"},

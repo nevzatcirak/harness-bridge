@@ -38,6 +38,9 @@ type Execution struct {
 	// count and, only when the Bridge attributes one to the execution, the fields ADR-024 already shows Chat.
 	// It never carries a pattern or native text. nil when nothing is pending.
 	Permission *PermissionSummary
+	// UnavailableSince is the ADR-017 A2 S3 first observation of the current native-read failure window, stored
+	// on the execution record (not in the per-probe block). nil when no failure window is open.
+	UnavailableSince *time.Time
 }
 
 // Liveness is the ADR-017 (A1 and A2) report-only block of one execution, copied from the Manager's record. Every
@@ -54,7 +57,9 @@ type Liveness struct {
 	StallSuspected bool
 	StallReason    string
 	// DegradationReason is ADR-017 A2 Variant A: PROVIDER_RETRYING, PROVIDER_RETRY_OVERDUE or PROVIDER_ERROR.
+	// Degraded is its explicit alias from the execution record; a reason always implies the flag.
 	DegradationReason string
+	Degraded          bool
 	RetryOverdue      bool
 	// CauseHint is one of network, rate_limit, auth, server, unknown; CauseSource is structured, bounded_text or none.
 	CauseHint, CauseSource string
@@ -62,6 +67,10 @@ type Liveness struct {
 	// once that tool has run for ToolLongS seconds or more.
 	Tool        *LivenessTool
 	Explanation string
+	// RetryMax is the Claude retry budget when the harness exposes it (A2.4 item 7 / A2.7); nil when unknown.
+	RetryMax *int64
+	// ProgressSource is native (OpenCode progress timestamps) or bridge (Claude's receive clock), when reported.
+	ProgressSource string
 	// Thresholds are the operator thresholds actually applied (A2.6), nil for a block built without them.
 	Thresholds *LivenessThresholds
 	// ObservedAt is the Bridge time of the probe that produced the block.
@@ -115,6 +124,11 @@ type Session struct {
 	Guard    Guard
 	// CurrentExecution is the ID of the newest non-terminal execution, if any.
 	CurrentExecution string
+	// Liveness is the current execution's ADR-017 report block, a copy for the sessions list and its JSON twin.
+	// nil when there is no current execution or the Bridge holds no block.
+	Liveness *Liveness
+	// UnavailableSince is the current execution's A2 S3 native-read failure window, a copy.
+	UnavailableSince *time.Time
 	LastActivity     time.Time
 }
 

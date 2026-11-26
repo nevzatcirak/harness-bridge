@@ -190,7 +190,7 @@ func TestV3ExecutionsPage(t *testing.T) {
 		last = i
 	}
 	for _, want := range []string{`chip--info" title="running">Running`, `chip--secondary" title="waiting_for_permission">Waiting for permission`, `chip--ok" title="completed">Completed`, `chip--error" title="failed">Failed`, `chip--warn" title="interrupted">Interrupted`,
-		`<td class="num">6 min 02 s</td>`, `<td class="num">Running for 8 min 00 s</td>`, `>No progress</span>`, `<span class="label">current</span>`} {
+		`<td class="num">6 min 02 s</td>`, `<td class="num">Running for 8 min 00 s</td>`, `>Stalled</span>`, `<span class="label">current</span>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the table lacks %q", want)
 		}
@@ -283,7 +283,7 @@ func TestV3ExecutionsTwinSharesTheSourceAndHasNoClock(t *testing.T) {
 		}
 	}
 	var m apiExecList
-	if err := json.Unmarshal([]byte(a), &m); err != nil || m.Kind != "executions" || !m.Connected || m.Count != 5 || m.Executions[0].SessionHref != "/session/opencode/ses_demo0001" || m.Executions[0].Liveness != "No progress" {
+	if err := json.Unmarshal([]byte(a), &m); err != nil || m.Kind != "executions" || !m.Connected || m.Count != 5 || m.Executions[0].SessionHref != "/session/opencode/ses_demo0001" || m.Executions[0].Liveness == nil || len(m.Executions[0].Liveness.Badges) == 0 || m.Executions[0].Liveness.Badges[0].Label != "Stalled" {
 		t.Fatalf("%v %+v", err, m)
 	}
 	// the twin and the page go through the same Source.Executions, once each (no second implementation)

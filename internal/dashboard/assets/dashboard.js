@@ -59,6 +59,20 @@
         (harness !== '' && r.getAttribute('data-harness') !== harness);
     }
   }
+  // A2.8: render the server's liveness badges (label/tone/title) and the optional short detail. Values are
+  // textContent/setAttribute only; an unknown word never carries a title.
+  function renderLive(node, l) {
+    clear(node);
+    if (!l) { node.appendChild(el('span', 'No report yet', 'label')); return; }
+    (l.badges || []).forEach(function (b) {
+      var c = el('span', b.label, chipClass(b.tone));
+      if (b.title) { c.setAttribute('title', b.title); }
+      node.appendChild(c);
+      node.appendChild(doc.createTextNode(' '));
+    });
+    if (l.text) { node.appendChild(el('span', l.text, 'label')); }
+  }
+
   function writeUrl(q, state, harness) {
     var parts = [];
     if (archived) { parts.push('archived=1'); }
@@ -199,6 +213,7 @@
 
   window.cirakDash = {
     app: app, byId: byId, el: el, clear: clear, show: show, rel: rel, chipClass: chipClass,
-    archived: archived, query: query, allowed: allowed, filterRows: filterRows, writeUrl: writeUrl, poll: startPoll
+    archived: archived, query: query, allowed: allowed, filterRows: filterRows, writeUrl: writeUrl, poll: startPoll,
+    renderLive: renderLive
   };
 })();

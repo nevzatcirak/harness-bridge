@@ -58,6 +58,8 @@ var causeSources = map[string]string{
 	"structured": "from structured data", "bounded_text": "from a bounded text match", "none": "no source",
 }
 
+var progressSources = map[string]string{"native": "Native", "bridge": "Bridge receive clock"}
+
 // unknownChip is what a word outside a label map becomes. The received word is deliberately not shown: it is
 // untrusted text and the page must not look as if it knew it.
 var unknownChip = chip{Label: "Unknown", Tone: "warn", Raw: "unknown"}
@@ -153,26 +155,102 @@ func (l *Liveness) sentence(word string, info reasonInfo) string {
 	return fmt.Sprintf(info.Sentence, l.noProgressText())
 }
 
-// livenessChip is the chip of the Liveness cell of the timeline: the stall reason when there is one, else the
-// degradation reason, else none. It keys on the REASON words, not on StallSuspected: a flag without a reason shows
-// nothing, and a reason without the flag still shows (review #459 P2-1). A word outside the maps is "Unknown".
-func livenessChip(l *Liveness) (c chip, ok bool) {
+// livenessBadge is one chip of the Liveness cell and the JSON twin. Title is the closed word (or a generated
+// bounded detail), never free text; an unknown word is shown as Unknown and its title is empty.
+type livenessBadge struct {
+	Label, Tone, Title string
+}
+
+// livenessBadges returns the badges of one execution's liveness block and a short detail string for the cell.
+// The signals are independent (A2.8): a wedged retry keeps both its degradation badge and its stalled badge, and a
+// running tool keeps its own badge. Every word is a closed word; an unknown word is one neutral-warn Unknown badge.
+func livenessBadges(l *Liveness, unavailableSince *time.Time) (badges []livenessBadge, details []string) {
 	if l == nil {
-		return chip{}, false
+		return nil, nil
+	}
+	seenUnknown := false
+	add := func(b livenessBadge) {
+		if b.Label == unknownChip.Label {
+			if seenUnknown {
+				return
+			}
+			seenUnknown = true
+		}
+		badges = append(badges, b)
 	}
 	if l.StallReason != "" {
-		if r, known := lookup(stallReasons, l.StallReason); known {
-			return chip{Label: r.Label, Tone: r.Tone, Raw: l.StallReason}, true
+		if r, ok := lookup(stallReasons, l.StallReason); ok {
+			label, tone := r.Label, r.Tone
+			switch l.StallReason {
+			case "NO_PROGRESS":
+				label = "Stalled"
+			case "HARNESS_UNREACHABLE":
+				label = "Unreachable"
+			}
+			add(livenessBadge{Label: label, Tone: tone, Title: l.StallReason})
+			if l.StallReason == "HARNESS_UNREACHABLE" && unavailableSince != nil && !unavailableSince.IsZero() {
+				details = append(details, "since "+fmtTime(*unavailableSince))
+			}
+		} else {
+			add(livenessBadge{Label: unknownChip.Label, Tone: unknownChip.Tone})
 		}
-		return unknownChip, true
 	}
 	if l.DegradationReason != "" {
-		if r, known := lookup(degradationReasons, l.DegradationReason); known {
-			return chip{Label: r.Label, Tone: r.Tone, Raw: l.DegradationReason}, true
+		if r, ok := lookup(degradationReasons, l.DegradationReason); ok {
+			label, tone, title := r.Label, r.Tone, l.DegradationReason
+			if l.DegradationReason == "PROVIDER_RETRYING" {
+				label = "Retrying"
+				if l.RetryOverdue {
+					label, tone, title = "Retry overdue", "warn", "PROVIDER_RETRY_OVERDUE"
+				}
+			}
+			add(livenessBadge{Label: label, Tone: tone, Title: title})
+		} else {
+			add(livenessBadge{Label: unknownChip.Label, Tone: unknownChip.Tone})
 		}
-		return unknownChip, true
+		if l.RetryAttempt != nil || l.RetryMax != nil || l.RetryNextAt != nil {
+			retry := "attempt "
+			if l.RetryAttempt != nil {
+				retry += attemptText(*l.RetryAttempt)
+			} else {
+				retry += "?"
+			}
+			if l.RetryMax != nil {
+				retry += "/" + attemptText(*l.RetryMax)
+			}
+			if l.RetryNextAt != nil && !l.RetryNextAt.IsZero() {
+				retry += ", next " + fmtTime(*l.RetryNextAt)
+			}
+			details = append(details, retry)
+		}
+		if l.DegradationReason == "PROVIDER_ERROR" && l.CauseHint != "" {
+			if cause, ok := causeHints[l.CauseHint]; ok {
+				details = append(details, cause)
+			}
+		}
 	}
-	return chip{}, false
+	if l.Tool != nil {
+		b := livenessBadge{Label: "Tool running", Tone: "info"}
+		if l.Explanation == "TOOL_RUNNING_LONG" {
+			b.Title = l.Explanation
+		}
+		add(b)
+		tool := truncRunes(l.Tool.Name, 64)
+		if !l.Tool.RunningSince.IsZero() {
+			tool += " since " + fmtTime(l.Tool.RunningSince)
+		}
+		details = append(details, tool)
+	}
+	if l.Explanation != "" {
+		if l.Explanation == "TOOL_RUNNING_LONG" {
+			if l.Tool == nil {
+				add(livenessBadge{Label: "Tool running", Tone: "info", Title: l.Explanation})
+			}
+		} else if _, ok := explanations[l.Explanation]; !ok {
+			add(livenessBadge{Label: unknownChip.Label, Tone: unknownChip.Tone})
+		}
+	}
+	return badges, details
 }
 
 func nativeChip(status string) chip {
@@ -198,7 +276,7 @@ func timeRow(label string, t *time.Time, none string) reportRow {
 
 // buildReport is the report of one execution's liveness block. Every row is built from closed words, bounded
 // numbers and times; the one untrusted string is the tool name, shown in a mono value after truncation.
-func buildReport(l *Liveness) *reportView {
+func buildReport(l *Liveness, unavailableSince *time.Time) *reportView {
 	if l == nil {
 		return nil
 	}
@@ -230,10 +308,16 @@ func buildReport(l *Liveness) *reportView {
 
 	v.Rows = append(v.Rows, reportRow{Label: "Native status", Parts: []part{chipPart(nativeChip(l.NativeStatus))}})
 	switch {
-	case l.RetryAttempt != nil || l.RetryNextAt != nil:
+	case l.RetryAttempt != nil || l.RetryNextAt != nil || l.RetryMax != nil:
 		parts := []part{}
 		if l.RetryAttempt != nil {
-			parts = append(parts, textPart("Attempt "+attemptText(*l.RetryAttempt)))
+			attempt := "Attempt " + attemptText(*l.RetryAttempt)
+			if l.RetryMax != nil {
+				attempt += " of " + attemptText(*l.RetryMax)
+			}
+			parts = append(parts, textPart(attempt))
+		} else if l.RetryMax != nil {
+			parts = append(parts, textPart("Max "+attemptText(*l.RetryMax)))
 		}
 		if l.RetryNextAt != nil && !l.RetryNextAt.IsZero() {
 			if len(parts) > 0 {
@@ -248,6 +332,9 @@ func buildReport(l *Liveness) *reportView {
 		v.Rows = append(v.Rows, reportRow{Label: "Retry", Parts: []part{textPart("None")}})
 	}
 	v.Rows = append(v.Rows, timeRow("Last native progress", l.LastNativeProgressAt, "None"))
+	if unavailableSince != nil && !unavailableSince.IsZero() {
+		v.Rows = append(v.Rows, timeRow("Unavailable since", unavailableSince, "None"))
+	}
 	if l.StallReason != "" {
 		c, _ := livenessChipStall(l.StallReason)
 		v.Rows = append(v.Rows, reportRow{Label: "Stall reason", Parts: []part{chipPart(c)}})
@@ -283,6 +370,13 @@ func buildReport(l *Liveness) *reportView {
 			c = chip{Label: r.Label, Tone: r.Tone}
 		}
 		v.Rows = append(v.Rows, reportRow{Label: "Explanation", Parts: []part{chipPart(c)}})
+	}
+	if l.ProgressSource != "" {
+		label, ok := progressSources[l.ProgressSource]
+		if !ok {
+			label = "Unknown"
+		}
+		v.Rows = append(v.Rows, reportRow{Label: "Progress source", Parts: []part{textPart(label)}})
 	}
 	if l.Thresholds != nil {
 		v.Rows = append(v.Rows, reportRow{Label: "Thresholds", Parts: []part{textPart(fmt.Sprintf("No progress after %s, tool long after %s",
@@ -367,11 +461,12 @@ func durationText(d time.Duration) string {
 	return fmt.Sprintf("%d d %d h", s/86400, (s%86400)/3600)
 }
 
-// livenessCell is the Liveness column of the timeline: a chip (with its class and the raw closed word as title), or
-// a plain word.
+// livenessCell is the Liveness column of the timeline (and the sessions list's current-execution cell): the
+// independent badges of the block and one short detail. Text is used when there is no badge ("No stall reported",
+// "No report yet", "Ended").
 type livenessCell struct {
-	ChipLabel, ChipClass, ChipTitle string
-	Text                            string
+	Badges []livenessBadge
+	Text   string
 }
 
 func terminalState(s string) bool { return s == "completed" || s == "failed" || s == "interrupted" }
@@ -380,15 +475,16 @@ func cellFor(e Execution) livenessCell {
 	if terminalState(normExecutionState(e.State)) {
 		return livenessCell{Text: "Ended"}
 	}
-	if e.Liveness == nil {
+	return cellForLiveness(e.Liveness, e.UnavailableSince)
+}
+
+func cellForLiveness(l *Liveness, unavailableSince *time.Time) livenessCell {
+	if l == nil {
 		return livenessCell{Text: "No report yet"}
 	}
-	if c, ok := livenessChip(e.Liveness); ok {
-		title := c.Raw
-		if c.Label == unknownChip.Label {
-			title = "" // an unknown word is never echoed, not even in a title
-		}
-		return livenessCell{ChipLabel: c.Label, ChipClass: chipClass(c.Tone), ChipTitle: title}
+	badges, details := livenessBadges(l, unavailableSince)
+	if len(badges) == 0 {
+		return livenessCell{Text: "No stall reported"}
 	}
-	return livenessCell{Text: "No stall reported"}
+	return livenessCell{Badges: badges, Text: strings.Join(details, "; ")}
 }
