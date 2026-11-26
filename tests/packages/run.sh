@@ -7,7 +7,7 @@
 # goreleaser (set GORELEASER_BIN or put goreleaser on PATH), go.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 tests="$root/tests/packages"
 goreleaser=${GORELEASER_BIN:-goreleaser}

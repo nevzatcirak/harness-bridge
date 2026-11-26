@@ -6,7 +6,7 @@
 #   - a postinstall that starts, enables or restarts the unit.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 pkg="$root/packaging"
 gr="$root/.goreleaser.yaml"
 
