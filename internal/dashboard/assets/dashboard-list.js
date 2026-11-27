@@ -57,6 +57,12 @@
     cell(tr, s.guard_text);
     var cur = cell(tr);
     if (s.current_execution) { cur.appendChild(el('code', s.current_execution)); } else { cur.textContent = 'None'; }
+    if (s.current_execution && s.liveness && s.liveness.badges && s.liveness.badges.length) {
+      var live = el('span', null, 'live');
+      D.renderLive(live, s.liveness);
+      cur.appendChild(doc.createTextNode(' '));
+      cur.appendChild(live);
+    }
     var last = cell(tr);
     if (s.last_activity_iso) {
       var t = el('time', D.rel(s.last_activity_iso));

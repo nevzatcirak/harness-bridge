@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session ses_demo0001 - Cirak</title>
+<meta name="description" content="Read-only view of the sessions, executions and audit trail of this Cirak instance.">
+<link rel="stylesheet" href="/dashboard.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="wrap bar">
+<span class="brand">Cirak</span>
+<details class="menu" id="menu" open><summary>Menu</summary><nav aria-label="Main"><ul>
+<li><a href="/" aria-current="page">Sessions</a></li>
+<li><a href="/executions">Executions</a></li>
+<li><a href="/catalog">Catalog and archived</a></li>
+<li><a href="/audit">Audit</a></li>
+<li><a href="/health">About and health</a></li>
+</ul></nav></details>
+<span class="spacer"></span>
+<button class="btn" type="button" id="theme" title="Switch between the dark and the light theme" hidden>Theme</button>
+<span class="label">Read-only</span>
+</div></header>
+<main id="content" tabindex="-1" class="wrap" data-poll="detail" data-harness="opencode" data-session="ses_demo0001" data-sig="7a2c91e0:running:cr,5d03aa17:completed,0c9be452:failed,e41d77b9:interrupted">
+<p class="banner" id="stale" role="status" hidden></p>
+
+
+
+
+<section class="session cards" aria-labelledby="h-main">
+<h1 id="h-main">Session <code>ses_demo0001</code></h1>
+<p><a href="/">Back to the sessions</a></p>
+<div class="card">
+<dl class="kv">
+<dt>Harness</dt><dd><span class="badge">OpenCode</span></dd>
+<dt>Session ID</dt><dd><code class="copyable">ses_demo0001</code> <button class="btn" type="button" id="copy" data-copy="ses_demo0001" hidden>Copy ID</button></dd>
+<dt>Title</dt><dd data-f="title">Fix flaky retry test</dd>
+<dt>Path</dt><dd data-f="root"><code>/srv/demo/work/payments-api/services/billing</code></dd>
+<dt>Lifecycle root</dt><dd data-f="lifecycle"><code>/srv/demo/work</code></dd>
+<dt>State</dt><dd data-f="state"><span class="chip chip--info" title="running">Running</span></dd>
+<dt>Guard</dt><dd data-f="guard">Held, running</dd>
+<dt>Current execution</dt><dd data-f="current"><code>7a2c91e0</code></dd>
+<dt>Last activity</dt><dd data-f="last"><time datetime="2026-11-21T17:47:12Z" title="2026-11-21 17:47:12Z">53 s ago</time>, 2026-11-21 17:47:12Z</dd>
+</dl>
+
+</div>
+</section>
+<section class="card" aria-labelledby="h-tl">
+<h2 id="h-tl">Execution timeline</h2>
+<p class="label">Newest first. The liveness report is advisory: it never changes an execution and the Bridge takes no action.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-tl"><table class="timeline">
+<caption class="visually-hidden">Executions of this session with the liveness report of the current one</caption>
+<thead><tr><th scope="col">State</th><th scope="col">Execution</th><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Liveness</th></tr></thead>
+<tbody>
+<tr>
+<td><span class="chip chip--info" title="running">Running</span> <span class="label">current</span></td>
+<td><code>7a2c91e0</code></td>
+<td><time datetime="2026-11-21T17:39:15Z" title="2026-11-21 17:39:15Z">8 min ago</time>, 2026-11-21 17:39:15Z</td>
+<td class="num">Running for 8 min 50 s</td>
+<td data-live="7a2c91e0"><span class="chip chip--warn" title="NO_PROGRESS">Stalled</span> <span class="chip chip--info" title="TOOL_RUNNING_LONG">Tool running</span> <span class="label">bash since 2026-11-21 17:36:05Z</span></td>
+</tr>
+<tr class="detail"><td colspan="5"><div id="report"><p class="report">No native progress for more than 2 minutes while the session is busy or a retry is past due.</p>
+<p class="report">The running tool has been running for more than 10 minutes. A long tool is not an error.</p>
+<dl class="kv">
+<dt>Native status</dt><dd><span class="chip chip--info">Busy</span></dd>
+<dt>Retry</dt><dd>None</dd>
+<dt>Last native progress</dt><dd><time datetime="2026-11-21T17:36:05Z" title="2026-11-21 17:36:05Z">12 min ago</time>, 2026-11-21 17:36:05Z</dd>
+<dt>Stall reason</dt><dd><span class="chip chip--warn">No progress</span></dd>
+<dt>Running tool</dt><dd><code>bash</code> since <time datetime="2026-11-21T17:36:05Z" title="2026-11-21 17:36:05Z">12 min ago</time>, 2026-11-21 17:36:05Z</dd>
+<dt>Explanation</dt><dd><span class="chip chip--info">Tool running long</span></dd>
+<dt>Thresholds</dt><dd>No progress after 2 minutes, tool long after 10 minutes</dd>
+<dt>Observed</dt><dd><time datetime="2026-11-21T17:48:01Z" title="2026-11-21 17:48:01Z">4 s ago</time>, 2026-11-21 17:48:01Z</dd>
+</dl>
+<p class="label">This is a report, not a verdict; the Bridge takes no action.</p></div></td></tr>
+<tr>
+<td><span class="chip chip--ok" title="completed">Completed</span></td>
+<td><code>5d03aa17</code></td>
+<td><time datetime="2026-11-21T17:21:05Z" title="2026-11-21 17:21:05Z">27 min ago</time>, 2026-11-21 17:21:05Z</td>
+<td class="num">6 min 02 s</td>
+<td data-live="5d03aa17"><span class="label">Ended</span></td>
+</tr>
+<tr>
+<td><span class="chip chip--error" title="failed">Failed</span></td>
+<td><code>0c9be452</code></td>
+<td><time datetime="2026-11-21T17:02:05Z" title="2026-11-21 17:02:05Z">46 min ago</time>, 2026-11-21 17:02:05Z</td>
+<td class="num">1 min 15 s</td>
+<td data-live="0c9be452"><span class="label">Ended</span></td>
+</tr>
+<tr>
+<td><span class="chip chip--warn" title="interrupted">Interrupted</span></td>
+<td><code>e41d77b9</code></td>
+<td><time datetime="2026-11-21T16:48:05Z" title="2026-11-21 16:48:05Z">1 h ago</time>, 2026-11-21 16:48:05Z</td>
+<td class="num">3 min 30 s</td>
+<td data-live="e41d77b9"><span class="label">Ended</span></td>
+</tr>
+</tbody></table></div>
+
+</section>
+<section class="changes card" aria-labelledby="h-changes">
+<h2 id="h-changes">Changes in the working tree</h2>
+
+<div class="diff-block"><p class="label"><span class="badge label-changes">changes</span> working tree (not per turn). 3 files, &#43;42 -7</p>
+<p class="label">redaction on: 0 values redacted</p>
+<ul class="files"><li>Modified <code>services/billing/retry_test.go</code> <span class="stat-add">+11</span> <span class="stat-del">-2</span></li>
+<li>Modified <code>services/billing/retry.go</code> <span class="stat-add">+30</span> <span class="stat-del">-5</span></li>
+<li>Added <code>docs/NOTE.md</code> <span class="stat-add">+1</span> <span class="stat-del">-0</span></li>
+</ul>
+<details class="file" open><summary>services/billing/retry_test.go</summary>
+<pre class="diff"><span class="ln hunk">--- a/services/billing/retry_test.go</span><span class="ln hunk">&#43;&#43;&#43; b/services/billing/retry_test.go</span><span class="ln hunk">@@ -18,6 &#43;18,15 @@ func TestRetryBackoff(t *testing.T) {</span><span class="ln">     clock := fakeClock()</span><span class="ln del">-    time.Sleep(50 * time.Millisecond)</span><span class="ln add">&#43;    clock.Advance(50 * time.Millisecond)</span><span class="ln add">&#43;    if got := r.Attempts(); got != 3 {</span><span class="ln add">&#43;        t.Fatalf(&#34;attempts = %d, want 3&#34;, got)</span><span class="ln add">&#43;    }</span></pre></details>
+<details class="file"><summary>services/billing/retry.go</summary>
+<pre class="diff"><span class="ln hunk">@@ -40,4 &#43;40,6 @@</span><span class="ln add">&#43;    delay := backoff(attempt)</span><span class="ln del">-    delay := time.Second</span><span class="ln"> </span><span class="ln hunk">\ No newline at end of file</span></pre></details>
+<details class="file"><summary>docs/NOTE.md</summary>
+<pre class="diff"><span class="ln hunk">@@ -0,0 &#43;1 @@</span><span class="ln add">&#43;Retry backoff is now injected.</span></pre></details>
+</div>
+
+
+<h3 id="h-turns">Turns</h3><div class="table-wrap" tabindex="0" role="region" aria-labelledby="h-turns"><table class="turns">
+<caption class="visually-hidden">User turns of this session</caption>
+<thead><tr><th scope="col">Turn</th><th scope="col">Time</th><th scope="col">Diff</th></tr></thead>
+<tbody>
+<tr><td><a href="/session/opencode/ses_demo0001/turn/msg_turn_one">msg_turn_one</a></td><td>2026-11-21 17:28:05Z</td><td>changes</td></tr>
+<tr><td>msg_turn_two</td><td>2026-11-21 17:38:05Z</td><td>not computed</td></tr>
+</tbody></table></div>
+</section>
+
+
+</main>
+<script src="/dashboard.js"></script>
+<script src="/dashboard-detail.js"></script>
+</body>
+</html>
+
+
+
+

@@ -1434,8 +1434,8 @@ Facts about the code (task #586), no new decision; D34 (A1.17) is unchanged.
   (minimum text pair 4.65, error chip on the low surface; minimum non-text pair 4.06, the input border on the low
   surface; the dark minimum stays 4.62). The two light blocks must be identical and equal to the reference file, every
   dark colour token must have a light value, and no non-colour token may be redefined.
-- **`theme.js`.** 984 bytes (cap 1 KiB, its own cap). The four `dashboard*.js` files are core 8,201 (the frozen namespace added 15
-  bytes), list 5,785, detail 3,416 and audit 747, 18,149 together (cap 32 KiB). A blocking `<script src="/theme.js">` in the head of every page and a hidden
+- **`theme.js`.** 984 bytes (cap 1 KiB, its own cap). The four `dashboard*.js` files are core 8,853 (the frozen namespace added 15
+  bytes), list 6,043, detail 3,943 and audit 747, 19,586 together (cap 32 KiB). A blocking `<script src="/theme.js">` in the head of every page and a hidden
   `<button id="theme">` in every top bar; the script is routed with the others (`GET`/`HEAD`, no data route). Storage
   key `cirak-theme`; a stored value other than `dark` or `light` is removed and ignored; the toggle stays hidden without
   script; a blocked or full storage is caught. The only `localStorage` use of the dashboard.

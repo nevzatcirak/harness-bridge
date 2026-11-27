@@ -33,6 +33,7 @@ func detailDOM(sig string) map[string]any {
 	return withID(node("main", map[string]string{"data-poll": "detail", "data-harness": "opencode", "data-session": "ses_demo0001", "data-sig": sig},
 		hiddenEl(withID(node("p", nil), "stale")),
 		hiddenEl(withID(withText(node("button", map[string]string{"data-copy": "ses_demo0001"}), "Copy ID"), "copy")),
+		withID(node("td", map[string]string{"data-live": "7a2c91e0"}), "live-cell"),
 		dd("title"), dd("root"), dd("lifecycle"), dd("state"), dd("guard"), dd("current"), dd("last"),
 		withID(withText(node("div", nil), "SERVER REPORT"), "report"),
 		withID(withText(node("td", nil), "SERVER PERM"), "perm"),

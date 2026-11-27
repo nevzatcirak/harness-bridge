@@ -145,15 +145,15 @@ func TestV2S2EveryLivenessReasonRendersItsChipSentenceAndRows(t *testing.T) {
 		rows      []string // "Label: value" lines of the report
 	}{
 		{"healthy", "", "", []string{"No stall is reported for this execution."}, []string{"Native status: Busy", "Retry: None", "Last native progress: 10 s ago"}},
-		{"noprogress", "No progress", "NO_PROGRESS", []string{"No native progress for more than 2 minutes while the session is busy or a retry is past due."}, []string{"Stall reason: No progress", "Native status: Busy", "Thresholds: No progress after 2 minutes, tool long after 10 minutes"}},
+		{"noprogress", "Stalled", "NO_PROGRESS", []string{"No native progress for more than 2 minutes while the session is busy or a retry is past due."}, []string{"Stall reason: No progress", "Native status: Busy", "Thresholds: No progress after 2 minutes, tool long after 10 minutes"}},
 		{"no-assistant", "No assistant reply", "NO_CORRELATED_ASSISTANT", []string{"The session is not busy and OpenCode shows no assistant reply for this prompt."}, []string{"Native status: Absent", "Stall reason: No assistant reply"}},
 		{"no-evidence", "No completion evidence", "COMPLETED_WITHOUT_TERMINAL_EVIDENCE", []string{"The session is not busy but there is no evidence that this execution finished."}, []string{"Stall reason: No completion evidence"}},
-		{"unreachable", "Harness unreachable", "HARNESS_UNREACHABLE", []string{"The Bridge could not read the harness for a while, so its state is not known."}, []string{"Native status: Unavailable", "Stall reason: Harness unreachable"}},
-		{"retrying", "Provider retrying", "PROVIDER_RETRYING", []string{"The provider is retrying a failed request. This is a provider problem, not a stall."}, []string{"Native status: Retrying", "Retry: Attempt 2, next attempt in the future", "Provider: Provider retrying", "Cause hint: Network, from a bounded text match"}},
+		{"unreachable", "Unreachable", "HARNESS_UNREACHABLE", []string{"The Bridge could not read the harness for a while, so its state is not known."}, []string{"Native status: Unavailable", "Stall reason: Harness unreachable"}},
+		{"retrying", "Retrying", "PROVIDER_RETRYING", []string{"The provider is retrying a failed request. This is a provider problem, not a stall."}, []string{"Native status: Retrying", "Retry: Attempt 2 of 5, next attempt in the future", "Provider: Provider retrying", "Cause hint: Network, from a bounded text match"}},
 		{"retry-overdue", "Retry overdue", "PROVIDER_RETRY_OVERDUE", []string{"The provider retry is past its due time and the attempt has not advanced."}, []string{"Provider: Retry overdue", "Cause hint: Rate limit, from structured data"}},
 		{"provider-error", "Provider error", "PROVIDER_ERROR", []string{"The provider reported an error for this execution."}, []string{"Provider: Provider error", "Cause hint: Authentication, from structured data"}},
-		{"tool-long", "", "", []string{"The running tool has been running for more than 10 minutes. A long tool is not an error."}, []string{"Running tool: bash since", "Explanation: Tool running long"}},
-		{"reason-only", "No progress", "NO_PROGRESS", []string{"No native progress for more than 2 minutes"}, []string{"Stall reason: No progress"}},
+		{"tool-long", "Tool running", "TOOL_RUNNING_LONG", []string{"The running tool has been running for more than 10 minutes. A long tool is not an error."}, []string{"Running tool: bash since", "Explanation: Tool running long"}},
+		{"reason-only", "Stalled", "NO_PROGRESS", []string{"No native progress for more than 2 minutes"}, []string{"Stall reason: No progress"}},
 	}
 	for _, c := range cases {
 		t.Run(c.page, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestV2S2TheRowIsKeyedOnTheReasonNotOnTheFlag(t *testing.T) {
 		t.Error("a stall reason row appeared for a block with no stall_reason")
 	}
 	reasonOnly := between(t, s2Pages(t)["detail-live-reason-only"], `<td><code>7a2c91e0</code></td>`, `</tr>`)
-	if !strings.Contains(reasonOnly, ">No progress</span>") {
+	if !strings.Contains(reasonOnly, ">Stalled</span>") {
 		t.Errorf("a stall_reason with the flag false was not shown:\n%s", reasonOnly)
 	}
 }
@@ -246,7 +246,7 @@ func TestV2S2TheReportIsUnderTheCurrentExecutionOnly(t *testing.T) {
 		t.Errorf("the report is not between the current execution and the next one (%d, %d, %d)", cur, rep, next)
 	}
 	ended := between(t, body, `<code>5d03aa17</code>`, `</tr>`)
-	if !strings.Contains(ended, ">Ended</span>") || strings.Contains(ended, "No progress") {
+	if !strings.Contains(ended, ">Ended</span>") || strings.Contains(ended, "Stalled") {
 		t.Errorf("an ended execution shows a liveness chip:\n%s", ended)
 	}
 	if !strings.Contains(between(t, s2Pages(t)["detail-no-liveness"], `<td><code>7a2c91e0</code></td>`, `</tr>`), "No report yet") {
@@ -315,10 +315,10 @@ func TestV2S2TheSourceTypesCarryNoPatternAndNoNativeText(t *testing.T) {
 		want string
 	}{
 		{PermissionSummary{}, "Attributed Count Digest Kind PatternCount Tool"},
-		{Liveness{}, "CauseHint CauseSource DegradationReason Explanation LastNativeProgressAt NativeStatus ObservedAt RetryAttempt RetryNextAt RetryOverdue StallReason StallSuspected Thresholds Tool"},
+		{Liveness{}, "CauseHint CauseSource DegradationReason Degraded Explanation LastNativeProgressAt NativeStatus ObservedAt ProgressSource RetryAttempt RetryMax RetryNextAt RetryOverdue StallReason StallSuspected Thresholds Tool"},
 		{LivenessTool{}, "Name RunningSince"},
 		{LivenessThresholds{}, "NoProgressS ToolLongS"},
-		{Execution{}, "Current Ended ID Liveness Permission SessionID Started State Updated"},
+		{Execution{}, "Current Ended ID Liveness Permission SessionID Started State UnavailableSince Updated"},
 		// S3a: the process facts carry a version, a build, a timestamp and flags: never the token, the Host or the origin
 		{Health{}, "Build Features Reach TokenExpires Version"},
 		{Feature{}, "Name On"},

@@ -56,12 +56,13 @@ type apiSession struct {
 	LastActivity  string   `json:"last_activity"`
 	Href          string   `json:"href,omitempty"`
 	// Display fields of the sessions table (A1.4): the script sets them with textContent and never decides a label.
-	HarnessName string `json:"harness_name"`
-	StateLabel  string `json:"state_label"`
-	StateTone   string `json:"state_tone"`
-	GuardText   string `json:"guard_text"`
-	PathShort   string `json:"path_short"`
-	LastISO     string `json:"last_activity_iso,omitempty"`
+	HarnessName string       `json:"harness_name"`
+	StateLabel  string       `json:"state_label"`
+	StateTone   string       `json:"state_tone"`
+	GuardText   string       `json:"guard_text"`
+	PathShort   string       `json:"path_short"`
+	LastISO     string       `json:"last_activity_iso,omitempty"`
+	Liveness    *apiLiveness `json:"liveness,omitempty"`
 }
 
 type apiExec struct {
@@ -75,6 +76,125 @@ type apiExec struct {
 	// same parts the page renders; the script rebuilds those two blocks from them without deciding any label.
 	Report     *reportView `json:"report,omitempty"`
 	Permission *permView   `json:"permission,omitempty"`
+	// Liveness is the A2.8 optional block and badge set of this execution, for the live poll.
+	Liveness *apiLiveness `json:"liveness,omitempty"`
+}
+
+type apiBadge struct {
+	Label string `json:"label"`
+	Tone  string `json:"tone"`
+	Title string `json:"title,omitempty"`
+}
+
+type apiLivenessTool struct {
+	Name         string `json:"name"`
+	RunningSince string `json:"running_since,omitempty"`
+}
+
+type apiThresholds struct {
+	NoProgressS int `json:"no_progress_s"`
+	ToolLongS   int `json:"tool_long_s"`
+}
+
+// apiLiveness is the optional A2 liveness block of the poll JSON and the public twin: closed words, bounded values
+// and absolute timestamps only. Badges carry the same labels as the HTML; Text is the cell's short detail.
+type apiLiveness struct {
+	NativeStatus         string           `json:"native_status,omitempty"`
+	RetryAttempt         *int64           `json:"retry_attempt,omitempty"`
+	RetryMax             *int64           `json:"retry_max,omitempty"`
+	RetryNextAt          string           `json:"retry_next_at,omitempty"`
+	LastNativeProgressAt string           `json:"last_native_progress_at,omitempty"`
+	RetryOverdue         bool             `json:"retry_overdue,omitempty"`
+	Degraded             bool             `json:"degraded,omitempty"`
+	DegradationReason    string           `json:"degradation_reason,omitempty"`
+	StallSuspected       bool             `json:"stall_suspected,omitempty"`
+	StallReason          string           `json:"stall_reason,omitempty"`
+	Tool                 *apiLivenessTool `json:"tool,omitempty"`
+	Explanation          string           `json:"explanation,omitempty"`
+	CauseHint            string           `json:"cause_hint,omitempty"`
+	CauseSource          string           `json:"cause_source,omitempty"`
+	ProgressSource       string           `json:"progress_source,omitempty"`
+	Thresholds           *apiThresholds   `json:"thresholds,omitempty"`
+	ObservedAt           string           `json:"observed_at,omitempty"`
+	UnavailableSince     string           `json:"unavailable_since,omitempty"`
+	Badges               []apiBadge       `json:"badges,omitempty"`
+	Text                 string           `json:"text,omitempty"`
+}
+
+func apiLivenessFor(l *Liveness, unavailableSince *time.Time, live livenessCell) *apiLiveness {
+	if l == nil && unavailableSince == nil && len(live.Badges) == 0 && live.Text == "" {
+		return nil
+	}
+	out := &apiLiveness{Text: live.Text}
+	for _, b := range live.Badges {
+		out.Badges = append(out.Badges, apiBadge{Label: b.Label, Tone: b.Tone, Title: b.Title})
+	}
+	if unavailableSince != nil && !unavailableSince.IsZero() {
+		out.UnavailableSince = isoTime(*unavailableSince)
+	}
+	if l == nil {
+		return out
+	}
+	out.NativeStatus = closedWord(l.NativeStatus, nativeStatuses)
+	out.RetryAttempt, out.RetryMax = l.RetryAttempt, l.RetryMax
+	if l.RetryNextAt != nil {
+		out.RetryNextAt = isoTime(*l.RetryNextAt)
+	}
+	if l.LastNativeProgressAt != nil {
+		out.LastNativeProgressAt = isoTime(*l.LastNativeProgressAt)
+	}
+	out.RetryOverdue = l.RetryOverdue
+	out.Degraded = l.Degraded || l.DegradationReason != ""
+	out.DegradationReason = closedReason(l.DegradationReason, degradationReasons)
+	out.StallSuspected = l.StallSuspected
+	out.StallReason = closedReason(l.StallReason, stallReasons)
+	out.Explanation = closedReason(l.Explanation, explanations)
+	out.CauseHint = closedString(l.CauseHint, causeHints)
+	out.CauseSource = closedString(l.CauseSource, causeSources)
+	out.ProgressSource = closedString(l.ProgressSource, progressSources)
+	if !l.ObservedAt.IsZero() {
+		out.ObservedAt = isoTime(l.ObservedAt)
+	}
+	if l.Tool != nil {
+		out.Tool = &apiLivenessTool{Name: truncRunes(l.Tool.Name, 64)}
+		if !l.Tool.RunningSince.IsZero() {
+			out.Tool.RunningSince = isoTime(l.Tool.RunningSince)
+		}
+	}
+	if l.Thresholds != nil {
+		out.Thresholds = &apiThresholds{NoProgressS: l.Thresholds.NoProgressS, ToolLongS: l.Thresholds.ToolLongS}
+	}
+	return out
+}
+
+func closedReason(word string, m map[string]reasonInfo) string {
+	if word == "" {
+		return ""
+	}
+	if _, ok := m[word]; ok {
+		return word
+	}
+	return "unknown"
+}
+
+func closedWord(word string, m map[string]chip) string {
+	if word == "" {
+		return ""
+	}
+	if _, ok := m[word]; ok {
+		return word
+	}
+	return "unknown"
+}
+
+func closedString(word string, m map[string]string) string {
+	if word == "" {
+		return ""
+	}
+	if _, ok := m[word]; ok {
+		return word
+	}
+	return "unknown"
 }
 
 type apiList struct {
@@ -102,7 +222,8 @@ func toAPISession(r sessionRow) apiSession {
 		g.State = r.Guard.State
 	}
 	return apiSession{Harness: r.Harness, ID: r.ID, Title: r.Title, Root: r.Root, LifecycleRoot: r.LifecycleRoot, Archived: r.Archived, State: r.State, Guard: g, Current: r.Current, LastActivity: r.LastActivity, Href: r.Href,
-		HarnessName: r.HarnessName, StateLabel: r.StateLabel, StateTone: r.StateTone, GuardText: r.GuardText, PathShort: r.PathShort, LastISO: r.LastISO}
+		HarnessName: r.HarnessName, StateLabel: r.StateLabel, StateTone: r.StateTone, GuardText: r.GuardText, PathShort: r.PathShort, LastISO: r.LastISO,
+		Liveness: apiLivenessFor(r.Liveness, r.UnavailableSince, r.Live)}
 }
 
 // listRows applies the list cap and the row normalization once, for the HTML and
@@ -154,10 +275,10 @@ func execRows(execs []Execution) (out []execRow, truncated string) {
 			ID: truncRunes(e.ID, 128), State: state, Current: e.Current,
 			Started: fmtTime(e.Started), Updated: fmtTime(e.Updated), Ended: fmtTimePtr(e.Ended),
 			StateLabel: c.Label, StateClass: chipClass(c.Tone), StartedISO: isoTime(e.Started), Live: cellFor(e),
-			startedAt: e.Started, endedAt: e.Ended,
+			startedAt: e.Started, endedAt: e.Ended, Liveness: e.Liveness, UnavailableSince: e.UnavailableSince,
 		}
 		if e.Current {
-			row.Report = buildReport(e.Liveness)
+			row.Report = buildReport(e.Liveness, e.UnavailableSince)
 			row.Perm = permissionRow(e.Permission)
 		}
 		out = append(out, row)
@@ -264,7 +385,7 @@ func (d *dash) buildDetail(ctx context.Context, harness, id string) ([]byte, err
 	m.Truncated = trunc
 	for _, e := range execs {
 		m.Executions = append(m.Executions, apiExec{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.Current,
-			Report: e.Report, Permission: e.Perm})
+			Report: e.Report, Permission: e.Perm, Liveness: apiLivenessFor(e.Liveness, e.UnavailableSince, e.Live)})
 	}
 	m.Sig = execSignature(execs)
 	return json.Marshal(m)

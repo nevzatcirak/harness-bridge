@@ -46,6 +46,19 @@
     if ((d = field('last'))) { clear(d); addParts(d, [s.last_activity_iso ? { kind: 'time', iso: s.last_activity_iso, abs: s.last_activity } : { kind: 'text', text: '-' }]); }
     // the timeline changed shape: reload
     if (m.sig !== app.getAttribute('data-sig')) { window.location.reload(); return; }
+    (m.executions || []).forEach(function (x) {
+      var cells = app.querySelectorAll('td[data-live]');
+      for (var i = 0; i < cells.length; i++) {
+        if (cells[i].getAttribute('data-live') !== x.id) { continue; }
+        var state = x.state || '';
+        if (state === 'completed' || state === 'failed' || state === 'interrupted') {
+          clear(cells[i]); cells[i].appendChild(el('span', 'Ended', 'label'));
+        } else {
+          D.renderLive(cells[i], x.liveness);
+        }
+        break;
+      }
+    });
     var cur = (m.executions || []).filter(function (x) { return x.current; })[0];
     var box = byId('report'), perm = byId('perm');
     if (cur && cur.report && box) { renderReport(box, cur.report); }

@@ -124,6 +124,11 @@ type sessionRow struct {
 	LastISO               string // the datetime attribute ("" when unknown)
 	LastRel               string // set for the HTML only: the JSON must not change every second (its ETag)
 	Href                  string
+	// Live is the liveness cell of the current execution (A2.8); the list shows its badges only.
+	Live livenessCell
+	// Liveness and UnavailableSince are the raw optional fields of the current execution for the JSON twin.
+	Liveness         *Liveness
+	UnavailableSince *time.Time
 }
 
 func harnessLabel(h string) (label, class string) {
@@ -149,7 +154,8 @@ func toRow(s Session) sessionRow {
 		State: state, StateLabel: c.Label, StateTone: c.Tone, StateClass: chipClass(c.Tone), Guard: g, GuardText: guardText(g),
 		Current:      truncRunes(s.CurrentExecution, 128),
 		LastActivity: fmtTime(s.LastActivity), LastISO: isoTime(s.LastActivity),
-		Href: rowHref(s),
+		Href: rowHref(s), Live: cellForLiveness(s.Liveness, s.UnavailableSince),
+		Liveness: s.Liveness, UnavailableSince: s.UnavailableSince,
 	}
 }
 
@@ -167,6 +173,8 @@ type execRow struct {
 	Live                   livenessCell
 	Report                 *reportView
 	Perm                   *permView
+	Liveness               *Liveness
+	UnavailableSince       *time.Time
 }
 
 // stateBlock is an empty, error or not-connected state of a data region (A1.4 item 7): a heading, a sentence

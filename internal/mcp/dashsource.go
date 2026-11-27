@@ -124,10 +124,20 @@ func (v dashView) row(harness, id, qualified string) dashboard.Session {
 	for _, e := range v.bySession[qualified] {
 		if nonTerminal(e.State) {
 			r.CurrentExecution = e.ID
+			r.Liveness = dashLiveness(e.Liveness)
+			r.UnavailableSince = copyTimePtr(e.UnavailableSince)
 			break
 		}
 	}
 	return r
+}
+
+func copyTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	v := *t
+	return &v
 }
 
 func (d *dashSource) openCodeRow(v dashView, m Session, native opencode.Session) dashboard.Session {
@@ -234,7 +244,7 @@ func detail(v dashView, r dashboard.Session, qualified string) dashboard.Session
 	out := dashboard.SessionDetail{Session: r}
 	for _, e := range v.bySession[qualified] {
 		x := dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended, Current: e.ID == r.CurrentExecution,
-			Liveness: dashLiveness(e.Liveness), Permission: dashPermission(e)}
+			Liveness: dashLiveness(e.Liveness), Permission: dashPermission(e), UnavailableSince: copyTimePtr(e.UnavailableSince)}
 		// SessionID is carried by the /executions page only; the detail of one session does not need it
 		out.Executions = append(out.Executions, x)
 	}
@@ -250,12 +260,17 @@ func dashLiveness(l *execution.Liveness) *dashboard.Liveness {
 	}
 	out := &dashboard.Liveness{
 		NativeStatus: l.NativeStatus, StallSuspected: l.StallSuspected, StallReason: l.StallReason,
-		DegradationReason: l.DegradationReason, RetryOverdue: l.RetryOverdue,
+		DegradationReason: l.DegradationReason, Degraded: l.Degraded || l.DegradationReason != "", RetryOverdue: l.RetryOverdue,
 		CauseHint: l.CauseHint, CauseSource: l.CauseSource, Explanation: l.Explanation, ObservedAt: l.ObservedAt,
+		ProgressSource: l.ProgressSource,
 	}
 	if l.RetryAttempt != nil {
 		v := *l.RetryAttempt
 		out.RetryAttempt = &v
+	}
+	if l.RetryMax != nil {
+		v := *l.RetryMax
+		out.RetryMax = &v
 	}
 	if l.RetryNextAt != nil {
 		v := *l.RetryNextAt
@@ -399,7 +414,8 @@ func (d *dashSource) Executions(ctx context.Context) ([]dashboard.Execution, err
 			continue
 		}
 		out = append(out, dashboard.Execution{ID: e.ID, State: e.State, Started: e.Started, Updated: e.Updated, Ended: e.Ended,
-			Current: cur != "" && cur == e.ID, SessionID: e.SessionID, Liveness: dashLiveness(e.Liveness)})
+			Current: cur != "" && cur == e.ID, SessionID: e.SessionID, Liveness: dashLiveness(e.Liveness),
+			UnavailableSince: copyTimePtr(e.UnavailableSince)})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].Started.Equal(out[j].Started) {

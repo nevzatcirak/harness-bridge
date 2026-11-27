@@ -103,6 +103,8 @@ type execListRow struct {
 	SessionHref                       string
 	Current                           bool
 	Live                              livenessCell
+	Liveness                          *Liveness
+	UnavailableSince                  *time.Time
 	startedAt                         time.Time
 	endedAt                           *time.Time
 }
@@ -130,7 +132,7 @@ func (d *dash) execListRows(ctx context.Context) (rows []execListRow, capped boo
 		c := stateChip(state)
 		r := execListRow{ID: truncRunes(e.ID, 128), State: state, StateLabel: c.Label, StateClass: chipClass(c.Tone), Current: e.Current,
 			Started: fmtTime(e.Started), StartedISO: isoTime(e.Started), Live: cellFor(e), startedAt: e.Started, endedAt: e.Ended,
-			SessionID: truncRunes(e.SessionID, 160)}
+			SessionID: truncRunes(e.SessionID, 160), Liveness: e.Liveness, UnavailableSince: e.UnavailableSince}
 		if h, id, ok := splitSessionID(e.SessionID); ok {
 			r.SessionText = truncRunes(id, 128)
 			if href := sessionHref(h, id); href != "" {
@@ -206,17 +208,17 @@ func executionsCountText(n int, capped bool) string {
 }
 
 type apiExecRow struct {
-	ID          string `json:"id"`
-	State       string `json:"state"`
-	StateLabel  string `json:"state_label"`
-	StateTone   string `json:"state_tone"`
-	Started     string `json:"started"`
-	StartedISO  string `json:"started_iso,omitempty"`
-	Ended       string `json:"ended"`
-	SessionID   string `json:"session_id"`
-	SessionHref string `json:"session_href,omitempty"`
-	Current     bool   `json:"current,omitempty"`
-	Liveness    string `json:"liveness,omitempty"`
+	ID          string       `json:"id"`
+	State       string       `json:"state"`
+	StateLabel  string       `json:"state_label"`
+	StateTone   string       `json:"state_tone"`
+	Started     string       `json:"started"`
+	StartedISO  string       `json:"started_iso,omitempty"`
+	Ended       string       `json:"ended"`
+	SessionID   string       `json:"session_id"`
+	SessionHref string       `json:"session_href,omitempty"`
+	Current     bool         `json:"current,omitempty"`
+	Liveness    *apiLiveness `json:"liveness,omitempty"`
 }
 
 type apiExecList struct {
@@ -241,11 +243,7 @@ func (d *dash) buildExecutions(ctx context.Context) ([]byte, error) {
 		x := apiExecRow{ID: r.ID, State: r.State, StateLabel: r.StateLabel, StateTone: toneOfClass(r.StateClass), Started: r.Started, StartedISO: r.StartedISO,
 			SessionID: r.SessionID, SessionHref: r.SessionHref, Current: r.Current}
 		x.Ended = fmtTimePtr(r.endedAt)
-		if r.Live.ChipLabel != "" {
-			x.Liveness = r.Live.ChipLabel
-		} else {
-			x.Liveness = r.Live.Text
-		}
+		x.Liveness = apiLivenessFor(r.Liveness, r.UnavailableSince, r.Live)
 		m.Executions = append(m.Executions, x)
 	}
 	return json.Marshal(m)

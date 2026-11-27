@@ -1430,6 +1430,17 @@ SSH forwarding recipe: `docs/deploy/DASHBOARD.md`.
     `config check` knows) and, in remote mode only, the connector-token expiry badge: neutral, warn under 60 minutes,
     error once expired, the absolute time in its title. The badge is computed from `Source.Health`; a Source that cannot
     answer leaves it out and the page still renders.
+- **Liveness badges and poll fields (ADR-017 A2 S5).** The sessions list's current-execution cell, the `/executions`
+  rows and the detail timeline show the independent A2 badges: **Stalled** (`NO_PROGRESS`), **Retrying** /
+  **Retry overdue** (with attempt/max and the next attempt), **Provider error**, **Tool running** (the
+  `TOOL_RUNNING_LONG` explanation, the bounded tool name and elapsed), **Unreachable** (`HARNESS_UNREACHABLE`, with
+  `unavailable_since`), and one **Unknown** for any word outside the closed maps. A wedged retry keeps both its
+  degradation badge and **Stalled**; a `busy` running tool keeps **Stalled** and **Tool running**; an absent status
+  never shows a stale tool as running. The detail report adds the reason fields, `cause_hint`/`cause_source`, the
+  retry/tool fields, `progress_source`, `unavailable_since` and `observed_at`. The `/api/state` and
+  `/api/state/session/*` models gain the same optional `liveness` object (closed words, bounded values, absolute
+  timestamps only; `badges` carries the HTML labels); the live polls update the list rows and the detail cell in
+  place where the page already polls. No new route, token, write or free text.
 - **Session detail (ADR-023 A1, slice S2).** The header card (copyable ID: the button is hidden until the script runs
   and the clipboard can be written, the ID is selectable text), the **execution timeline** (state chip, execution,
   start with its absolute time, duration, a liveness cell), and the changes of the working tree (totals, the redaction

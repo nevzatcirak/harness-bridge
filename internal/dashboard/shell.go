@@ -69,7 +69,7 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <td class="path">{{if .LifecycleRoot}}<span>{{.LifecycleRoot}}</span>{{else}}None{{end}}</td>
 <td><span class="{{.StateClass}}" title="{{.State}}">{{.StateLabel}}</span></td>
 <td>{{.GuardText}}</td>
-<td>{{if .Current}}<code>{{.Current}}</code>{{else}}None{{end}}</td>
+<td>{{if .Current}}<code>{{.Current}}</code>{{else}}None{{end}}{{if .Live.Badges}} <span class="live">{{template "live" .Live}}</span>{{end}}</td>
 <td>{{if .LastISO}}<time datetime="{{.LastISO}}" title="{{.LastActivity}}">{{.LastRel}}</time>{{else}}-{{end}}</td>
 </tr>
 {{end}}</tbody></table></div>
@@ -97,7 +97,7 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <td>{{if .SessionHref}}<a href="{{.SessionHref}}"><code>{{.SessionText}}</code></a>{{else}}<code>{{.SessionText}}</code>{{end}}</td>
 <td>{{if .StartedISO}}<time datetime="{{.StartedISO}}" title="{{.Started}}">{{.StartedRel}}</time>{{else}}-{{end}}</td>
 <td class="num">{{.Duration}}</td>
-<td>{{if .Live.ChipLabel}}<span class="{{.Live.ChipClass}}"{{if .Live.ChipTitle}} title="{{.Live.ChipTitle}}"{{end}}>{{.Live.ChipLabel}}</span>{{else}}<span class="label">{{.Live.Text}}</span>{{end}}</td>
+<td>{{template "live" .Live}}</td>
 </tr>
 {{end}}</tbody></table></div>{{end}}
 <p class="label">Newest first, at most the newest 200 executions. The list includes sessions beyond the first 200 shown on the Sessions page. A restart of the Bridge empties it (ADR-010). Executions of archived sessions are behind the archived filter.</p>
@@ -175,7 +175,7 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 <td><code>{{.ID}}</code></td>
 <td>{{if .StartedISO}}<time datetime="{{.StartedISO}}" title="{{.Started}}">{{.StartedRel}}</time>, {{.Started}}{{else}}-{{end}}</td>
 <td class="num">{{.Duration}}</td>
-<td>{{if .Live.ChipLabel}}<span class="{{.Live.ChipClass}}"{{if .Live.ChipTitle}} title="{{.Live.ChipTitle}}"{{end}}>{{.Live.ChipLabel}}</span>{{else}}<span class="label">{{.Live.Text}}</span>{{end}}</td>
+<td data-live="{{.ID}}">{{template "live" .Live}}</td>
 </tr>
 {{with .Report}}<tr class="detail"><td colspan="5"><div id="report">{{template "report" .}}</div></td></tr>
 {{end}}{{with .Perm}}<tr class="perm-row"><td colspan="5" id="perm">{{template "perm" .}}</td></tr>
@@ -229,5 +229,5 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{"ch
 {{end}}</dl>
 <p class="label">{{.Note}}</p>{{end}}
 {{define "perm"}}<span class="{{chipClass .Tone}}">{{.Label}}</span> {{template "parts" .Parts}}{{end}}
-{{define "parts"}}{{range .}}{{if eq .Kind "chip"}}<span class="{{chipClass .Tone}}">{{.Text}}</span>{{else if eq .Kind "code"}}<code>{{.Text}}</code>{{else if eq .Kind "time"}}<time datetime="{{.ISO}}" title="{{.Abs}}">{{.Rel}}</time>, {{.Abs}}{{else if eq .Kind "abstime"}}<time datetime="{{.ISO}}">{{.Abs}}</time>{{else}}{{.Text}}{{end}}{{end}}{{end}}
+{{define "parts"}}{{range .}}{{if eq .Kind "chip"}}<span class="{{chipClass .Tone}}">{{.Text}}</span>{{else if eq .Kind "code"}}<code>{{.Text}}</code>{{else if eq .Kind "time"}}<time datetime="{{.ISO}}" title="{{.Abs}}">{{.Rel}}</time>, {{.Abs}}{{else if eq .Kind "abstime"}}<time datetime="{{.ISO}}">{{.Abs}}</time>{{else}}{{.Text}}{{end}}{{end}}{{end}}{{define "livebadges"}}{{range .Badges}}<span class="{{chipClass .Tone}}"{{if .Title}} title="{{.Title}}"{{end}}>{{.Label}}</span> {{end}}{{end}}{{define "live"}}{{template "livebadges" .}}{{if .Text}}<span class="label">{{.Text}}</span>{{end}}{{end}}
 `))

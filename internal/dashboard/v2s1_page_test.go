@@ -26,7 +26,7 @@ func v2Handler(src Source) http.Handler { return NewHandlerOptions(src, nil, v2O
 // v2Rows is the fixture of the sessions screen (the rows of docs/design/dashboard-v2-mock.html).
 func v2Rows() []Session {
 	ago := func(d time.Duration) time.Time { return v2Now.Add(-d) }
-	return []Session{
+	rows := []Session{
 		{Harness: "opencode", ID: "ses_demo0001", Title: "Fix flaky retry test", Root: "/srv/demo/work/payments-api/services/billing",
 			LifecycleRoot: "/srv/demo/work", State: "running", Guard: Guard{Held: true, State: "running"},
 			CurrentExecution: "7a2c91e0", LastActivity: ago(53 * time.Second)},
@@ -40,6 +40,10 @@ func v2Rows() []Session {
 		{Harness: "opencode", ID: "ses_demo0009", Title: "Old prototype", Root: "/srv/demo/work/prototypes/old",
 			LifecycleRoot: "/srv/demo/work", Archived: true, State: "idle", LastActivity: ago(9 * 24 * time.Hour)},
 	}
+	// S5: the current execution's liveness badges render on the sessions list and in /api/state.
+	rows[0].Liveness = s2Liveness()["retrying"]
+	rows[1].Liveness = s2Liveness()["tool-stalled"]
+	return rows
 }
 
 // v2Src lists archived sessions only when the request asks for them, as the production Source does (D17 Q7).
